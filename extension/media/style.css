@@ -1,0 +1,223 @@
+:root {
+  color-scheme: light dark;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  padding: 0;
+  font-family: var(--vscode-font-family);
+  font-size: var(--vscode-font-size);
+  color: var(--vscode-foreground);
+  background: var(--vscode-editor-background);
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+}
+
+.header {
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--vscode-panel-border, rgba(128, 128, 128, 0.3));
+}
+
+.header h2 {
+  margin: 0 0 6px 0;
+  font-size: 1.1em;
+}
+
+.badges {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.badge {
+  padding: 2px 8px;
+  border-radius: 10px;
+  font-size: 0.75em;
+  background: var(--vscode-badge-background, #4d4d4d);
+  color: var(--vscode-badge-foreground, #fff);
+}
+
+.code-preview {
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--vscode-panel-border, rgba(128, 128, 128, 0.3));
+  max-height: 28vh;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+
+.code-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 4px;
+  font-size: 0.8em;
+  opacity: 0.85;
+}
+
+.code {
+  background: var(--vscode-input-background);
+  color: var(--vscode-foreground);
+  padding: 6px 8px;
+  border-radius: 4px;
+  font-family: var(--vscode-editor-font-family, monospace);
+  font-size: 0.8em;
+  overflow: auto;
+  max-height: 22vh;
+  margin: 0;
+  white-space: pre;
+}
+
+.chat {
+  flex: 1;
+  overflow-y: auto;
+  padding: 10px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.bubble {
+  max-width: 95%;
+  padding: 8px 10px;
+  border-radius: 8px;
+  line-height: 1.4;
+  white-space: pre-wrap;
+  word-wrap: break-word;
+}
+
+.bubble.user {
+  align-self: flex-end;
+  background: var(--vscode-button-background);
+  color: var(--vscode-button-foreground);
+}
+
+.bubble.ai {
+  align-self: flex-start;
+  background: var(--vscode-input-background);
+  color: var(--vscode-foreground);
+  border: 1px solid var(--vscode-panel-border, rgba(128, 128, 128, 0.2));
+}
+
+.bubble.error {
+  align-self: flex-start;
+  background: var(--vscode-inputValidation-errorBackground, #5a1d1d);
+  color: var(--vscode-errorForeground, #f48771);
+}
+
+.bubble .meta {
+  font-size: 0.72em;
+  opacity: 0.7;
+  margin-top: 4px;
+}
+
+.composer {
+  padding: 8px 12px;
+  border-top: 1px solid var(--vscode-panel-border, rgba(128, 128, 128, 0.3));
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+textarea {
+  width: 100%;
+  resize: vertical;
+  background: var(--vscode-input-background);
+  color: var(--vscode-input-foreground, var(--vscode-foreground));
+  border: 1px solid var(--vscode-input-border, transparent);
+  padding: 6px 8px;
+  border-radius: 4px;
+  font-family: inherit;
+  font-size: inherit;
+}
+
+textarea:focus {
+  outline: 1px solid var(--vscode-focusBorder);
+}
+
+.actions {
+  display: flex;
+  gap: 6px;
+  justify-content: flex-end;
+}
+
+button {
+  border: none;
+  padding: 5px 12px;
+  border-radius: 3px;
+  cursor: pointer;
+  font-size: 0.85em;
+  font-family: inherit;
+}
+
+button.primary {
+  background: var(--vscode-button-background);
+  color: var(--vscode-button-foreground);
+}
+
+button.primary:hover {
+  background: var(--vscode-button-hoverBackground, var(--vscode-button-background));
+}
+
+button.secondary {
+  background: transparent;
+  color: var(--vscode-foreground);
+  border: 1px solid var(--vscode-button-background);
+}
+
+button.small-btn {
+  background: transparent;
+  color: var(--vscode-foreground);
+  border: 1px solid var(--vscode-panel-border, rgba(128, 128, 128, 0.3));
+  padding: 2px 6px;
+  font-size: 0.75em;
+}
+
+.loading {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 12px;
+  font-size: 0.85em;
+  opacity: 0.85;
+}
+
+.loading.hidden {
+  display: none;
+}
+
+.spinner {
+  width: 14px;
+  height: 14px;
+  border: 2px solid var(--vscode-foreground);
+  border-top: 2px solid transparent;
+  border-radius: 50%;
+  animation: spin 0.9s linear infinite;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.tags {
+  display: flex;
+  gap: 4px;
+  flex-wrap: wrap;
+  margin-top: 4px;
+}
+
+.tag {
+  font-size: 0.7em;
+  padding: 1px 6px;
+  border-radius: 8px;
+  background: var(--vscode-badge-background, #3c3c3c);
+  color: var(--vscode-badge-foreground, #fff);
+  opacity: 0.8;
+}
