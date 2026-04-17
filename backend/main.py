@@ -13,7 +13,17 @@ if os.path.exists(_root_env):
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 
-from models import HintRequest, HintResponse, HealthResponse, ResetSessionRequest
+from models import (
+    HintRequest,
+    HintResponse,
+    HealthResponse,
+    ResetSessionRequest,
+    ScanRequest,
+    ScanResponse,
+    LineFlag,
+    LineHintRequest,
+    LineHintResponse,
+)
 from hinting_engine import build_engine
 from firebase_service import FirebaseService
 
@@ -94,3 +104,25 @@ async def reset_session(req: ResetSessionRequest):
 @app.get("/badges/{user_id}")
 async def get_badges(user_id: str) -> List[str]:
     return firebase.get_user_badges_sync(user_id)
+
+
+@app.post("/scan", response_model=ScanResponse)
+async def scan(req: ScanRequest) -> ScanResponse:
+    if not req.code.strip():
+        return ScanResponse(flags=[])
+    try:
+        raw_flags = engine.scan_code(req.code)
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"LLM error: {e}")
+    return ScanResponse(flags=[LineFlag(**f) for f in raw_flags])
+
+
+@app.post("/line-hint", response_model=LineHintResponse)
+async def line_hint(req: LineHintRequest) -> LineHintResponse:
+    if not req.code.strip():
+        return LineHintResponse(hint="", concept="general")
+    try:
+        hint_text, concept = engine.generate_line_hint(req.code, req.line)
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"LLM error: {e}")
+    return LineHintResponse(hint=hint_text, concept=concept)

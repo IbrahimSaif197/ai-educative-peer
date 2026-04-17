@@ -1,0 +1,40 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(claude config *)",
+      "Skill(update-config)",
+      "Bash(du -sh \"C:\\\\Users\\\\natsu\\\\Desktop\\\\projects\\\\ai-educative-peer\\\\backend\"/* \"C:\\\\Users\\\\natsu\\\\Desktop\\\\projects\\\\ai-educative-peer\\\\extension\"/*)",
+      "Bash(python -m pytest tests/ -v --tb=short)",
+      "Bash(npm install *)",
+      "Bash(npm test *)",
+      "Bash(pip show *)",
+      "Bash(pip list *)",
+      "Bash(python *)",
+      "Bash(/c/msys64/ucrt64/bin/pip install *)",
+      "Read(//c/msys64/ucrt64/bin/**)",
+      "Bash(/c/msys64/ucrt64/bin/python.exe *)",
+      "Bash(.venv/Scripts/python.exe *)",
+      "Bash(/c/Users/natsu/Desktop/projects/ai-educative-peer/backend/.venv/Scripts/pip.exe install *)",
+      "Bash(/c/Users/natsu/Desktop/projects/ai-educative-peer/backend/.venv/bin/pip install *)",
+      "Read(//c/Users/natsu/AppData/Local/Programs/**)",
+      "Bash(ls /c/Python3*)",
+      "Bash(py --version)",
+      "Bash(python3.12 --version)",
+      "Bash(python3.12 *)",
+      "Bash(/c/Users/natsu/Desktop/projects/ai-educative-peer/backend/.venv/Scripts/python.exe *)",
+      "Bash(py -0)",
+      "Read(//c/Program Files/**)",
+      "Bash(rm -rf /c/Users/natsu/Desktop/projects/ai-educative-peer/backend/.venv)",
+      "Bash(py -3.12 -m venv /c/Users/natsu/Desktop/projects/ai-educative-peer/backend/.venv)",
+      "Bash(git check-ignore *)",
+      "Bash(git add *)",
+      "Bash(git commit *)",
+      "Bash(git remote *)",
+      "Bash(git branch *)",
+      "Bash(git push *)",
+      "Bash(git pull *)",
+      "Bash(npm run *)",
+      "Bash(pip install *)"
+    ]
+  }
+}

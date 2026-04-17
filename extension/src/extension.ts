@@ -2,6 +2,7 @@ import * as vscode from "vscode";
 import { ApiClient } from "./apiClient";
 import { FirebaseClient } from "./firebaseClient";
 import { EduPeerSidebarProvider } from "./sidebarProvider";
+import { InlineTutor } from "./inlineTutor";
 
 export async function activate(context: vscode.ExtensionContext) {
   const config = vscode.workspace.getConfiguration("edupeer");
@@ -19,6 +20,10 @@ export async function activate(context: vscode.ExtensionContext) {
 
   // Ensure user id persists.
   provider.getUserId();
+
+  const tutor = new InlineTutor(context, api, () => provider.getUserId());
+  tutor.activate();
+  context.subscriptions.push({ dispose: () => tutor.dispose() });
 
   // Health check
   const healthy = await api.health();

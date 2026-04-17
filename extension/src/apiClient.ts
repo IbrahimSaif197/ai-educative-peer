@@ -11,6 +11,23 @@ export interface HintResponse {
   concept_tags: string[];
 }
 
+export interface LineFlag {
+  line: number;
+  end_line: number;
+  question: string;
+  concept: string;
+  severity: "info" | "warning";
+}
+
+export interface ScanResponse {
+  flags: LineFlag[];
+}
+
+export interface LineHintResponse {
+  hint: string;
+  concept: string;
+}
+
 export class ApiClient {
   constructor(private baseUrl: string) {}
 
@@ -46,6 +63,30 @@ export class ApiClient {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ user_id: userId }),
     });
+  }
+
+  async scanCode(code: string, userId: string): Promise<ScanResponse> {
+    const res = await fetch(`${this.baseUrl}/scan`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ code, user_id: userId }),
+    });
+    if (!res.ok) {
+      throw new Error(`scan failed (${res.status})`);
+    }
+    return (await res.json()) as ScanResponse;
+  }
+
+  async getLineHint(code: string, line: number, userId: string): Promise<LineHintResponse> {
+    const res = await fetch(`${this.baseUrl}/line-hint`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ code, line, user_id: userId }),
+    });
+    if (!res.ok) {
+      throw new Error(`line-hint failed (${res.status})`);
+    }
+    return (await res.json()) as LineHintResponse;
   }
 
   async getBadges(userId: string): Promise<string[]> {
