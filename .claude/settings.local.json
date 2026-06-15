@@ -34,7 +34,28 @@
       "Bash(git push *)",
       "Bash(git pull *)",
       "Bash(npm run *)",
-      "Bash(pip install *)"
+      "Bash(pip install *)",
+      "Bash(grep -E '\\\\.env$|\\\\.env\\\\.')",
+      "Bash(git reset *)",
+      "Bash(git checkout *)",
+      "Bash(cd /c/Users/natsu/Desktop/projects/ai-educative-peer/backend && ls -la)",
+      "Read(//c/c/Users/natsu/Desktop/projects/ai-educative-peer/**)",
+      "PowerShell(git -C \"C:\\\\Users\\\\natsu\\\\Desktop\\\\projects\\\\ai-educative-peer\" branch)",
+      "Bash(git merge --no-ff feature/session-state-persistence -m ' *)",
+      "Bash(echo \"exit: $?\")",
+      "Bash(curl -s -X POST http://localhost:8000/hint -H 'Content-Type: application/json' -d '{\"code\":\"__TRACKED_VAR__\",\"question\":\"Why does my add function give wrong answers?\",\"user_id\":\"__TRACKED_VAR__\"}')",
+      "Bash(curl -s -X POST http://localhost:8000/hint -H 'Content-Type: application/json' -d '{\"code\":\"__TRACKED_VAR__\",\"question\":\"still wrong\",\"user_id\":\"__TRACKED_VAR__\"}')",
+      "Bash(curl -s --max-time 5 http://localhost:8000/health)",
+      "Bash(curl -s --max-time 30 -w '\\\\nHTTP_STATUS=%{http_code} TIME=%{time_total}s\\\\n' -X POST http://localhost:8000/hint -H 'Content-Type: application/json' -d '{\"code\":\"def add\\(a, b\\):\\\\n    return a - b\",\"question\":\"why wrong?\",\"user_id\":\"smoke-single\"}')",
+      "Bash(curl -s --max-time 10 -o /dev/null -w \"groq HTTP=%{http_code} time=%{time_total}s\\\\n\" https://api.groq.com)",
+      "Bash(echo \"curl exit=$?\")",
+      "Bash(curl -s --max-time 10 -o /dev/null -w \"example HTTP=%{http_code} time=%{time_total}s\\\\n\" https://example.com)",
+      "Bash(export FIREBASE_PROJECT_ID=\"\" FIREBASE_PRIVATE_KEY=\"\" FIREBASE_CLIENT_EMAIL=\"\")",
+      "Bash(rm -f /tmp/diag.py; echo cleaned)",
+      "Bash(git merge --no-ff fix/async-blocking-io -m ' *)"
+    ],
+    "additionalDirectories": [
+      "\\tmp"
     ]
   }
 }
