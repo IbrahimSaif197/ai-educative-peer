@@ -1,6 +1,5 @@
 import os
-import hashlib
-from typing import Dict, Tuple, List
+from typing import List
 
 from dotenv import load_dotenv
 
@@ -26,6 +25,7 @@ from models import (
 )
 from hinting_engine import build_engine
 from firebase_service import FirebaseService
+from session_store import build_session_store, code_fingerprint
 
 
 app = FastAPI(title="EduPeer Backend", version="1.0.0")
@@ -40,23 +40,7 @@ app.add_middleware(
 
 engine = build_engine()
 firebase = FirebaseService()
-
-
-_session_state: Dict[Tuple[str, str], int] = {}
-_session_started: Dict[str, bool] = {}
-
-
-def _code_fingerprint(code: str) -> str:
-    normalized = "\n".join(line.rstrip() for line in code.strip().splitlines())
-    return hashlib.sha1(normalized.encode("utf-8")).hexdigest()
-
-
-def _next_hint_level(user_id: str, code: str) -> int:
-    key = (user_id, _code_fingerprint(code))
-    current = _session_state.get(key, 0)
-    new_level = min(3, current + 1)
-    _session_state[key] = new_level
-    return new_level
+store = build_session_store(firebase)
 
 
 @app.get("/health", response_model=HealthResponse)
@@ -69,15 +53,14 @@ async def hint(req: HintRequest) -> HintResponse:
     if not req.question.strip():
         raise HTTPException(status_code=400, detail="question must not be empty")
 
-    level = _next_hint_level(req.user_id, req.code)
+    level = store.next_hint_level(req.user_id, code_fingerprint(req.code))
 
     try:
         hint_text, concept_tags = engine.generate_hint(req.code, req.question, level)
     except Exception as e:
         raise HTTPException(status_code=502, detail=f"LLM error: {e}")
 
-    is_new_session = not _session_started.get(req.user_id, False)
-    _session_started[req.user_id] = True
+    is_new_session = store.begin_session(req.user_id)
 
     firebase.fire_and_forget(
         user_id=req.user_id,
@@ -93,11 +76,7 @@ async def hint(req: HintRequest) -> HintResponse:
 
 @app.post("/reset")
 async def reset_session(req: ResetSessionRequest):
-    prefix = req.user_id
-    keys_to_remove = [k for k in _session_state.keys() if k[0] == prefix]
-    for k in keys_to_remove:
-        _session_state.pop(k, None)
-    _session_started.pop(prefix, None)
+    store.reset(req.user_id)
     return {"status": "reset", "user_id": req.user_id}
 
 
