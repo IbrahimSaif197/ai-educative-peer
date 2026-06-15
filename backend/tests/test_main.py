@@ -63,6 +63,10 @@ def client():
     from session_store import InMemorySessionStore
     # Fresh, isolated session state per test.
     app_main.store = InMemorySessionStore()
+    # Guard: endpoints must read this module-global store at request time.
+    # If a refactor ever stops the override from applying, fail loudly here
+    # instead of silently testing against the import-time Firestore mock.
+    assert isinstance(app_main.store, InMemorySessionStore)
     with TestClient(app_main.app) as c:
         yield c
 
