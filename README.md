@@ -5,7 +5,7 @@ A VS Code extension that acts as a Socratic AI tutor for novice Python programme
 The system consists of:
 
 - **VS Code extension** (TypeScript, sidebar webview) that reads the active Python file and shows a chat UI.
-- **FastAPI backend** that calls Claude `claude-sonnet-4-6` and persists interactions/badges to Firestore.
+- **FastAPI backend** that calls Groq `llama-3.3-70b-versatile` and persists interactions/badges to Firestore.
 - **Firebase Firestore** for interaction logs and user badges.
 
 ## Architecture
@@ -13,7 +13,7 @@ The system consists of:
 ```
 edupeer/
 ├── extension/    VS Code extension (TypeScript)
-└── backend/      FastAPI + Anthropic + Firestore
+└── backend/      FastAPI + Groq + Firestore
 ```
 
 ## Setup
@@ -38,7 +38,7 @@ cp .env.example .env
 
 Then edit `.env` and fill in:
 
-- `ANTHROPIC_API_KEY` — your Anthropic API key
+- `GROQ_API_KEY` — your Groq API key
 - `FIREBASE_PROJECT_ID` — your Firebase project id
 - `FIREBASE_PRIVATE_KEY` — the `private_key` field from your Firebase service-account JSON (keep the quotes and `\n` escaping)
 - `FIREBASE_CLIENT_EMAIL` — the `client_email` from the same service-account JSON

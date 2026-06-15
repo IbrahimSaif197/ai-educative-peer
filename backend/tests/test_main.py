@@ -23,31 +23,32 @@ def _stub_firebase():
 
 _stub_firebase()
 
-os.environ.setdefault("ANTHROPIC_API_KEY", "test-anthropic-key")
+os.environ.setdefault("GROQ_API_KEY", "test-groq-key")
 os.environ.setdefault("FIREBASE_PROJECT_ID", "test-project")
 os.environ.setdefault("FIREBASE_PRIVATE_KEY", "test-pk")
 os.environ.setdefault("FIREBASE_CLIENT_EMAIL", "test@test.iam.gserviceaccount.com")
 
 
-def _make_anthropic_mock(hint_text: str):
-    block = MagicMock()
-    block.type = "text"
-    block.text = hint_text
-    msg = MagicMock()
-    msg.content = [block]
+def _make_groq_mock(hint_text: str):
+    message = MagicMock()
+    message.content = hint_text
+    choice = MagicMock()
+    choice.message = message
+    resp = MagicMock()
+    resp.choices = [choice]
     client = MagicMock()
-    client.messages.create.return_value = msg
+    client.chat.completions.create.return_value = resp
     return client
 
 
 @pytest.fixture(autouse=True)
-def _patch_anthropic_client(monkeypatch):
-    """Prevent real Anthropic calls in every test."""
+def _patch_groq_client(monkeypatch):
+    """Prevent real Groq calls in every test."""
     hint_text = "Have you considered the type? What do you think should happen next?"
-    mock_client = _make_anthropic_mock(hint_text)
+    mock_client = _make_groq_mock(hint_text)
 
     import hinting_engine
-    monkeypatch.setattr(hinting_engine, "Anthropic", lambda **_: mock_client)
+    monkeypatch.setattr(hinting_engine, "Groq", lambda **_: mock_client)
 
     # Also patch the already-created engine inside main
     import main as app_main

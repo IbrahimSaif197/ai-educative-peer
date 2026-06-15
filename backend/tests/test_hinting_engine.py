@@ -5,13 +5,14 @@ from unittest.mock import MagicMock, patch
 
 
 def _make_mock_client(text: str):
-    block = MagicMock()
-    block.type = "text"
-    block.text = text
-    msg = MagicMock()
-    msg.content = [block]
+    message = MagicMock()
+    message.content = text
+    choice = MagicMock()
+    choice.message = message
+    resp = MagicMock()
+    resp.choices = [choice]
     client = MagicMock()
-    client.messages.create.return_value = msg
+    client.chat.completions.create.return_value = resp
     return client
 
 
@@ -45,8 +46,9 @@ class TestHintingEngine:
         engine = HintingEngine(api_key="test-key")
         engine.client = _make_mock_client("hint text. What do you think should happen next?")
         engine.generate_hint("", "q", 99)
-        call_kwargs = engine.client.messages.create.call_args
-        msg_content = call_kwargs.kwargs["messages"][0]["content"]
+        call_kwargs = engine.client.chat.completions.create.call_args
+        # messages[0] is the system prompt, messages[1] is the user message
+        msg_content = call_kwargs.kwargs["messages"][1]["content"]
         assert "hint_level: 3" in msg_content
 
     def test_concept_tag_extraction_variables(self):
@@ -73,6 +75,6 @@ class TestHintingEngine:
         from hinting_engine import HintingEngine
         engine = HintingEngine(api_key="test-key")
         engine.client = MagicMock()
-        engine.client.messages.create.side_effect = RuntimeError("API down")
+        engine.client.chat.completions.create.side_effect = RuntimeError("API down")
         with pytest.raises(RuntimeError, match="API down"):
             engine.generate_hint("x=1", "help", 1)

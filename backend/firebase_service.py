@@ -1,6 +1,5 @@
 import os
 import asyncio
-import time
 from typing import List, Optional, Dict, Any
 
 import firebase_admin
@@ -17,6 +16,9 @@ class FirebaseService:
     def __init__(self):
         self._client = None
         self._init_error: Optional[str] = None
+        # Hold strong references to in-flight fire-and-forget tasks so the
+        # event loop doesn't garbage-collect them before they complete.
+        self._pending_tasks: set = set()
         try:
             project_id = os.environ["FIREBASE_PROJECT_ID"]
             private_key = os.environ["FIREBASE_PRIVATE_KEY"].replace("\\n", "\n")
@@ -154,11 +156,13 @@ class FirebaseService:
         new_session: bool,
     ) -> None:
         try:
-            asyncio.create_task(
+            task = asyncio.create_task(
                 self.log_interaction_async(
                     user_id, code_snippet, question, hint_level_used, concept_tags, new_session
                 )
             )
+            self._pending_tasks.add(task)
+            task.add_done_callback(self._pending_tasks.discard)
         except RuntimeError:
             pass
 
