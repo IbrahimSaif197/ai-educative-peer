@@ -42,6 +42,10 @@ class FirebaseService:
     def enabled(self) -> bool:
         return self._client is not None
 
+    @property
+    def client(self):
+        return self._client
+
     def _log_interaction_sync(
         self,
         user_id: str,
