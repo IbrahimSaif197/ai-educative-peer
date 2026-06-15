@@ -258,7 +258,7 @@ class TestFirestoreTimeout:
 
         store = FirestoreSessionStore(_SpyClient())
         store.next_hint_level("u1", "fp1")
-        assert captured.get("timeout") is not None
+        assert captured.get("timeout") == FirestoreSessionStore.TIMEOUT
 
     def test_set_is_called_with_timeout(self):
         captured = {}
@@ -280,7 +280,7 @@ class TestFirestoreTimeout:
 
         store = FirestoreSessionStore(_SpyClient())
         store.next_hint_level("u1", "fp1")
-        assert captured.get("timeout") is not None
+        assert captured.get("timeout") == FirestoreSessionStore.TIMEOUT
 
     def test_returns_default_when_firestore_times_out(self):
         class _SlowRef:

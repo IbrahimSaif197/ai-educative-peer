@@ -234,11 +234,14 @@ class TestEventLoopNotBlocked:
                 seen["begin_session"] = threading.get_ident()
                 return super().begin_session(user_id)
 
+        original_store = app_main.store
         app_main.store = _RecordingStore()
-
-        transport = httpx.ASGITransport(app=app_main.app)
-        async with httpx.AsyncClient(transport=transport, base_url="http://t") as ac:
-            res = await ac.post("/hint", json=VALID_HINT_PAYLOAD)
+        try:
+            transport = httpx.ASGITransport(app=app_main.app)
+            async with httpx.AsyncClient(transport=transport, base_url="http://t") as ac:
+                res = await ac.post("/hint", json=VALID_HINT_PAYLOAD)
+        finally:
+            app_main.store = original_store
 
         assert res.status_code == 200
         assert seen["next_hint_level"] != loop_thread_id
