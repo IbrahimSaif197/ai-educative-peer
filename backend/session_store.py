@@ -51,6 +51,9 @@ class FirestoreSessionStore:
 
     SESSIONS = "sessions"
     META = "sessions_meta"
+    # Bounded so a slow/unreachable Firestore fails fast and degrades to safe
+    # defaults instead of hanging the request indefinitely.
+    TIMEOUT = 5.0
 
     def __init__(self, client):
         self._client = client
@@ -63,7 +66,7 @@ class FirestoreSessionStore:
             ref = self._client.collection(self.SESSIONS).document(
                 self._doc_id(user_id, fingerprint)
             )
-            snap = ref.get()
+            snap = ref.get(timeout=self.TIMEOUT)
             current = int(snap.to_dict().get("hint_level", 0)) if snap.exists else 0
             new_level = min(3, current + 1)
             ref.set(
@@ -72,7 +75,8 @@ class FirestoreSessionStore:
                     "fingerprint": fingerprint,
                     "hint_level": new_level,
                     "updated_at": firestore.SERVER_TIMESTAMP,
-                }
+                },
+                timeout=self.TIMEOUT,
             )
             return new_level
         except Exception as e:
@@ -82,12 +86,14 @@ class FirestoreSessionStore:
     def begin_session(self, user_id: str) -> bool:
         try:
             ref = self._client.collection(self.META).document(user_id)
-            snap = ref.get()
+            snap = ref.get(timeout=self.TIMEOUT)
             active = bool(snap.to_dict().get("active", False)) if snap.exists else False
             if active:
                 return False
             ref.set(
-                {"active": True, "updated_at": firestore.SERVER_TIMESTAMP}, merge=True
+                {"active": True, "updated_at": firestore.SERVER_TIMESTAMP},
+                merge=True,
+                timeout=self.TIMEOUT,
             )
             return True
         except Exception as e:
@@ -98,16 +104,16 @@ class FirestoreSessionStore:
         try:
             refs = self._client.collection(self.SESSIONS).where(
                 "user_id", "==", user_id
-            ).stream()
+            ).stream(timeout=self.TIMEOUT)
             batch = self._client.batch()
             count = 0
             for doc in refs:
                 batch.delete(doc.reference)
                 count += 1
             if count:
-                batch.commit()
+                batch.commit(timeout=self.TIMEOUT)
             self._client.collection(self.META).document(user_id).set(
-                {"active": False}, merge=True
+                {"active": False}, merge=True, timeout=self.TIMEOUT
             )
         except Exception as e:
             print(f"[session] reset failed: {e}")

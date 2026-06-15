@@ -95,10 +95,10 @@ class _FakeDocRef:
         self._id = doc_id
         self.reference = self
 
-    def get(self):
+    def get(self, **kwargs):
         return _FakeSnap(self._col._docs.get(self._id))
 
-    def set(self, data, merge=False):
+    def set(self, data, merge=False, **kwargs):
         if merge and self._id in self._col._docs:
             self._col._docs[self._id].update(data)
         else:
@@ -112,7 +112,7 @@ class _FakeQuery:
     def __init__(self, refs):
         self._refs = refs
 
-    def stream(self):
+    def stream(self, **kwargs):
         return list(self._refs)
 
 
@@ -139,7 +139,7 @@ class _FakeBatch:
     def delete(self, ref):
         self._ops.append(ref)
 
-    def commit(self):
+    def commit(self, **kwargs):
         for ref in self._ops:
             ref.delete()
         self._ops = []
@@ -227,3 +227,78 @@ class TestBuildSessionStore:
             client = None
         store = build_session_store(_FB())
         assert isinstance(store, InMemorySessionStore)
+
+
+# --- Firestore timeout / fail-fast behavior ----------------------------------
+
+class TestFirestoreTimeout:
+    """The Firestore calls must pass a bounded timeout so a hung backend fails
+    fast (and degrades to safe defaults) instead of blocking forever."""
+
+    def test_get_is_called_with_timeout(self):
+        captured = {}
+
+        class _SpyRef:
+            reference = None
+
+            def get(self, **kwargs):
+                captured.update(kwargs)
+                return _FakeSnap(None)
+
+            def set(self, data, merge=False, **kwargs):
+                pass
+
+        class _SpyCollection:
+            def document(self, _doc_id):
+                return _SpyRef()
+
+        class _SpyClient:
+            def collection(self, _name):
+                return _SpyCollection()
+
+        store = FirestoreSessionStore(_SpyClient())
+        store.next_hint_level("u1", "fp1")
+        assert captured.get("timeout") is not None
+
+    def test_set_is_called_with_timeout(self):
+        captured = {}
+
+        class _SpyRef:
+            def get(self, **kwargs):
+                return _FakeSnap(None)
+
+            def set(self, data, merge=False, **kwargs):
+                captured.update(kwargs)
+
+        class _SpyCollection:
+            def document(self, _doc_id):
+                return _SpyRef()
+
+        class _SpyClient:
+            def collection(self, _name):
+                return _SpyCollection()
+
+        store = FirestoreSessionStore(_SpyClient())
+        store.next_hint_level("u1", "fp1")
+        assert captured.get("timeout") is not None
+
+    def test_returns_default_when_firestore_times_out(self):
+        class _SlowRef:
+            def get(self, **kwargs):
+                raise TimeoutError("deadline exceeded")
+
+            def set(self, data, merge=False, **kwargs):
+                raise TimeoutError("deadline exceeded")
+
+        class _SlowCollection:
+            def document(self, _doc_id):
+                return _SlowRef()
+
+        class _SlowClient:
+            def collection(self, _name):
+                return _SlowCollection()
+
+        store = FirestoreSessionStore(_SlowClient())
+        # Degrades to safe defaults rather than propagating the timeout.
+        assert store.next_hint_level("u1", "fp1") == 1
+        assert store.begin_session("u1") is False
