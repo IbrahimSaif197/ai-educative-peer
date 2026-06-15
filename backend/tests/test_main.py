@@ -203,3 +203,46 @@ class TestBadgesEndpoint:
         res = client.get("/badges/test-user-1")
         assert res.status_code == 200
         assert isinstance(res.json(), list)
+
+
+# ---------------------------------------------------------------------------
+# Event loop is not blocked by synchronous store / engine work
+# ---------------------------------------------------------------------------
+
+class TestEventLoopNotBlocked:
+    @pytest.mark.asyncio
+    async def test_hint_offloads_blocking_work_off_event_loop(self):
+        """Synchronous store/engine work inside /hint must be offloaded to a
+        worker thread so it cannot block the event loop. We verify this
+        deterministically: the blocking calls must run on a thread other than
+        the one running the event loop. Without offloading they would run on
+        the event-loop thread and these assertions would fail."""
+        import threading
+        import httpx
+        import main as app_main
+        from session_store import InMemorySessionStore
+
+        loop_thread_id = threading.get_ident()
+        seen = {}
+
+        class _RecordingStore(InMemorySessionStore):
+            def next_hint_level(self, user_id, fingerprint):
+                seen["next_hint_level"] = threading.get_ident()
+                return super().next_hint_level(user_id, fingerprint)
+
+            def begin_session(self, user_id):
+                seen["begin_session"] = threading.get_ident()
+                return super().begin_session(user_id)
+
+        original_store = app_main.store
+        app_main.store = _RecordingStore()
+        try:
+            transport = httpx.ASGITransport(app=app_main.app)
+            async with httpx.AsyncClient(transport=transport, base_url="http://t") as ac:
+                res = await ac.post("/hint", json=VALID_HINT_PAYLOAD)
+        finally:
+            app_main.store = original_store
+
+        assert res.status_code == 200
+        assert seen["next_hint_level"] != loop_thread_id
+        assert seen["begin_session"] != loop_thread_id

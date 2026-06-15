@@ -1,4 +1,5 @@
 import os
+import asyncio
 from typing import List
 
 from dotenv import load_dotenv
@@ -53,14 +54,18 @@ async def hint(req: HintRequest) -> HintResponse:
     if not req.question.strip():
         raise HTTPException(status_code=400, detail="question must not be empty")
 
-    level = store.next_hint_level(req.user_id, code_fingerprint(req.code))
+    level = await asyncio.to_thread(
+        store.next_hint_level, req.user_id, code_fingerprint(req.code)
+    )
 
     try:
-        hint_text, concept_tags = engine.generate_hint(req.code, req.question, level)
+        hint_text, concept_tags = await asyncio.to_thread(
+            engine.generate_hint, req.code, req.question, level
+        )
     except Exception as e:
         raise HTTPException(status_code=502, detail=f"LLM error: {e}")
 
-    is_new_session = store.begin_session(req.user_id)
+    is_new_session = await asyncio.to_thread(store.begin_session, req.user_id)
 
     firebase.fire_and_forget(
         user_id=req.user_id,
@@ -76,13 +81,13 @@ async def hint(req: HintRequest) -> HintResponse:
 
 @app.post("/reset")
 async def reset_session(req: ResetSessionRequest):
-    store.reset(req.user_id)
+    await asyncio.to_thread(store.reset, req.user_id)
     return {"status": "reset", "user_id": req.user_id}
 
 
 @app.get("/badges/{user_id}")
 async def get_badges(user_id: str) -> List[str]:
-    return firebase.get_user_badges_sync(user_id)
+    return await asyncio.to_thread(firebase.get_user_badges_sync, user_id)
 
 
 @app.post("/scan", response_model=ScanResponse)
@@ -90,7 +95,7 @@ async def scan(req: ScanRequest) -> ScanResponse:
     if not req.code.strip():
         return ScanResponse(flags=[])
     try:
-        raw_flags = engine.scan_code(req.code)
+        raw_flags = await asyncio.to_thread(engine.scan_code, req.code)
     except Exception as e:
         raise HTTPException(status_code=502, detail=f"LLM error: {e}")
     return ScanResponse(flags=[LineFlag(**f) for f in raw_flags])
@@ -101,7 +106,9 @@ async def line_hint(req: LineHintRequest) -> LineHintResponse:
     if not req.code.strip():
         return LineHintResponse(hint="", concept="general")
     try:
-        hint_text, concept = engine.generate_line_hint(req.code, req.line)
+        hint_text, concept = await asyncio.to_thread(
+            engine.generate_line_hint, req.code, req.line
+        )
     except Exception as e:
         raise HTTPException(status_code=502, detail=f"LLM error: {e}")
     return LineHintResponse(hint=hint_text, concept=concept)
