@@ -131,6 +131,14 @@ export class InlineTutor {
           }
           const line =
             typeof lineArg === "number" ? lineArg : editor.selection.active.line;
+          // Move the cursor to the target line so the inline hint renders
+          // there (the decoration is drawn at the active line).
+          if (line >= 0 && line < editor.document.lineCount) {
+            const endCol = editor.document.lineAt(line).text.length;
+            const pos = new vscode.Position(line, endCol);
+            editor.selection = new vscode.Selection(pos, pos);
+            editor.revealRange(new vscode.Range(pos, pos));
+          }
           await this.fetchLineHint(editor.document, line, { force: true });
           this.renderActiveLineDecoration(editor);
         }
@@ -361,7 +369,7 @@ export class InlineTutor {
         const range = new vscode.Range(i, 0, i, 0);
         lenses.push(
           new vscode.CodeLens(range, {
-            title: "💡 Need a nudge?",
+            title: "💡 Get a hint",
             command: "edupeer.nudgeLine",
             arguments: [doc.uri, i],
           })
