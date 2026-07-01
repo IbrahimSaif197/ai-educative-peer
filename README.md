@@ -59,6 +59,23 @@ The API is now at `http://localhost:8000`. Health check: `GET /health`.
 3. In the new window open any `.py` file.
 4. Click the **EduPeer** icon in the Activity Bar, or run `EduPeer: Open Tutor Panel` from the command palette.
 
+### Adjusting the inline hint (CodeLens) font size
+
+The "Get a hint" prompts and the 🤔 questions that appear above your code are
+rendered as VS Code CodeLenses. To make them larger (handy for presentations or
+projectors), change the editor's CodeLens font size:
+
+- Open Settings (`Ctrl+,` / `Cmd+,`), search for **CodeLens Font Size**, and set
+  a value such as `16`, **or**
+- add this to your VS Code `settings.json`:
+
+  ```json
+  "editor.codeLensFontSize": 16
+  ```
+
+This repo already ships `.vscode/settings.json` with `editor.codeLensFontSize`
+set to `16`.
+
 ## Commands
 
 | Command                         | Description                                                        |
