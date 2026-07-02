@@ -28,6 +28,14 @@ body {
   font-size: 1.1em;
 }
 
+.account {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  opacity: 0.85;
+}
+
 .badges {
   display: flex;
   flex-wrap: wrap;

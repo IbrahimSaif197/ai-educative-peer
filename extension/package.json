@@ -49,6 +49,14 @@
       {
         "command": "edupeer.scanFile",
         "title": "EduPeer: Scan File for Issues"
+      },
+      {
+        "command": "edupeer.signIn",
+        "title": "EduPeer: Sign In"
+      },
+      {
+        "command": "edupeer.signOut",
+        "title": "EduPeer: Sign Out"
       }
     ],
     "menus": {

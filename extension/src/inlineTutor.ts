@@ -42,8 +42,7 @@ export class InlineTutor {
 
   constructor(
     private readonly context: vscode.ExtensionContext,
-    private readonly api: ApiClient,
-    private readonly getUserId: () => string
+    private readonly api: ApiClient
   ) {
     this.ghostDecoration = vscode.window.createTextEditorDecorationType({
       after: {
@@ -231,7 +230,6 @@ export class InlineTutor {
       const res = await this.api.getLineHint(
         doc.getText(),
         line + 1,
-        this.getUserId(),
         doc.languageId
       );
       if (res.hint) {
@@ -308,7 +306,7 @@ export class InlineTutor {
     if (!opts.force && state.scanFingerprint === fp) return;
     state.scanFingerprint = fp;
     try {
-      const res = await this.api.scanCode(code, this.getUserId(), doc.languageId);
+      const res = await this.api.scanCode(code, doc.languageId);
       state.flags = res.flags || [];
       this.applyFlagsToDoc(doc, state.flags);
       this.emitter.fire();

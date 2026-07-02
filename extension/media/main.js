@@ -11,6 +11,13 @@
   const langChipEl = document.getElementById("langChip");
   const loadingEl = document.getElementById("loading");
   const badgesEl = document.getElementById("badges");
+  const accountLabelEl = document.getElementById("accountLabel");
+  const authBtn = document.getElementById("authBtn");
+  let signedIn = false;
+
+  authBtn.addEventListener("click", () => {
+    vscode.postMessage({ type: signedIn ? "signOut" : "signIn" });
+  });
 
   let currentCode = "";
 
@@ -134,6 +141,11 @@
         break;
       case "badges":
         renderBadges(msg.badges || []);
+        break;
+      case "authState":
+        signedIn = !!msg.signedIn;
+        accountLabelEl.textContent = msg.label;
+        authBtn.textContent = signedIn ? "Sign out" : "Sign in";
         break;
       case "resetDone":
         chatEl.innerHTML = "";

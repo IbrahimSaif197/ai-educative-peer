@@ -1,21 +1,12 @@
 import * as vscode from "vscode";
 import { ApiClient, ChatTurn } from "./apiClient";
+import { AuthManager } from "./authManager";
 import { FirebaseClient } from "./firebaseClient";
 import { isSupportedLanguage, languageLabel } from "./languages";
-
-const USER_ID_KEY = "edupeer.userId";
 
 // How many prior turns are sent with each question (the backend caps
 // again on its side).
 const MAX_HISTORY_TURNS = 6;
-
-function randomUserId(): string {
-  return (
-    "user-" +
-    Math.random().toString(36).slice(2, 10) +
-    Date.now().toString(36)
-  );
-}
 
 export class EduPeerSidebarProvider implements vscode.WebviewViewProvider {
   public static readonly viewType = "edupeer.sidebar";
@@ -28,17 +19,9 @@ export class EduPeerSidebarProvider implements vscode.WebviewViewProvider {
     private readonly extensionUri: vscode.Uri,
     private readonly context: vscode.ExtensionContext,
     private readonly api: ApiClient,
-    private readonly firebase: FirebaseClient
+    private readonly firebase: FirebaseClient,
+    private readonly auth: AuthManager
   ) {}
-
-  public getUserId(): string {
-    let id = this.context.globalState.get<string>(USER_ID_KEY);
-    if (!id) {
-      id = randomUserId();
-      this.context.globalState.update(USER_ID_KEY, id);
-    }
-    return id;
-  }
 
   public resolveWebviewView(webviewView: vscode.WebviewView): void {
     this.view = webviewView;
@@ -53,6 +36,7 @@ export class EduPeerSidebarProvider implements vscode.WebviewViewProvider {
         case "ready":
           await this.sendActiveCode();
           await this.sendBadges();
+          this.postAuthState();
           return;
         case "askHint":
           await this.handleAsk(msg.question as string, msg.code as string);
@@ -62,6 +46,12 @@ export class EduPeerSidebarProvider implements vscode.WebviewViewProvider {
           return;
         case "refreshCode":
           await this.sendActiveCode();
+          return;
+        case "signIn":
+          await vscode.commands.executeCommand("edupeer.signIn");
+          return;
+        case "signOut":
+          await vscode.commands.executeCommand("edupeer.signOut");
           return;
       }
     });
@@ -74,6 +64,11 @@ export class EduPeerSidebarProvider implements vscode.WebviewViewProvider {
       ) {
         this.sendActiveCode();
       }
+    });
+
+    this.auth.onDidChange(() => {
+      this.postAuthState();
+      void this.sendBadges();
     });
   }
 
@@ -88,10 +83,9 @@ export class EduPeerSidebarProvider implements vscode.WebviewViewProvider {
   }
 
   public async resetSession() {
-    const userId = this.getUserId();
     this.history = [];
     try {
-      await this.api.resetSession(userId);
+      await this.api.resetSession();
     } catch (err) {
       console.error("reset failed", err);
     }
@@ -102,14 +96,12 @@ export class EduPeerSidebarProvider implements vscode.WebviewViewProvider {
     if (!question || !question.trim()) {
       return;
     }
-    const userId = this.getUserId();
     this.post({ type: "userMessage", text: question });
     this.post({ type: "loading", value: true });
     try {
       const res = await this.api.getHint({
         code: code ?? "",
         question,
-        user_id: userId,
         hint_level: 1,
         language: this.lastLanguageId,
         history: this.history.slice(-MAX_HISTORY_TURNS),
@@ -147,9 +139,18 @@ export class EduPeerSidebarProvider implements vscode.WebviewViewProvider {
   }
 
   private async sendBadges() {
-    const userId = this.getUserId();
-    const badges = await this.firebase.getBadges(userId);
+    const badges = await this.firebase.getBadges();
     this.post({ type: "badges", badges });
+  }
+
+  private postAuthState(): void {
+    const s = this.auth.getSession();
+    const signedIn = !!s && !s.isAnonymous;
+    this.post({
+      type: "authState",
+      signedIn,
+      label: signedIn ? (s!.displayName || s!.email || s!.uid) : "Not signed in",
+    });
   }
 
   private post(msg: any) {
@@ -176,6 +177,10 @@ export class EduPeerSidebarProvider implements vscode.WebviewViewProvider {
 <body>
   <header class="header">
     <h2>EduPeer</h2>
+    <div class="account">
+      <span id="accountLabel">Not signed in</span>
+      <button id="authBtn" class="small-btn">Sign in</button>
+    </div>
     <div class="badges" id="badges"></div>
   </header>
   <section class="code-preview">
