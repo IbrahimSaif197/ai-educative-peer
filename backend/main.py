@@ -10,7 +10,7 @@ _root_env = os.path.join(os.path.dirname(os.path.dirname(__file__)), ".env")
 if os.path.exists(_root_env):
     load_dotenv(_root_env, override=False)
 
-from fastapi import FastAPI, HTTPException
+from fastapi import Depends, FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse
 
@@ -18,13 +18,13 @@ from models import (
     HintRequest,
     HintResponse,
     HealthResponse,
-    ResetSessionRequest,
     ScanRequest,
     ScanResponse,
     LineFlag,
     LineHintRequest,
     LineHintResponse,
 )
+from auth import get_current_uid
 from hinting_engine import build_engine
 from firebase_service import FirebaseService
 from languages import normalize_language
@@ -73,12 +73,12 @@ async def auth_login():
 
 
 @app.post("/hint", response_model=HintResponse)
-async def hint(req: HintRequest) -> HintResponse:
+async def hint(req: HintRequest, uid: str = Depends(get_current_uid)) -> HintResponse:
     if not req.question.strip():
         raise HTTPException(status_code=400, detail="question must not be empty")
 
     level = await asyncio.to_thread(
-        store.next_hint_level, req.user_id, code_fingerprint(req.code)
+        store.next_hint_level, uid, code_fingerprint(req.code)
     )
 
     language = normalize_language(req.language)
@@ -90,10 +90,10 @@ async def hint(req: HintRequest) -> HintResponse:
     except Exception as e:
         raise HTTPException(status_code=502, detail=f"LLM error: {e}")
 
-    is_new_session = await asyncio.to_thread(store.begin_session, req.user_id)
+    is_new_session = await asyncio.to_thread(store.begin_session, uid)
 
     firebase.fire_and_forget(
-        user_id=req.user_id,
+        user_id=uid,
         code_snippet=req.code,
         question=req.question,
         hint_level_used=level,
@@ -106,18 +106,18 @@ async def hint(req: HintRequest) -> HintResponse:
 
 
 @app.post("/reset")
-async def reset_session(req: ResetSessionRequest):
-    await asyncio.to_thread(store.reset, req.user_id)
-    return {"status": "reset", "user_id": req.user_id}
+async def reset_session(uid: str = Depends(get_current_uid)):
+    await asyncio.to_thread(store.reset, uid)
+    return {"status": "reset", "user_id": uid}
 
 
-@app.get("/badges/{user_id}")
-async def get_badges(user_id: str) -> List[str]:
-    return await asyncio.to_thread(firebase.get_user_badges_sync, user_id)
+@app.get("/badges")
+async def get_badges(uid: str = Depends(get_current_uid)) -> List[str]:
+    return await asyncio.to_thread(firebase.get_user_badges_sync, uid)
 
 
 @app.post("/scan", response_model=ScanResponse)
-async def scan(req: ScanRequest) -> ScanResponse:
+async def scan(req: ScanRequest, uid: str = Depends(get_current_uid)) -> ScanResponse:
     if not req.code.strip():
         return ScanResponse(flags=[])
     try:
@@ -130,7 +130,7 @@ async def scan(req: ScanRequest) -> ScanResponse:
 
 
 @app.post("/line-hint", response_model=LineHintResponse)
-async def line_hint(req: LineHintRequest) -> LineHintResponse:
+async def line_hint(req: LineHintRequest, uid: str = Depends(get_current_uid)) -> LineHintResponse:
     if not req.code.strip():
         return LineHintResponse(hint="", concept="general")
     try:

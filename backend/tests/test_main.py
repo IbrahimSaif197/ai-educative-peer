@@ -60,6 +60,7 @@ def _patch_groq_client(monkeypatch):
 def client():
     from fastapi.testclient import TestClient
     import main as app_main
+    import auth
     from session_store import InMemorySessionStore
     # Fresh, isolated session state per test.
     app_main.store = InMemorySessionStore()
@@ -67,8 +68,12 @@ def client():
     # If a refactor ever stops the override from applying, fail loudly here
     # instead of silently testing against the import-time Firestore mock.
     assert isinstance(app_main.store, InMemorySessionStore)
+    # Override auth to return a fixed UID for testing
+    app_main.app.dependency_overrides[auth.get_current_uid] = lambda: "test-user-1"
     with TestClient(app_main.app) as c:
         yield c
+    # Clear overrides after test
+    app_main.app.dependency_overrides.clear()
 
 
 # ---------------------------------------------------------------------------
@@ -91,7 +96,6 @@ class TestHealth:
 VALID_HINT_PAYLOAD = {
     "code": "def add(a, b):\n    return a - b",
     "question": "Why is my add function wrong?",
-    "user_id": "test-user-1",
     "hint_level": 1,
 }
 
@@ -137,11 +141,6 @@ class TestHintEndpoint:
         res = client.post("/hint", json=payload)
         assert res.status_code == 422
 
-    def test_missing_user_id_returns_422(self, client):
-        payload = {k: v for k, v in VALID_HINT_PAYLOAD.items() if k != "user_id"}
-        res = client.post("/hint", json=payload)
-        assert res.status_code == 422
-
     def test_different_code_resets_counter(self, client):
         client.post("/hint", json=VALID_HINT_PAYLOAD)
         client.post("/hint", json=VALID_HINT_PAYLOAD)
@@ -150,11 +149,17 @@ class TestHintEndpoint:
         assert res.json()["hint_level"] == 1
 
     def test_different_user_independent_counter(self, client):
+        import main as app_main
+        import auth
+        # User 1 requests
         client.post("/hint", json=VALID_HINT_PAYLOAD)
         client.post("/hint", json=VALID_HINT_PAYLOAD)
-        payload_user2 = {**VALID_HINT_PAYLOAD, "user_id": "test-user-2"}
-        res = client.post("/hint", json=payload_user2)
+        # Switch to User 2
+        app_main.app.dependency_overrides[auth.get_current_uid] = lambda: "test-user-2"
+        res = client.post("/hint", json=VALID_HINT_PAYLOAD)
         assert res.json()["hint_level"] == 1
+        # Reset to User 1
+        app_main.app.dependency_overrides[auth.get_current_uid] = lambda: "test-user-1"
 
     def test_hint_contains_socratic_question(self, client):
         res = client.post("/hint", json=VALID_HINT_PAYLOAD)
@@ -222,29 +227,29 @@ class TestResetEndpoint:
     def test_reset_clears_hint_level(self, client):
         client.post("/hint", json=VALID_HINT_PAYLOAD)
         client.post("/hint", json=VALID_HINT_PAYLOAD)
-        client.post("/reset", json={"user_id": VALID_HINT_PAYLOAD["user_id"]})
+        client.post("/reset")
         res = client.post("/hint", json=VALID_HINT_PAYLOAD)
         assert res.json()["hint_level"] == 1
 
     def test_reset_returns_confirmation(self, client):
-        res = client.post("/reset", json={"user_id": "u1"})
+        res = client.post("/reset")
         assert res.status_code == 200
         data = res.json()
         assert data["status"] == "reset"
-        assert data["user_id"] == "u1"
+        assert data["user_id"] == "test-user-1"
 
     def test_reset_unknown_user_returns_200(self, client):
-        res = client.post("/reset", json={"user_id": "nobody"})
+        res = client.post("/reset")
         assert res.status_code == 200
 
 
 # ---------------------------------------------------------------------------
-# /badges/{user_id}
+# /badges
 # ---------------------------------------------------------------------------
 
 class TestBadgesEndpoint:
     def test_returns_list(self, client):
-        res = client.get("/badges/test-user-1")
+        res = client.get("/badges")
         assert res.status_code == 200
         assert isinstance(res.json(), list)
 
@@ -264,6 +269,7 @@ class TestEventLoopNotBlocked:
         import threading
         import httpx
         import main as app_main
+        import auth
         from session_store import InMemorySessionStore
 
         loop_thread_id = threading.get_ident()
@@ -280,12 +286,15 @@ class TestEventLoopNotBlocked:
 
         original_store = app_main.store
         app_main.store = _RecordingStore()
+        # Override auth for this test
+        app_main.app.dependency_overrides[auth.get_current_uid] = lambda: "test-user-1"
         try:
             transport = httpx.ASGITransport(app=app_main.app)
             async with httpx.AsyncClient(transport=transport, base_url="http://t") as ac:
                 res = await ac.post("/hint", json=VALID_HINT_PAYLOAD)
         finally:
             app_main.store = original_store
+            app_main.app.dependency_overrides.clear()
 
         assert res.status_code == 200
         assert seen["next_hint_level"] != loop_thread_id

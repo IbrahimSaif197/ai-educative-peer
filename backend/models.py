@@ -10,7 +10,6 @@ class ChatTurn(BaseModel):
 class HintRequest(BaseModel):
     code: str = Field(default="", description="The student's current code")
     question: str = Field(..., description="The student's question or described error")
-    user_id: str = Field(..., description="Persistent user identifier")
     hint_level: int = Field(default=1, ge=1, le=3)
     language: str = Field(default="python", description="VS Code languageId of the code")
     history: List[ChatTurn] = Field(
@@ -23,10 +22,6 @@ class HintResponse(BaseModel):
     hint: str
     hint_level: int
     concept_tags: List[str]
-
-
-class ResetSessionRequest(BaseModel):
-    user_id: str
 
 
 class HealthResponse(BaseModel):
@@ -45,7 +40,6 @@ class UserBadges(BaseModel):
 
 class ScanRequest(BaseModel):
     code: str = Field(default="", description="Full file content")
-    user_id: str = Field(..., description="Persistent user identifier")
     language: str = Field(default="python", description="VS Code languageId of the code")
 
 
@@ -64,7 +58,6 @@ class ScanResponse(BaseModel):
 class LineHintRequest(BaseModel):
     code: str = Field(default="", description="Full file content")
     line: int = Field(..., ge=1, description="1-based line the user is editing")
-    user_id: str = Field(..., description="Persistent user identifier")
     language: str = Field(default="python", description="VS Code languageId of the code")
 
 

@@ -1,36 +1,31 @@
 import pytest
 from pydantic import ValidationError
-from models import HintRequest, HintResponse, ResetSessionRequest, HealthResponse, UserBadges
+from models import HintRequest, HintResponse, HealthResponse, UserBadges
 
 
 class TestHintRequest:
     def test_valid_full(self):
-        req = HintRequest(code="x = 1", question="What is x?", user_id="u1", hint_level=2)
+        req = HintRequest(code="x = 1", question="What is x?", hint_level=2)
         assert req.code == "x = 1"
         assert req.question == "What is x?"
-        assert req.user_id == "u1"
         assert req.hint_level == 2
 
     def test_defaults(self):
-        req = HintRequest(question="help", user_id="u1")
+        req = HintRequest(question="help")
         assert req.code == ""
         assert req.hint_level == 1
 
     def test_missing_question_raises(self):
         with pytest.raises(ValidationError):
-            HintRequest(user_id="u1")
-
-    def test_missing_user_id_raises(self):
-        with pytest.raises(ValidationError):
-            HintRequest(question="help")
+            HintRequest()
 
     def test_hint_level_below_min_raises(self):
         with pytest.raises(ValidationError):
-            HintRequest(question="q", user_id="u1", hint_level=0)
+            HintRequest(question="q", hint_level=0)
 
     def test_hint_level_above_max_raises(self):
         with pytest.raises(ValidationError):
-            HintRequest(question="q", user_id="u1", hint_level=4)
+            HintRequest(question="q", hint_level=4)
 
 
 class TestHintResponse:
@@ -42,16 +37,6 @@ class TestHintResponse:
     def test_empty_tags(self):
         r = HintResponse(hint="A hint", hint_level=3, concept_tags=[])
         assert r.concept_tags == []
-
-
-class TestResetSessionRequest:
-    def test_valid(self):
-        r = ResetSessionRequest(user_id="abc")
-        assert r.user_id == "abc"
-
-    def test_missing_raises(self):
-        with pytest.raises(ValidationError):
-            ResetSessionRequest()
 
 
 class TestHealthResponse:
