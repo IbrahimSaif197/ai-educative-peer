@@ -20,7 +20,10 @@ const vscode = {
   },
   Uri: {
     joinPath: jest.fn((...parts: any[]) => ({ fsPath: parts.join("/"), toString: () => parts.join("/") })),
-    parse: jest.fn((s: string) => ({ fsPath: s })),
+    parse: jest.fn((s: string) => ({ fsPath: s, toString: () => s })),
+  },
+  env: {
+    openExternal: jest.fn(async () => true),
   },
   EventEmitter: jest.fn().mockImplementation(() => ({
     event: jest.fn(),
