@@ -43,6 +43,11 @@ export class AuthManager {
   private idTokenExpiresAt = 0;
   private session?: AuthSession;
   private apiKey?: string;
+  // In-flight dedupe: concurrent callers await the same underlying
+  // network round-trip instead of each kicking off their own (which would
+  // double-bootstrap an anonymous account, or burn a rotated refresh token).
+  private bootstrapPromise?: Promise<void>;
+  private refreshPromise?: Promise<string>;
   private emitter = new vscode.EventEmitter<AuthSession | undefined>();
   readonly onDidChange = this.emitter.event;
 
@@ -71,7 +76,9 @@ export class AuthManager {
 
   async getIdToken(force = false): Promise<string> {
     if (!this.session) {
-      await this.bootstrapAnonymous();
+      await (this.bootstrapPromise ??= this.bootstrapAnonymous().finally(() => {
+        this.bootstrapPromise = undefined;
+      }));
       return this.idToken!;
     }
     if (!force && this.idToken && Date.now() < this.idTokenExpiresAt - EXPIRY_MARGIN_MS) {
@@ -139,8 +146,22 @@ export class AuthManager {
     // Migrate each old anonymous account independently: a failure for one
     // token must not abort the others — it just stays queued for next time.
     for (const oldRefreshToken of tokens) {
+      let oldIdToken: string;
       try {
-        const oldIdToken = (await this.exchangeRefreshToken(oldRefreshToken)).idToken;
+        oldIdToken = (await this.exchangeRefreshToken(oldRefreshToken)).idToken;
+      } catch (err) {
+        const status = (err as { status?: number }).status;
+        if (status !== undefined && status >= 400 && status < 500) {
+          // The old account is permanently gone (e.g. Firebase pruned a
+          // stale anonymous user) — nothing left to migrate, so drop it
+          // instead of retrying it forever.
+          continue;
+        }
+        // Network error or 5xx: transient, keep it queued for next time.
+        remaining.push(oldRefreshToken);
+        continue;
+      }
+      try {
         // Carry legacyUserId until one call carrying it succeeds.
         const carriedLegacy = legacyUserId;
         if (await this.postMigrate(idToken, oldIdToken, carriedLegacy)) {
@@ -155,8 +176,10 @@ export class AuthManager {
       }
     }
 
-    // Legacy-only migration when there were no old refresh tokens.
-    if (tokens.length === 0 && legacyUserId !== undefined) {
+    // Legacy-only migration once there are no old refresh tokens left to
+    // process, whether because there never were any or because this pass
+    // pruned/migrated all of them.
+    if (remaining.length === 0 && legacyUserId !== undefined) {
       try {
         if (await this.postMigrate(idToken, undefined, legacyUserId)) {
           legacyUserId = undefined;
@@ -245,7 +268,11 @@ export class AuthManager {
       body: `grant_type=refresh_token&refresh_token=${encodeURIComponent(refreshToken)}`,
     });
     if (!res.ok) {
-      throw new Error(`Session expired — sign in again (${res.status})`);
+      const err = new Error(`Session expired — sign in again (${res.status})`) as Error & {
+        status?: number;
+      };
+      err.status = res.status;
+      throw err;
     }
     const data = (await res.json()) as any;
     return {
@@ -257,6 +284,12 @@ export class AuthManager {
   }
 
   private async refresh(): Promise<string> {
+    return (this.refreshPromise ??= this.doRefresh().finally(() => {
+      this.refreshPromise = undefined;
+    }));
+  }
+
+  private async doRefresh(): Promise<string> {
     const exchanged = await this.exchangeRefreshToken(this.session!.refreshToken);
     this.idToken = exchanged.idToken;
     this.idTokenExpiresAt = Date.now() + exchanged.expiresInMs;

@@ -86,7 +86,10 @@ async def migrate(req: MigrateRequest, uid: str = Depends(get_current_uid)):
         old_uid = verify_token(req.old_id_token)
         if old_uid != uid:
             sources.append(old_uid)
-    if req.legacy_user_id and req.legacy_user_id != uid:
+    # Legacy pre-auth IDs always start with "user-" (from the old
+    # randomUserId()); real Firebase UIDs never do. Without this check, a
+    # caller could pass another user's UID and have their doc merged away.
+    if req.legacy_user_id and req.legacy_user_id != uid and req.legacy_user_id.startswith("user-"):
         sources.append(req.legacy_user_id)
 
     merged = 0

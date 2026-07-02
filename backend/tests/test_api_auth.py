@@ -104,3 +104,18 @@ def test_migrate_with_no_sources_merges_nothing(signed_in):
     res = signed_in.post("/auth/migrate", json={})
     assert res.status_code == 200
     assert res.json() == {"status": "ok", "merged": 0}
+
+
+def test_migrate_ignores_legacy_id_not_shaped_like_a_legacy_id(signed_in, monkeypatch):
+    calls = []
+    monkeypatch.setattr(
+        main.firebase, "merge_user_sync",
+        lambda old, new: calls.append((old, new)) or True,
+    )
+    res = signed_in.post(
+        "/auth/migrate",
+        json={"legacy_user_id": "SomeFirebaseUid1234567890abcd"},
+    )
+    assert res.status_code == 200
+    assert res.json() == {"status": "ok", "merged": 0}
+    assert calls == []

@@ -76,6 +76,18 @@ describe("anonymous bootstrap", () => {
   });
 });
 
+describe("concurrent bootstrap", () => {
+  it("dedupes concurrent getIdToken calls into a single anonymous bootstrap", async () => {
+    const fetchMock = mockFetchRoutes([CONFIG, SIGNUP]);
+    const { auth } = makeManager();
+    const [token1, token2] = await Promise.all([auth.getIdToken(), auth.getIdToken()]);
+    expect(token1).toBe("anon-id-token");
+    expect(token2).toBe("anon-id-token");
+    const signUpCalls = fetchMock.mock.calls.filter(([u]) => String(u).includes("accounts:signUp"));
+    expect(signUpCalls.length).toBe(1);
+  });
+});
+
 describe("applySignIn and migration", () => {
   const payload: SignInPayload = {
     idToken: "real-id", refreshToken: "real-refresh", uid: "real-1",
@@ -160,6 +172,59 @@ describe("applySignIn and migration", () => {
     const oldTokens = okMigrateBodies.map((b) => b.old_id_token);
     expect(oldTokens).toContain("refreshed-0");
     expect(oldTokens).toContain("refreshed-1");
+    expect(secrets.map.has("edupeer.pendingMigration")).toBe(false);
+  });
+});
+
+describe("runPendingMigration token pruning", () => {
+  it("drops a permanently invalid old refresh token (4xx) and still runs the legacy-only migrate in the same pass", async () => {
+    jest.spyOn(console, "error").mockImplementation(() => {});
+    const respond = (status: number, body: any) => ({
+      ok: status >= 200 && status < 300,
+      status,
+      json: async () => body,
+      text: async () => JSON.stringify(body),
+    });
+    const fetchMock = jest.fn(async (url: string, init?: any) => {
+      const u = String(url);
+      if (u.includes("/auth/config")) {
+        return respond(200, { apiKey: "web-key", authDomain: "x.firebaseapp.com" });
+      }
+      if (u.includes("securetoken")) {
+        const body = String(init?.body || "");
+        if (body.includes("dead-refresh")) {
+          return respond(400, {});
+        }
+        return respond(200, {
+          id_token: "real-id-refreshed", refresh_token: "real-refresh-2",
+          user_id: "real-1", expires_in: "3600",
+        });
+      }
+      if (u.includes("/auth/migrate")) {
+        return respond(200, { status: "ok", merged: 1 });
+      }
+      throw new Error(`unmatched fetch: ${u}`);
+    });
+    (global as any).fetch = fetchMock;
+
+    const { auth, secrets } = makeManager();
+    await secrets.store(
+      "edupeer.authSession",
+      JSON.stringify({ uid: "real-1", refreshToken: "real-refresh", isAnonymous: false })
+    );
+    await secrets.store(
+      "edupeer.pendingMigration",
+      JSON.stringify({ oldRefreshTokens: ["dead-refresh"], legacyUserId: "user-legacy1" })
+    );
+    await auth.initialize();
+
+    await auth.runPendingMigration();
+
+    const migrateCalls = fetchMock.mock.calls.filter(([u]) => String(u).includes("/auth/migrate"));
+    expect(migrateCalls.length).toBe(1);
+    const body = JSON.parse(migrateCalls[0][1].body);
+    expect(body.legacy_user_id).toBe("user-legacy1");
+    expect(body.old_id_token).toBeNull();
     expect(secrets.map.has("edupeer.pendingMigration")).toBe(false);
   });
 });

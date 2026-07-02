@@ -38,6 +38,10 @@
     <h1>You're signed in ✔</h1>
     <p>Return to VS Code — EduPeer is ready.</p>
   </div>
+  <div class="card hidden" id="invalid">
+    <h1>Sign-in link is invalid</h1>
+    <p class="error">This link is missing a valid port and can't continue. Close this tab and retry sign-in from VS Code.</p>
+  </div>
 
   <script>
     const config = {
@@ -49,14 +53,6 @@
     const port = new URLSearchParams(location.search).get("port");
     const errorEl = document.getElementById("error");
     let createMode = false;
-
-    document.getElementById("modeToggle").addEventListener("click", () => {
-      createMode = !createMode;
-      document.getElementById("emailSubmit").textContent = createMode ? "Create account" : "Sign in";
-      document.getElementById("modeToggle").textContent = createMode
-        ? "Already have an account? Sign in"
-        : "New here? Create an account";
-    });
 
     async function deliver(user) {
       const idToken = await user.getIdToken();
@@ -84,25 +80,45 @@
       });
     }
 
-    document.getElementById("google").addEventListener("click", () =>
-      run(auth.signInWithPopup(new firebase.auth.GoogleAuthProvider()))
-    );
-    document.getElementById("github").addEventListener("click", () =>
-      run(auth.signInWithPopup(new firebase.auth.GithubAuthProvider()))
-    );
-    document.getElementById("emailSubmit").addEventListener("click", () => {
-      const email = document.getElementById("email").value.trim();
-      const password = document.getElementById("password").value;
-      if (!email || !password) {
-        errorEl.textContent = "Enter an email and password.";
-        return;
-      }
-      run(
-        createMode
-          ? auth.createUserWithEmailAndPassword(email, password)
-          : auth.signInWithEmailAndPassword(email, password)
+    function initSignIn() {
+      document.getElementById("modeToggle").addEventListener("click", () => {
+        createMode = !createMode;
+        document.getElementById("emailSubmit").textContent = createMode ? "Create account" : "Sign in";
+        document.getElementById("modeToggle").textContent = createMode
+          ? "Already have an account? Sign in"
+          : "New here? Create an account";
+      });
+      document.getElementById("google").addEventListener("click", () =>
+        run(auth.signInWithPopup(new firebase.auth.GoogleAuthProvider()))
       );
-    });
+      document.getElementById("github").addEventListener("click", () =>
+        run(auth.signInWithPopup(new firebase.auth.GithubAuthProvider()))
+      );
+      document.getElementById("emailSubmit").addEventListener("click", () => {
+        const email = document.getElementById("email").value.trim();
+        const password = document.getElementById("password").value;
+        if (!email || !password) {
+          errorEl.textContent = "Enter an email and password.";
+          return;
+        }
+        run(
+          createMode
+            ? auth.createUserWithEmailAndPassword(email, password)
+            : auth.signInWithEmailAndPassword(email, password)
+        );
+      });
+    }
+
+    // `port` is interpolated straight into the callback URL below, so an
+    // unvalidated value (e.g. "@evil.com") could redirect the signed-in
+    // tokens to an attacker-controlled host. Refuse to proceed unless it's
+    // a plain 1-5 digit port number.
+    if (!port || !/^\d{1,5}$/.test(port)) {
+      document.getElementById("signin").classList.add("hidden");
+      document.getElementById("invalid").classList.remove("hidden");
+    } else {
+      initSignIn();
+    }
   </script>
 </body>
 </html>
