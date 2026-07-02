@@ -44,6 +44,8 @@ Then edit `.env` and fill in:
 - `FIREBASE_PROJECT_ID` — your Firebase project id
 - `FIREBASE_PRIVATE_KEY` — the `private_key` field from your Firebase service-account JSON (keep the quotes and `\n` escaping)
 - `FIREBASE_CLIENT_EMAIL` — the `client_email` from the same service-account JSON
+- `FIREBASE_WEB_API_KEY` — the web-app API key from Firebase Console > Project settings > Your apps
+- `FIREBASE_AUTH_DOMAIN` — your Firebase project's auth domain (e.g., `your-project.firebaseapp.com`)
 - `BACKEND_URL` — defaults to `http://localhost:8000`
 
 ### 4. Run the backend
@@ -85,6 +87,8 @@ set to `16`.
 | `edupeer.activate`              | Opens the EduPeer sidebar panel.                                   |
 | `edupeer.analyseSelection`      | Right-click selected code → sends it with "What is wrong…".        |
 | `edupeer.resetSession`          | Clears chat history and resets hint level to 1.                    |
+| `edupeer.signIn`                | Opens the browser to sign in with Google, GitHub, or email.        |
+| `edupeer.signOut`               | Signs out and switches to a fresh anonymous profile.               |
 
 ## How hinting works
 
@@ -100,6 +104,26 @@ The tutor also remembers the recent conversation: the sidebar sends the last
 few student/tutor turns with each question, so follow-ups like "I tried that
 and it still fails" are answered in context. Resetting the session clears
 this memory.
+
+## Accounts and sign-in
+
+EduPeer works without an account: on first use the extension silently creates
+an anonymous Firebase account, so badges and hint levels persist on that
+machine. Click **Sign in** in the sidebar (or run `EduPeer: Sign In`) to open
+a browser page where you can continue with Google, GitHub, or email+password.
+Progress earned anonymously is merged into your account on first sign-in, and
+follows you to any machine you sign in on. Tokens are stored in VS Code's
+SecretStorage; all backend endpoints verify a Firebase ID token.
+
+### One-time Firebase Console setup
+
+1. **Authentication → Sign-in method:** enable Email/Password, Google,
+   GitHub, and Anonymous.
+2. **GitHub provider:** create a GitHub OAuth App (GitHub Settings →
+   Developer settings → OAuth Apps), set its callback URL to the one Firebase
+   shows, and paste the client ID/secret into Firebase.
+3. **Project settings → Your apps:** add a Web app and copy its `apiKey` and
+   `authDomain` into `.env` as `FIREBASE_WEB_API_KEY` / `FIREBASE_AUTH_DOMAIN`.
 
 ## Language support
 
@@ -125,6 +149,13 @@ Awarded automatically after each interaction:
 | Method | Path             | Description                                    |
 | ------ | ---------------- | ---------------------------------------------- |
 | GET    | `/health`        | Health check.                                  |
+| GET    | `/auth/config`   | Firebase web-app config (public values).       |
+| GET    | `/auth/login`    | Browser-based Firebase sign-in flow.           |
+| POST   | `/auth/migrate`  | Migrate anonymous progress to a signed-in account. |
 | POST   | `/hint`          | Main tutor endpoint.                           |
 | POST   | `/reset`         | Reset the hint-level counter for a user.       |
-| GET    | `/badges/{uid}`  | Returns current badge list for the given user. |
+| POST   | `/scan`          | Scan code for potential issues.                |
+| POST   | `/line-hint`     | Get hint for a specific line.                  |
+| GET    | `/badges`        | Badges for the authenticated user.             |
+
+All data endpoints (hint, reset, scan, line-hint, badges) require `Authorization: Bearer <Firebase ID token>` in the request header.
