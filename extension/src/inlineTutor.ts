@@ -1,5 +1,11 @@
 import * as vscode from "vscode";
 import { ApiClient, LineFlag } from "./apiClient";
+import {
+  SUPPORTED_LANGUAGES,
+  SUPPORTED_LANGUAGE_IDS,
+  isSupportedLanguage,
+  supportedLanguageList,
+} from "./languages";
 
 type LineHintCache = Map<string, { hint: string; concept: string }>;
 
@@ -8,8 +14,6 @@ interface FileState {
   scanFingerprint: string;
   lineHints: LineHintCache;
 }
-
-const SUPPORTED_LANGS = new Set(["python"]);
 
 function fingerprintCode(code: string): string {
   let h = 0;
@@ -74,21 +78,19 @@ export class InlineTutor {
     this.disposables.push(this.diagnostics);
     this.disposables.push(this.emitter);
 
+    const selector = SUPPORTED_LANGUAGE_IDS.map((language) => ({ language }));
+
     this.disposables.push(
-      vscode.languages.registerCodeLensProvider(
-        { language: "python" },
-        {
-          onDidChangeCodeLenses: this.emitter.event,
-          provideCodeLenses: (doc) => this.provideCodeLenses(doc),
-        }
-      )
+      vscode.languages.registerCodeLensProvider(selector, {
+        onDidChangeCodeLenses: this.emitter.event,
+        provideCodeLenses: (doc) => this.provideCodeLenses(doc),
+      })
     );
 
     this.disposables.push(
-      vscode.languages.registerHoverProvider(
-        { language: "python" },
-        { provideHover: (doc, pos) => this.provideHover(doc, pos) }
-      )
+      vscode.languages.registerHoverProvider(selector, {
+        provideHover: (doc, pos) => this.provideHover(doc, pos),
+      })
     );
 
     this.disposables.push(
@@ -126,7 +128,9 @@ export class InlineTutor {
         async (uriArg?: vscode.Uri, lineArg?: number) => {
           const editor = vscode.window.activeTextEditor;
           if (!editor || !this.isSupported(editor.document)) {
-            vscode.window.showInformationMessage("EduPeer: open a Python file first.");
+            vscode.window.showInformationMessage(
+              `EduPeer: open a supported file first (${supportedLanguageList()}).`
+            );
             return;
           }
           const line =
@@ -149,7 +153,9 @@ export class InlineTutor {
       vscode.commands.registerCommand("edupeer.scanFile", async () => {
         const editor = vscode.window.activeTextEditor;
         if (!editor || !this.isSupported(editor.document)) {
-          vscode.window.showInformationMessage("EduPeer: open a Python file first.");
+          vscode.window.showInformationMessage(
+            `EduPeer: open a supported file first (${supportedLanguageList()}).`
+          );
           return;
         }
         await this.runScan(editor.document, { force: true });
@@ -169,7 +175,7 @@ export class InlineTutor {
   }
 
   private isSupported(doc: vscode.TextDocument): boolean {
-    if (!SUPPORTED_LANGS.has(doc.languageId)) return false;
+    if (!isSupportedLanguage(doc.languageId)) return false;
     return vscode.workspace
       .getConfiguration("edupeer")
       .get<boolean>("inlineHints", true);
@@ -222,7 +228,12 @@ export class InlineTutor {
       return;
     }
     try {
-      const res = await this.api.getLineHint(doc.getText(), line + 1, this.getUserId());
+      const res = await this.api.getLineHint(
+        doc.getText(),
+        line + 1,
+        this.getUserId(),
+        doc.languageId
+      );
       if (res.hint) {
         state.lineHints.set(key, { hint: res.hint, concept: res.concept });
         this.renderActiveLineIfMatches(doc, line);
@@ -297,7 +308,7 @@ export class InlineTutor {
     if (!opts.force && state.scanFingerprint === fp) return;
     state.scanFingerprint = fp;
     try {
-      const res = await this.api.scanCode(code, this.getUserId());
+      const res = await this.api.scanCode(code, this.getUserId(), doc.languageId);
       state.flags = res.flags || [];
       this.applyFlagsToDoc(doc, state.flags);
       this.emitter.fire();
@@ -360,11 +371,12 @@ export class InlineTutor {
       );
     }
 
-    const defRegex = /^\s*(def|class)\s+\w+/;
+    const lensRegex = SUPPORTED_LANGUAGES[doc.languageId]?.lensRegex;
+    if (!lensRegex) return lenses;
     for (let i = 0; i < doc.lineCount; i++) {
       if (seenLines.has(i)) continue;
       const text = doc.lineAt(i).text;
-      if (defRegex.test(text)) {
+      if (lensRegex.test(text)) {
         seenLines.add(i);
         const range = new vscode.Range(i, 0, i, 0);
         lenses.push(

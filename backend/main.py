@@ -26,6 +26,7 @@ from models import (
 )
 from hinting_engine import build_engine
 from firebase_service import FirebaseService
+from languages import normalize_language
 from session_store import build_session_store, code_fingerprint
 
 
@@ -58,9 +59,11 @@ async def hint(req: HintRequest) -> HintResponse:
         store.next_hint_level, req.user_id, code_fingerprint(req.code)
     )
 
+    language = normalize_language(req.language)
+    history = [turn.model_dump() for turn in req.history]
     try:
         hint_text, concept_tags = await asyncio.to_thread(
-            engine.generate_hint, req.code, req.question, level
+            engine.generate_hint, req.code, req.question, level, language, history
         )
     except Exception as e:
         raise HTTPException(status_code=502, detail=f"LLM error: {e}")
@@ -74,6 +77,7 @@ async def hint(req: HintRequest) -> HintResponse:
         hint_level_used=level,
         concept_tags=concept_tags,
         new_session=is_new_session,
+        language=language,
     )
 
     return HintResponse(hint=hint_text, hint_level=level, concept_tags=concept_tags)
@@ -95,7 +99,9 @@ async def scan(req: ScanRequest) -> ScanResponse:
     if not req.code.strip():
         return ScanResponse(flags=[])
     try:
-        raw_flags = await asyncio.to_thread(engine.scan_code, req.code)
+        raw_flags = await asyncio.to_thread(
+            engine.scan_code, req.code, normalize_language(req.language)
+        )
     except Exception as e:
         raise HTTPException(status_code=502, detail=f"LLM error: {e}")
     return ScanResponse(flags=[LineFlag(**f) for f in raw_flags])
@@ -107,7 +113,7 @@ async def line_hint(req: LineHintRequest) -> LineHintResponse:
         return LineHintResponse(hint="", concept="general")
     try:
         hint_text, concept = await asyncio.to_thread(
-            engine.generate_line_hint, req.code, req.line
+            engine.generate_line_hint, req.code, req.line, normalize_language(req.language)
         )
     except Exception as e:
         raise HTTPException(status_code=502, detail=f"LLM error: {e}")

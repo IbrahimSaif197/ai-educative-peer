@@ -78,3 +78,108 @@ class TestHintingEngine:
         engine.client.chat.completions.create.side_effect = RuntimeError("API down")
         with pytest.raises(RuntimeError, match="API down"):
             engine.generate_hint("x=1", "help", 1)
+
+
+class TestMultiLanguage:
+    def _engine(self, response_text: str):
+        from hinting_engine import HintingEngine
+        engine = HintingEngine(api_key="test-key")
+        engine.client = _make_mock_client(response_text)
+        return engine
+
+    def _sent_messages(self, engine):
+        call_kwargs = engine.client.chat.completions.create.call_args
+        return call_kwargs.kwargs["messages"]
+
+    def test_default_language_is_python(self):
+        engine = self._engine("ok. What do you think should happen next?")
+        engine.generate_hint("x = 1", "help", 1)
+        messages = self._sent_messages(engine)
+        assert "Python students" in messages[0]["content"]
+        assert "```python" in messages[-1]["content"]
+
+    def test_java_prompt_uses_java(self):
+        engine = self._engine("ok. What do you think should happen next?")
+        engine.generate_hint("int x = 1;", "help", 1, language="java")
+        messages = self._sent_messages(engine)
+        assert "Java students" in messages[0]["content"]
+        assert "never real Java syntax" in messages[0]["content"]
+        assert "```java" in messages[-1]["content"]
+
+    def test_alias_language_normalized(self):
+        engine = self._engine("ok. What do you think should happen next?")
+        engine.generate_hint("let x = 1;", "help", 1, language="js")
+        messages = self._sent_messages(engine)
+        assert "JavaScript students" in messages[0]["content"]
+
+    def test_language_specific_concept_tags(self):
+        engine = self._engine(
+            "Think about your pointers here. What do you think should happen next?"
+        )
+        _, tags = engine.generate_hint("int *p;", "why segfault?", 1, language="c")
+        assert "pointers" in tags
+        assert "segfault" in tags
+
+    def test_scan_prompt_uses_language(self):
+        engine = self._engine('{"flags":[]}')
+        engine.scan_code("int main() { return 0; }", language="cpp")
+        messages = self._sent_messages(engine)
+        assert "C++ code" in messages[0]["content"]
+        assert "```cpp" in messages[1]["content"]
+
+    def test_line_hint_prompt_uses_language(self):
+        engine = self._engine('{"hint":"check the type","concept":"variables"}')
+        engine.generate_line_hint("string s = null;", 1, language="csharp")
+        messages = self._sent_messages(engine)
+        assert "C#" in messages[0]["content"]
+
+
+class TestConversationHistory:
+    def _engine(self, response_text: str):
+        from hinting_engine import HintingEngine
+        engine = HintingEngine(api_key="test-key")
+        engine.client = _make_mock_client(response_text)
+        return engine
+
+    def _sent_messages(self, engine):
+        call_kwargs = engine.client.chat.completions.create.call_args
+        return call_kwargs.kwargs["messages"]
+
+    def test_history_turns_included_in_order(self):
+        engine = self._engine("ok. What do you think should happen next?")
+        history = [
+            {"role": "student", "content": "Why does my loop never end?"},
+            {"role": "tutor", "content": "What changes your loop variable?"},
+        ]
+        engine.generate_hint("while x < 5: pass", "I still don't get it", 2, history=history)
+        messages = self._sent_messages(engine)
+        assert messages[0]["role"] == "system"
+        assert messages[1] == {"role": "user", "content": "Why does my loop never end?"}
+        assert messages[2] == {"role": "assistant", "content": "What changes your loop variable?"}
+        assert messages[3]["role"] == "user"
+        assert "I still don't get it" in messages[3]["content"]
+
+    def test_history_capped_to_last_six_turns(self):
+        from hinting_engine import MAX_HISTORY_TURNS
+        engine = self._engine("ok. What do you think should happen next?")
+        history = [
+            {"role": "student", "content": f"question {i}"} for i in range(20)
+        ]
+        engine.generate_hint("x=1", "help", 1, history=history)
+        messages = self._sent_messages(engine)
+        # system + capped history + current user message
+        assert len(messages) == 1 + MAX_HISTORY_TURNS + 1
+        assert messages[1]["content"] == "question 14"
+
+    def test_empty_history_turns_skipped(self):
+        engine = self._engine("ok. What do you think should happen next?")
+        history = [{"role": "student", "content": "   "}]
+        engine.generate_hint("x=1", "help", 1, history=history)
+        messages = self._sent_messages(engine)
+        assert len(messages) == 2  # system + current question only
+
+    def test_no_history_behaves_as_before(self):
+        engine = self._engine("ok. What do you think should happen next?")
+        engine.generate_hint("x=1", "help", 1)
+        messages = self._sent_messages(engine)
+        assert len(messages) == 2

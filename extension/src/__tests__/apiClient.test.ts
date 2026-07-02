@@ -82,6 +82,52 @@ describe("ApiClient.getHint", () => {
       api.getHint({ code: "x", question: "q", user_id: "u1", hint_level: 1 })
     ).rejects.toThrow("Backend error (502)");
   });
+
+  it("sends language and history when provided", async () => {
+    const fetchMock = mockFetch(200, validResponse);
+    const api = new ApiClient(BASE);
+    const req = {
+      code: "int x = 1;",
+      question: "help",
+      user_id: "u1",
+      hint_level: 1,
+      language: "java",
+      history: [{ role: "student" as const, content: "earlier question" }],
+    };
+    await api.getHint(req);
+    const body = JSON.parse(fetchMock.mock.calls[0][1].body);
+    expect(body.language).toBe("java");
+    expect(body.history).toEqual([{ role: "student", content: "earlier question" }]);
+  });
+});
+
+describe("ApiClient.scanCode", () => {
+  it("sends the language with the scan request", async () => {
+    const fetchMock = mockFetch(200, { flags: [] });
+    const api = new ApiClient(BASE);
+    await api.scanCode("int main() {}", "u1", "c");
+    const body = JSON.parse(fetchMock.mock.calls[0][1].body);
+    expect(body.language).toBe("c");
+  });
+
+  it("defaults to python when no language given", async () => {
+    const fetchMock = mockFetch(200, { flags: [] });
+    const api = new ApiClient(BASE);
+    await api.scanCode("x = 1", "u1");
+    const body = JSON.parse(fetchMock.mock.calls[0][1].body);
+    expect(body.language).toBe("python");
+  });
+});
+
+describe("ApiClient.getLineHint", () => {
+  it("sends the language with the line-hint request", async () => {
+    const fetchMock = mockFetch(200, { hint: "check the loop", concept: "loops" });
+    const api = new ApiClient(BASE);
+    await api.getLineHint("for (;;) {}", 1, "u1", "cpp");
+    const body = JSON.parse(fetchMock.mock.calls[0][1].body);
+    expect(body.language).toBe("cpp");
+    expect(body.line).toBe(1);
+  });
 });
 
 describe("ApiClient.resetSession", () => {

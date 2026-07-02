@@ -1,8 +1,13 @@
 import * as vscode from "vscode";
-import { ApiClient } from "./apiClient";
+import { ApiClient, ChatTurn } from "./apiClient";
 import { FirebaseClient } from "./firebaseClient";
+import { isSupportedLanguage, languageLabel } from "./languages";
 
 const USER_ID_KEY = "edupeer.userId";
+
+// How many prior turns are sent with each question (the backend caps
+// again on its side).
+const MAX_HISTORY_TURNS = 6;
 
 function randomUserId(): string {
   return (
@@ -16,6 +21,8 @@ export class EduPeerSidebarProvider implements vscode.WebviewViewProvider {
   public static readonly viewType = "edupeer.sidebar";
 
   private view?: vscode.WebviewView;
+  private history: ChatTurn[] = [];
+  private lastLanguageId = "python";
 
   constructor(
     private readonly extensionUri: vscode.Uri,
@@ -82,6 +89,7 @@ export class EduPeerSidebarProvider implements vscode.WebviewViewProvider {
 
   public async resetSession() {
     const userId = this.getUserId();
+    this.history = [];
     try {
       await this.api.resetSession(userId);
     } catch (err) {
@@ -103,7 +111,11 @@ export class EduPeerSidebarProvider implements vscode.WebviewViewProvider {
         question,
         user_id: userId,
         hint_level: 1,
+        language: this.lastLanguageId,
+        history: this.history.slice(-MAX_HISTORY_TURNS),
       });
+      this.history.push({ role: "student", content: question });
+      this.history.push({ role: "tutor", content: res.hint });
       this.post({
         type: "hint",
         hint: res.hint,
@@ -122,7 +134,16 @@ export class EduPeerSidebarProvider implements vscode.WebviewViewProvider {
     const editor = vscode.window.activeTextEditor;
     const code = editor?.document?.getText() ?? "";
     const fileName = editor?.document?.fileName ?? "";
-    this.post({ type: "activeCode", code, fileName });
+    const languageId = editor?.document?.languageId ?? "";
+    if (isSupportedLanguage(languageId)) {
+      this.lastLanguageId = languageId;
+    }
+    this.post({
+      type: "activeCode",
+      code,
+      fileName,
+      language: isSupportedLanguage(languageId) ? languageLabel(languageId) : "",
+    });
   }
 
   private async sendBadges() {
@@ -160,6 +181,7 @@ export class EduPeerSidebarProvider implements vscode.WebviewViewProvider {
   <section class="code-preview">
     <div class="code-header">
       <span id="fileName">No active file</span>
+      <span id="langChip" class="lang-chip hidden"></span>
       <button id="refreshCode" class="small-btn">Refresh</button>
     </div>
     <pre id="codeSnippet" class="code"></pre>

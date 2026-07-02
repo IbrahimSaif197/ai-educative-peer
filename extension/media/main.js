@@ -8,6 +8,7 @@
   const refreshBtn = document.getElementById("refreshCode");
   const codeEl = document.getElementById("codeSnippet");
   const fileNameEl = document.getElementById("fileName");
+  const langChipEl = document.getElementById("langChip");
   const loadingEl = document.getElementById("loading");
   const badgesEl = document.getElementById("badges");
 
@@ -104,10 +105,12 @@
     switch (msg.type) {
       case "activeCode":
         currentCode = msg.code || "";
-        codeEl.textContent = currentCode || "(no active Python file)";
+        codeEl.textContent = currentCode || "(no active file)";
         fileNameEl.textContent = msg.fileName
           ? msg.fileName.split(/[\\/]/).pop()
           : "No active file";
+        langChipEl.textContent = msg.language || "";
+        langChipEl.classList.toggle("hidden", !msg.language);
         break;
       case "userMessage":
         renderBubble({ role: "user", text: msg.text });

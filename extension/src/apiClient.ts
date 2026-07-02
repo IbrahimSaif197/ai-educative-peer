@@ -1,8 +1,15 @@
+export interface ChatTurn {
+  role: "student" | "tutor";
+  content: string;
+}
+
 export interface HintRequest {
   code: string;
   question: string;
   user_id: string;
   hint_level: number;
+  language?: string;
+  history?: ChatTurn[];
 }
 
 export interface HintResponse {
@@ -65,11 +72,11 @@ export class ApiClient {
     });
   }
 
-  async scanCode(code: string, userId: string): Promise<ScanResponse> {
+  async scanCode(code: string, userId: string, language = "python"): Promise<ScanResponse> {
     const res = await fetch(`${this.baseUrl}/scan`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ code, user_id: userId }),
+      body: JSON.stringify({ code, user_id: userId, language }),
     });
     if (!res.ok) {
       throw new Error(`scan failed (${res.status})`);
@@ -77,11 +84,16 @@ export class ApiClient {
     return (await res.json()) as ScanResponse;
   }
 
-  async getLineHint(code: string, line: number, userId: string): Promise<LineHintResponse> {
+  async getLineHint(
+    code: string,
+    line: number,
+    userId: string,
+    language = "python"
+  ): Promise<LineHintResponse> {
     const res = await fetch(`${this.baseUrl}/line-hint`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ code, line, user_id: userId }),
+      body: JSON.stringify({ code, line, user_id: userId, language }),
     });
     if (!res.ok) {
       throw new Error(`line-hint failed (${res.status})`);

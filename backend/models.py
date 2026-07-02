@@ -1,12 +1,22 @@
 from pydantic import BaseModel, Field
-from typing import List, Optional
+from typing import List, Literal, Optional
+
+
+class ChatTurn(BaseModel):
+    role: Literal["student", "tutor"]
+    content: str
 
 
 class HintRequest(BaseModel):
-    code: str = Field(default="", description="The student's current Python code")
+    code: str = Field(default="", description="The student's current code")
     question: str = Field(..., description="The student's question or described error")
     user_id: str = Field(..., description="Persistent user identifier")
     hint_level: int = Field(default=1, ge=1, le=3)
+    language: str = Field(default="python", description="VS Code languageId of the code")
+    history: List[ChatTurn] = Field(
+        default_factory=list,
+        description="Prior conversation turns, oldest first",
+    )
 
 
 class HintResponse(BaseModel):
@@ -34,8 +44,9 @@ class UserBadges(BaseModel):
 
 
 class ScanRequest(BaseModel):
-    code: str = Field(default="", description="Full Python file content")
+    code: str = Field(default="", description="Full file content")
     user_id: str = Field(..., description="Persistent user identifier")
+    language: str = Field(default="python", description="VS Code languageId of the code")
 
 
 class LineFlag(BaseModel):
@@ -51,9 +62,10 @@ class ScanResponse(BaseModel):
 
 
 class LineHintRequest(BaseModel):
-    code: str = Field(default="", description="Full Python file content")
+    code: str = Field(default="", description="Full file content")
     line: int = Field(..., ge=1, description="1-based line the user is editing")
     user_id: str = Field(..., description="Persistent user identifier")
+    language: str = Field(default="python", description="VS Code languageId of the code")
 
 
 class LineHintResponse(BaseModel):

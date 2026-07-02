@@ -53,6 +53,7 @@ class FirebaseService:
         question: str,
         hint_level_used: int,
         concept_tags: List[str],
+        language: str = "python",
     ) -> None:
         if not self.enabled:
             return
@@ -64,6 +65,7 @@ class FirebaseService:
                 "question": question,
                 "hint_level_used": hint_level_used,
                 "concept_tags": concept_tags,
+                "language": language,
             }
             self._client.collection("interactions").add(doc)
         except Exception as e:
@@ -130,6 +132,7 @@ class FirebaseService:
         hint_level_used: int,
         concept_tags: List[str],
         new_session: bool,
+        language: str = "python",
     ) -> None:
         loop = asyncio.get_running_loop()
         loop.run_in_executor(
@@ -140,6 +143,7 @@ class FirebaseService:
             question,
             hint_level_used,
             concept_tags,
+            language,
         )
         loop.run_in_executor(
             None,
@@ -158,11 +162,18 @@ class FirebaseService:
         hint_level_used: int,
         concept_tags: List[str],
         new_session: bool,
+        language: str = "python",
     ) -> None:
         try:
             task = asyncio.create_task(
                 self.log_interaction_async(
-                    user_id, code_snippet, question, hint_level_used, concept_tags, new_session
+                    user_id,
+                    code_snippet,
+                    question,
+                    hint_level_used,
+                    concept_tags,
+                    new_session,
+                    language,
                 )
             )
             self._pending_tasks.add(task)

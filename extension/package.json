@@ -1,7 +1,7 @@
 {
   "name": "edupeer",
   "displayName": "EduPeer",
-  "description": "A Socratic AI tutor for novice Python programmers.",
+  "description": "A Socratic AI tutor for novice programmers (Python, JavaScript, Java, C, C++, C#).",
   "version": "1.0.0",
   "publisher": "edupeer",
   "engines": {
@@ -55,17 +55,17 @@
       "editor/context": [
         {
           "command": "edupeer.analyseSelection",
-          "when": "editorHasSelection && resourceLangId == python",
+          "when": "editorHasSelection && resourceLangId =~ /^(python|javascript|java|c|cpp|csharp)$/",
           "group": "edupeer"
         },
         {
           "command": "edupeer.nudgeLine",
-          "when": "resourceLangId == python",
+          "when": "resourceLangId =~ /^(python|javascript|java|c|cpp|csharp)$/",
           "group": "edupeer"
         },
         {
           "command": "edupeer.scanFile",
-          "when": "resourceLangId == python",
+          "when": "resourceLangId =~ /^(python|javascript|java|c|cpp|csharp)$/",
           "group": "edupeer"
         }
       ]
@@ -75,7 +75,7 @@
         "command": "edupeer.nudgeLine",
         "key": "ctrl+alt+h",
         "mac": "cmd+alt+h",
-        "when": "editorTextFocus && resourceLangId == python"
+        "when": "editorTextFocus && resourceLangId =~ /^(python|javascript|java|c|cpp|csharp)$/"
       }
     ],
     "configuration": {

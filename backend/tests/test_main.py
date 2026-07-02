@@ -170,6 +170,50 @@ class TestHintEndpoint:
         assert res.status_code == 200
 
 
+class TestHintLanguageAndHistory:
+    def test_language_field_accepted(self, client, _patch_groq_client):
+        payload = {**VALID_HINT_PAYLOAD, "language": "java", "code": "int x = 1;"}
+        res = client.post("/hint", json=payload)
+        assert res.status_code == 200
+        messages = _patch_groq_client.chat.completions.create.call_args.kwargs["messages"]
+        assert "Java students" in messages[0]["content"]
+
+    def test_unknown_language_falls_back_to_python(self, client, _patch_groq_client):
+        payload = {**VALID_HINT_PAYLOAD, "language": "ruby"}
+        res = client.post("/hint", json=payload)
+        assert res.status_code == 200
+        messages = _patch_groq_client.chat.completions.create.call_args.kwargs["messages"]
+        assert "Python students" in messages[0]["content"]
+
+    def test_missing_language_defaults_to_python(self, client, _patch_groq_client):
+        res = client.post("/hint", json=VALID_HINT_PAYLOAD)
+        assert res.status_code == 200
+        messages = _patch_groq_client.chat.completions.create.call_args.kwargs["messages"]
+        assert "Python students" in messages[0]["content"]
+
+    def test_history_forwarded_to_engine(self, client, _patch_groq_client):
+        payload = {
+            **VALID_HINT_PAYLOAD,
+            "history": [
+                {"role": "student", "content": "why is it broken?"},
+                {"role": "tutor", "content": "what does subtraction do?"},
+            ],
+        }
+        res = client.post("/hint", json=payload)
+        assert res.status_code == 200
+        messages = _patch_groq_client.chat.completions.create.call_args.kwargs["messages"]
+        assert {"role": "user", "content": "why is it broken?"} in messages
+        assert {"role": "assistant", "content": "what does subtraction do?"} in messages
+
+    def test_invalid_history_role_returns_422(self, client):
+        payload = {
+            **VALID_HINT_PAYLOAD,
+            "history": [{"role": "assistant", "content": "nope"}],
+        }
+        res = client.post("/hint", json=payload)
+        assert res.status_code == 422
+
+
 # ---------------------------------------------------------------------------
 # /reset
 # ---------------------------------------------------------------------------

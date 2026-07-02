@@ -60,6 +60,20 @@ body {
   opacity: 0.85;
 }
 
+.lang-chip {
+  background: var(--vscode-badge-background, #4d4d4d);
+  color: var(--vscode-badge-foreground, #fff);
+  border-radius: 8px;
+  padding: 1px 8px;
+  font-size: 0.75em;
+  margin: 0 6px;
+  white-space: nowrap;
+}
+
+.lang-chip.hidden {
+  display: none;
+}
+
 .code {
   background: var(--vscode-input-background);
   color: var(--vscode-foreground);
