@@ -113,7 +113,8 @@ machine. Click **Sign in** in the sidebar (or run `EduPeer: Sign In`) to open
 a browser page where you can continue with Google, GitHub, or email+password.
 Progress earned anonymously is merged into your account on first sign-in, and
 follows you to any machine you sign in on. Tokens are stored in VS Code's
-SecretStorage; all backend endpoints verify a Firebase ID token.
+SecretStorage; all backend endpoints except `/health`, `/auth/config`, and
+`/auth/login` verify a Firebase ID token.
 
 ### One-time Firebase Console setup
 
@@ -158,4 +159,4 @@ Awarded automatically after each interaction:
 | POST   | `/line-hint`     | Get hint for a specific line.                  |
 | GET    | `/badges`        | Badges for the authenticated user.             |
 
-All data endpoints (hint, reset, scan, line-hint, badges) require `Authorization: Bearer <Firebase ID token>` in the request header.
+All endpoints except `GET /health`, `GET /auth/config`, and `GET /auth/login` require `Authorization: Bearer <Firebase ID token>` in the request header.
