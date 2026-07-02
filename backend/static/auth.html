@@ -1,0 +1,108 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Sign in to EduPeer</title>
+  <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-app-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-auth-compat.js"></script>
+  <style>
+    body { font-family: system-ui, sans-serif; background: #1e1e2e; color: #eee;
+           display: flex; justify-content: center; align-items: center; min-height: 100vh; margin: 0; }
+    .card { background: #2a2a3c; border-radius: 12px; padding: 32px; width: 320px; }
+    h1 { font-size: 20px; margin: 0 0 20px; }
+    button { width: 100%; padding: 10px; margin: 6px 0; border: none; border-radius: 6px;
+             font-size: 14px; cursor: pointer; background: #444; color: #eee; }
+    button.primary { background: #4f7cff; color: white; }
+    input { width: 100%; padding: 9px; margin: 5px 0; border-radius: 6px; border: 1px solid #555;
+            background: #1e1e2e; color: #eee; box-sizing: border-box; }
+    .divider { text-align: center; color: #888; margin: 14px 0 8px; font-size: 12px; }
+    .error { color: #ff7b7b; font-size: 13px; min-height: 18px; margin-top: 8px; }
+    .hidden { display: none; }
+    .toggle { color: #9ab4ff; font-size: 13px; cursor: pointer; text-align: center; margin-top: 10px; }
+  </style>
+</head>
+<body>
+  <div class="card" id="signin">
+    <h1>Sign in to EduPeer</h1>
+    <button class="primary" id="google">Continue with Google</button>
+    <button id="github">Continue with GitHub</button>
+    <div class="divider">or use email</div>
+    <input type="email" id="email" placeholder="Email" />
+    <input type="password" id="password" placeholder="Password" />
+    <button id="emailSubmit">Sign in</button>
+    <div class="toggle" id="modeToggle">New here? Create an account</div>
+    <div class="error" id="error"></div>
+  </div>
+  <div class="card hidden" id="done">
+    <h1>You're signed in ✔</h1>
+    <p>Return to VS Code — EduPeer is ready.</p>
+  </div>
+
+  <script>
+    const config = {
+      apiKey: "__FIREBASE_API_KEY__",
+      authDomain: "__FIREBASE_AUTH_DOMAIN__",
+    };
+    firebase.initializeApp(config);
+    const auth = firebase.auth();
+    const port = new URLSearchParams(location.search).get("port");
+    const errorEl = document.getElementById("error");
+    let createMode = false;
+
+    document.getElementById("modeToggle").addEventListener("click", () => {
+      createMode = !createMode;
+      document.getElementById("emailSubmit").textContent = createMode ? "Create account" : "Sign in";
+      document.getElementById("modeToggle").textContent = createMode
+        ? "Already have an account? Sign in"
+        : "New here? Create an account";
+    });
+
+    async function deliver(user) {
+      const idToken = await user.getIdToken();
+      const payload = JSON.stringify({
+        idToken,
+        refreshToken: user.refreshToken,
+        uid: user.uid,
+        email: user.email || "",
+        displayName: user.displayName || "",
+      });
+      // text/plain avoids a CORS preflight to the extension's one-shot server.
+      await fetch(`http://127.0.0.1:${port}/callback`, {
+        method: "POST",
+        headers: { "Content-Type": "text/plain" },
+        body: payload,
+      });
+      document.getElementById("signin").classList.add("hidden");
+      document.getElementById("done").classList.remove("hidden");
+    }
+
+    function run(promise) {
+      errorEl.textContent = "";
+      promise.then((cred) => deliver(cred.user)).catch((e) => {
+        errorEl.textContent = e.message || String(e);
+      });
+    }
+
+    document.getElementById("google").addEventListener("click", () =>
+      run(auth.signInWithPopup(new firebase.auth.GoogleAuthProvider()))
+    );
+    document.getElementById("github").addEventListener("click", () =>
+      run(auth.signInWithPopup(new firebase.auth.GithubAuthProvider()))
+    );
+    document.getElementById("emailSubmit").addEventListener("click", () => {
+      const email = document.getElementById("email").value.trim();
+      const password = document.getElementById("password").value;
+      if (!email || !password) {
+        errorEl.textContent = "Enter an email and password.";
+        return;
+      }
+      run(
+        createMode
+          ? auth.createUserWithEmailAndPassword(email, password)
+          : auth.signInWithEmailAndPassword(email, password)
+      );
+    });
+  </script>
+</body>
+</html>

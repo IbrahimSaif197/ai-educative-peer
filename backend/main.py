@@ -12,6 +12,7 @@ if os.path.exists(_root_env):
 
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import HTMLResponse
 
 from models import (
     HintRequest,
@@ -48,6 +49,27 @@ store = build_session_store(firebase)
 @app.get("/health", response_model=HealthResponse)
 async def health() -> HealthResponse:
     return HealthResponse(status="ok", service="edupeer-backend")
+
+
+_STATIC_DIR = os.path.join(os.path.dirname(__file__), "static")
+
+
+@app.get("/auth/config")
+async def auth_config():
+    """Public Firebase web-app config (not secrets) for the extension."""
+    return {
+        "apiKey": os.environ.get("FIREBASE_WEB_API_KEY", ""),
+        "authDomain": os.environ.get("FIREBASE_AUTH_DOMAIN", ""),
+    }
+
+
+@app.get("/auth/login", response_class=HTMLResponse)
+async def auth_login():
+    with open(os.path.join(_STATIC_DIR, "auth.html"), encoding="utf-8") as f:
+        html = f.read()
+    html = html.replace("__FIREBASE_API_KEY__", os.environ.get("FIREBASE_WEB_API_KEY", ""))
+    html = html.replace("__FIREBASE_AUTH_DOMAIN__", os.environ.get("FIREBASE_AUTH_DOMAIN", ""))
+    return HTMLResponse(html)
 
 
 @app.post("/hint", response_model=HintResponse)
