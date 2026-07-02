@@ -34,7 +34,7 @@ const LEGACY_USER_ID_KEY = "edupeer.userId";
 const EXPIRY_MARGIN_MS = 60_000;
 
 interface PendingMigration {
-  oldRefreshToken?: string;
+  oldRefreshTokens: string[];
   legacyUserId?: string;
 }
 
@@ -81,15 +81,25 @@ export class AuthManager {
   }
 
   async applySignIn(payload: SignInPayload): Promise<void> {
-    const pending: PendingMigration = {};
+    // Start from any existing record (e.g. from a previously failed migration)
+    // so earlier anonymous accounts are never silently clobbered.
+    const existing = await this.secrets.get(PENDING_MIGRATION_KEY);
+    const pending: PendingMigration = existing
+      ? (JSON.parse(existing) as PendingMigration)
+      : { oldRefreshTokens: [] };
+    if (!Array.isArray(pending.oldRefreshTokens)) {
+      pending.oldRefreshTokens = [];
+    }
     if (this.session?.isAnonymous) {
-      pending.oldRefreshToken = this.session.refreshToken;
+      pending.oldRefreshTokens.push(this.session.refreshToken);
     }
-    const legacy = this.globalState.get<string>(LEGACY_USER_ID_KEY);
-    if (legacy) {
-      pending.legacyUserId = legacy;
+    if (!pending.legacyUserId) {
+      const legacy = this.globalState.get<string>(LEGACY_USER_ID_KEY);
+      if (legacy) {
+        pending.legacyUserId = legacy;
+      }
     }
-    if (pending.oldRefreshToken || pending.legacyUserId) {
+    if (pending.oldRefreshTokens.length > 0 || pending.legacyUserId) {
       await this.secrets.store(PENDING_MIGRATION_KEY, JSON.stringify(pending));
     }
 
@@ -113,29 +123,77 @@ export class AuthManager {
       return;
     }
     const pending = JSON.parse(raw) as PendingMigration;
+    const tokens = Array.isArray(pending.oldRefreshTokens) ? pending.oldRefreshTokens : [];
+    const remaining: string[] = [];
+    let legacyUserId = pending.legacyUserId;
+
+    let idToken: string;
     try {
-      let oldIdToken: string | undefined;
-      if (pending.oldRefreshToken) {
-        oldIdToken = (await this.exchangeRefreshToken(pending.oldRefreshToken)).idToken;
-      }
-      const token = await this.getIdToken();
-      const res = await fetch(`${this.baseUrl}/auth/migrate`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
-        body: JSON.stringify({
-          old_id_token: oldIdToken ?? null,
-          legacy_user_id: pending.legacyUserId ?? null,
-        }),
-      });
-      if (!res.ok) {
-        throw new Error(`migrate failed (${res.status})`);
-      }
-      await this.secrets.delete(PENDING_MIGRATION_KEY);
-      await this.globalState.update(LEGACY_USER_ID_KEY, undefined);
+      idToken = await this.getIdToken();
     } catch (err) {
       // Non-fatal: the pending record stays and is retried on next activation.
       console.error("[edupeer] migration deferred:", err);
+      return;
     }
+
+    // Migrate each old anonymous account independently: a failure for one
+    // token must not abort the others — it just stays queued for next time.
+    for (const oldRefreshToken of tokens) {
+      try {
+        const oldIdToken = (await this.exchangeRefreshToken(oldRefreshToken)).idToken;
+        // Carry legacyUserId until one call carrying it succeeds.
+        const carriedLegacy = legacyUserId;
+        if (await this.postMigrate(idToken, oldIdToken, carriedLegacy)) {
+          if (carriedLegacy !== undefined) {
+            legacyUserId = undefined;
+          }
+        } else {
+          remaining.push(oldRefreshToken);
+        }
+      } catch {
+        remaining.push(oldRefreshToken);
+      }
+    }
+
+    // Legacy-only migration when there were no old refresh tokens.
+    if (tokens.length === 0 && legacyUserId !== undefined) {
+      try {
+        if (await this.postMigrate(idToken, undefined, legacyUserId)) {
+          legacyUserId = undefined;
+        }
+      } catch {
+        // keep legacyUserId queued
+      }
+    }
+
+    if (legacyUserId === undefined && pending.legacyUserId !== undefined) {
+      await this.globalState.update(LEGACY_USER_ID_KEY, undefined);
+    }
+
+    if (remaining.length > 0 || legacyUserId !== undefined) {
+      const updated: PendingMigration = { oldRefreshTokens: remaining, legacyUserId };
+      await this.secrets.store(PENDING_MIGRATION_KEY, JSON.stringify(updated));
+      // Non-fatal: whatever is left stays and is retried on next activation.
+      console.error("[edupeer] migration deferred: retrying remaining items on next activation");
+    } else {
+      await this.secrets.delete(PENDING_MIGRATION_KEY);
+    }
+  }
+
+  private async postMigrate(
+    idToken: string,
+    oldIdToken?: string,
+    legacyUserId?: string
+  ): Promise<boolean> {
+    const res = await fetch(`${this.baseUrl}/auth/migrate`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${idToken}` },
+      body: JSON.stringify({
+        old_id_token: oldIdToken ?? null,
+        legacy_user_id: legacyUserId ?? null,
+      }),
+    });
+    return res.ok;
   }
 
   async signOut(): Promise<void> {

@@ -100,11 +100,67 @@ describe("applySignIn and migration", () => {
   });
 
   it("keeps the pending migration when the migrate call fails", async () => {
+    jest.spyOn(console, "error").mockImplementation(() => {});
     mockFetchRoutes([CONFIG, SIGNUP, REFRESH, ["/auth/migrate", 500, {}]]);
     const { auth, secrets } = makeManager();
     await auth.getIdToken();
     await auth.applySignIn(payload);
     expect(secrets.map.has("edupeer.pendingMigration")).toBe(true);
+  });
+
+  it("accumulates pending migrations across sign-in cycles instead of clobbering", async () => {
+    jest.spyOn(console, "error").mockImplementation(() => {});
+    let signUpCount = 0;
+    let migrateStatus = 500;
+    const okMigrateBodies: any[] = [];
+    const respond = (status: number, body: any) => ({
+      ok: status >= 200 && status < 300,
+      status,
+      json: async () => body,
+      text: async () => JSON.stringify(body),
+    });
+    (global as any).fetch = jest.fn(async (url: string, init?: any) => {
+      const u = String(url);
+      if (u.includes("/auth/config")) {
+        return respond(200, { apiKey: "web-key", authDomain: "x.firebaseapp.com" });
+      }
+      if (u.includes("accounts:signUp")) {
+        const n = signUpCount++;
+        return respond(200, {
+          localId: `anon-${n}`, idToken: `anon-id-${n}`,
+          refreshToken: `anon-refresh-${n}`, expiresIn: "3600",
+        });
+      }
+      if (u.includes("securetoken")) {
+        // Echo back an id_token derived from the refresh token in the body,
+        // so each anonymous account exchanges to a distinct old ID token.
+        const m = /refresh_token=([^&]+)/.exec(String(init?.body));
+        const n = decodeURIComponent(m![1]).replace("anon-refresh-", "");
+        return respond(200, {
+          id_token: `refreshed-${n}`, refresh_token: `anon-refresh-${n}`,
+          user_id: `anon-${n}`, expires_in: "3600",
+        });
+      }
+      if (u.includes("/auth/migrate")) {
+        if (migrateStatus === 200) okMigrateBodies.push(JSON.parse(init.body));
+        return respond(migrateStatus, migrateStatus === 200 ? { status: "ok", merged: 1 } : {});
+      }
+      throw new Error(`unmatched fetch: ${u}`);
+    });
+
+    const { auth, secrets } = makeManager();
+    await auth.getIdToken();          // anonymous X0 (anon-refresh-0)
+    await auth.applySignIn(payload);  // migrate fails -> X0 record kept
+    expect(secrets.map.has("edupeer.pendingMigration")).toBe(true);
+    await auth.signOut();             // fresh anonymous X1 (anon-refresh-1)
+    migrateStatus = 200;
+    await auth.applySignIn({ idToken: "real-id-2", refreshToken: "real-refresh-2", uid: "real-2" });
+
+    // Both X0's and X1's progress migrated: old ID tokens from BOTH refresh tokens.
+    const oldTokens = okMigrateBodies.map((b) => b.old_id_token);
+    expect(oldTokens).toContain("refreshed-0");
+    expect(oldTokens).toContain("refreshed-1");
+    expect(secrets.map.has("edupeer.pendingMigration")).toBe(false);
   });
 });
 
