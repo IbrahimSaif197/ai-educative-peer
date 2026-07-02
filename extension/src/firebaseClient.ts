@@ -8,7 +8,7 @@ import { ApiClient } from "./apiClient";
 export class FirebaseClient {
   constructor(private api: ApiClient) {}
 
-  async getBadges(userId: string): Promise<string[]> {
-    return this.api.getBadges(userId);
+  async getBadges(): Promise<string[]> {
+    return this.api.getBadges();
   }
 }

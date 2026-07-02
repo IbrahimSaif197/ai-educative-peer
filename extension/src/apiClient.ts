@@ -3,10 +3,13 @@ export interface ChatTurn {
   content: string;
 }
 
+export interface TokenProvider {
+  getIdToken(force?: boolean): Promise<string>;
+}
+
 export interface HintRequest {
   code: string;
   question: string;
-  user_id: string;
   hint_level: number;
   language?: string;
   history?: ChatTurn[];
@@ -36,7 +39,7 @@ export interface LineHintResponse {
 }
 
 export class ApiClient {
-  constructor(private baseUrl: string) {}
+  constructor(private baseUrl: string, private readonly tokens: TokenProvider) {}
 
   setBaseUrl(url: string) {
     this.baseUrl = url.replace(/\/$/, "");
@@ -51,12 +54,32 @@ export class ApiClient {
     }
   }
 
-  async getHint(req: HintRequest): Promise<HintResponse> {
-    const res = await fetch(`${this.baseUrl}/hint`, {
+  /** Fetch with a Bearer token; on 401, refresh the token once and retry. */
+  private async authedFetch(path: string, init: RequestInit = {}): Promise<Response> {
+    const attempt = async (force: boolean) => {
+      const token = await this.tokens.getIdToken(force);
+      return fetch(`${this.baseUrl}${path}`, {
+        ...init,
+        headers: { ...(init.headers as Record<string, string> | undefined), Authorization: `Bearer ${token}` },
+      });
+    };
+    let res = await attempt(false);
+    if (res.status === 401) {
+      res = await attempt(true);
+    }
+    return res;
+  }
+
+  private async authedJson(path: string, body: unknown): Promise<Response> {
+    return this.authedFetch(path, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(req),
+      body: JSON.stringify(body),
     });
+  }
+
+  async getHint(req: HintRequest): Promise<HintResponse> {
+    const res = await this.authedJson("/hint", req);
     if (!res.ok) {
       const text = await res.text();
       throw new Error(`Backend error (${res.status}): ${text}`);
@@ -64,46 +87,29 @@ export class ApiClient {
     return (await res.json()) as HintResponse;
   }
 
-  async resetSession(userId: string): Promise<void> {
-    await fetch(`${this.baseUrl}/reset`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ user_id: userId }),
-    });
+  async resetSession(): Promise<void> {
+    await this.authedFetch("/reset", { method: "POST" });
   }
 
-  async scanCode(code: string, userId: string, language = "python"): Promise<ScanResponse> {
-    const res = await fetch(`${this.baseUrl}/scan`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ code, user_id: userId, language }),
-    });
+  async scanCode(code: string, language = "python"): Promise<ScanResponse> {
+    const res = await this.authedJson("/scan", { code, language });
     if (!res.ok) {
       throw new Error(`scan failed (${res.status})`);
     }
     return (await res.json()) as ScanResponse;
   }
 
-  async getLineHint(
-    code: string,
-    line: number,
-    userId: string,
-    language = "python"
-  ): Promise<LineHintResponse> {
-    const res = await fetch(`${this.baseUrl}/line-hint`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ code, line, user_id: userId, language }),
-    });
+  async getLineHint(code: string, line: number, language = "python"): Promise<LineHintResponse> {
+    const res = await this.authedJson("/line-hint", { code, line, language });
     if (!res.ok) {
       throw new Error(`line-hint failed (${res.status})`);
     }
     return (await res.json()) as LineHintResponse;
   }
 
-  async getBadges(userId: string): Promise<string[]> {
+  async getBadges(): Promise<string[]> {
     try {
-      const res = await fetch(`${this.baseUrl}/badges/${encodeURIComponent(userId)}`);
+      const res = await this.authedFetch("/badges");
       if (!res.ok) {
         return [];
       }
