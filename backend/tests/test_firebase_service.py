@@ -128,3 +128,71 @@ class TestBadgeLogic:
         result = svc.get_user_badges_sync("u1")
         assert "First Question" in result
         assert "Concept Explorer" in result
+
+
+class TestMergeUser:
+    def setup_method(self):
+        self.admin_mock, self.cred_mock, self.fs_mock = _patch_firebase_admin()
+
+    def _svc_with_users(self, source_data, target_data):
+        import os
+        os.environ.setdefault("FIREBASE_PROJECT_ID", "test-project")
+        os.environ.setdefault("FIREBASE_PRIVATE_KEY", "test-key")
+        os.environ.setdefault("FIREBASE_CLIENT_EMAIL", "test@test.iam.gserviceaccount.com")
+        if "firebase_service" in sys.modules:
+            del sys.modules["firebase_service"]
+
+        def make_ref(data):
+            snap = MagicMock()
+            snap.exists = data is not None
+            snap.to_dict.return_value = data or {}
+            ref = MagicMock()
+            ref.get.return_value = snap
+            return ref
+
+        self.source_ref = make_ref(source_data)
+        self.target_ref = make_ref(target_data)
+        refs = {"old-uid": self.source_ref, "new-uid": self.target_ref}
+
+        collection_mock = MagicMock()
+        collection_mock.return_value.document.side_effect = lambda uid: refs[uid]
+        self.fs_mock.client.return_value.collection = collection_mock
+
+        from firebase_service import FirebaseService
+        svc = FirebaseService()
+        svc._client = self.fs_mock.client.return_value
+        return svc
+
+    def test_counters_added_lists_unioned_badges_recomputed(self):
+        svc = self._svc_with_users(
+            {"total_interactions": 3, "sessions": 2, "solved_at_level_1": 1,
+             "concept_tags_seen": ["loops", "strings"], "badges": ["First Question"]},
+            {"total_interactions": 4, "sessions": 3, "solved_at_level_1": 2,
+             "concept_tags_seen": ["strings", "recursion"], "badges": ["First Question"]},
+        )
+        assert svc.merge_user_sync("old-uid", "new-uid") is True
+        data = self.target_ref.set.call_args[0][0]
+        assert data["total_interactions"] == 7
+        assert data["sessions"] == 5
+        assert data["solved_at_level_1"] == 3
+        assert sorted(data["concept_tags_seen"]) == ["loops", "recursion", "strings"]
+        # merged stats cross new thresholds -> badges recomputed
+        assert "Persistent Learner" in data["badges"]
+        assert "Hint Minimiser" in data["badges"]
+        assert data["badges"].count("First Question") == 1
+        self.source_ref.delete.assert_called_once()
+
+    def test_missing_source_doc_returns_false(self):
+        svc = self._svc_with_users(None, {"total_interactions": 1})
+        assert svc.merge_user_sync("old-uid", "new-uid") is False
+        self.target_ref.set.assert_not_called()
+
+    def test_same_uid_is_noop(self):
+        svc = self._svc_with_users({"total_interactions": 1}, {"total_interactions": 1})
+        assert svc.merge_user_sync("new-uid", "new-uid") is False
+
+    def test_disabled_service_returns_false(self):
+        from firebase_service import FirebaseService
+        svc = FirebaseService.__new__(FirebaseService)
+        svc._client = None
+        assert svc.merge_user_sync("a", "b") is False

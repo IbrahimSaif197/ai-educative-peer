@@ -64,3 +64,8 @@ class LineHintRequest(BaseModel):
 class LineHintResponse(BaseModel):
     hint: str
     concept: str = "general"
+
+
+class MigrateRequest(BaseModel):
+    old_id_token: Optional[str] = None
+    legacy_user_id: Optional[str] = None

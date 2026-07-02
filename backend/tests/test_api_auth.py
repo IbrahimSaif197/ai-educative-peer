@@ -62,3 +62,45 @@ def test_badges_returns_list_for_token_uid(signed_in):
     res = signed_in.get("/badges")
     assert res.status_code == 200
     assert isinstance(res.json(), list)
+
+
+def test_migrate_merges_old_token_and_legacy_id(signed_in, monkeypatch):
+    calls = []
+    monkeypatch.setattr(
+        main.firebase, "merge_user_sync",
+        lambda old, new: calls.append((old, new)) or True,
+    )
+
+    def fake_verify(token):
+        if token == "old-anon-token":
+            return {"uid": "anon-uid"}
+        raise ValueError("unknown token")
+
+    monkeypatch.setattr(auth.firebase_auth, "verify_id_token", fake_verify)
+    res = signed_in.post(
+        "/auth/migrate",
+        json={"old_id_token": "old-anon-token", "legacy_user_id": "user-legacy1"},
+    )
+    assert res.status_code == 200
+    assert res.json() == {"status": "ok", "merged": 2}
+    assert ("anon-uid", "uid-1") in calls
+    assert ("user-legacy1", "uid-1") in calls
+
+
+def test_migrate_rejects_invalid_old_token(signed_in, monkeypatch):
+    def boom(_):
+        raise ValueError("bad")
+
+    monkeypatch.setattr(auth.firebase_auth, "verify_id_token", boom)
+    res = signed_in.post("/auth/migrate", json={"old_id_token": "garbage"})
+    assert res.status_code == 401
+
+
+def test_migrate_requires_auth(client):
+    assert client.post("/auth/migrate", json={}).status_code == 401
+
+
+def test_migrate_with_no_sources_merges_nothing(signed_in):
+    res = signed_in.post("/auth/migrate", json={})
+    assert res.status_code == 200
+    assert res.json() == {"status": "ok", "merged": 0}

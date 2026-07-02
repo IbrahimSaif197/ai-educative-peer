@@ -12,6 +12,25 @@ BADGE_HINT_MINIMISER = "Hint Minimiser"
 BADGE_CONCEPT_EXPLORER = "Concept Explorer"
 
 
+def _apply_badge_rules(badges, total_interactions, sessions, solved_at_level_1, concept_tags_seen):
+    """Return the badge list with any newly-earned badges appended."""
+    result = list(badges)
+
+    def award(name: str):
+        if name not in result:
+            result.append(name)
+
+    if total_interactions >= 1:
+        award(BADGE_FIRST_QUESTION)
+    if sessions >= 5:
+        award(BADGE_PERSISTENT_LEARNER)
+    if solved_at_level_1 >= 3:
+        award(BADGE_HINT_MINIMISER)
+    if len(concept_tags_seen) >= 5:
+        award(BADGE_CONCEPT_EXPLORER)
+    return result
+
+
 class FirebaseService:
     def __init__(self):
         self._client = None
@@ -95,18 +114,9 @@ class FirebaseService:
             if hint_level_used == 1:
                 solved_at_level_1 += 1
 
-            def award(name: str):
-                if name not in badges:
-                    badges.append(name)
-
-            if total_interactions >= 1:
-                award(BADGE_FIRST_QUESTION)
-            if sessions >= 5:
-                award(BADGE_PERSISTENT_LEARNER)
-            if solved_at_level_1 >= 3:
-                award(BADGE_HINT_MINIMISER)
-            if len(concept_tags_seen) >= 5:
-                award(BADGE_CONCEPT_EXPLORER)
+            badges = _apply_badge_rules(
+                badges, total_interactions, sessions, solved_at_level_1, concept_tags_seen
+            )
 
             user_ref.set(
                 {
@@ -192,3 +202,42 @@ class FirebaseService:
         except Exception as e:
             print(f"[firebase] read badges failed: {e}")
             return []
+
+    def merge_user_sync(self, source_uid: str, target_uid: str) -> bool:
+        """Merge one user's stats/badges doc into another's, then delete the
+        source doc. Returns True only when a merge actually happened."""
+        if not self.enabled or source_uid == target_uid:
+            return False
+        try:
+            users = self._client.collection("users")
+            src_snap = users.document(source_uid).get()
+            if not src_snap.exists:
+                return False
+            src: Dict[str, Any] = src_snap.to_dict() or {}
+            tgt_ref = users.document(target_uid)
+            tgt_snap = tgt_ref.get()
+            tgt: Dict[str, Any] = tgt_snap.to_dict() if tgt_snap.exists else {}
+
+            total = int(src.get("total_interactions", 0)) + int(tgt.get("total_interactions", 0))
+            sessions = int(src.get("sessions", 0)) + int(tgt.get("sessions", 0))
+            solved_1 = int(src.get("solved_at_level_1", 0)) + int(tgt.get("solved_at_level_1", 0))
+            tags = list(set(list(src.get("concept_tags_seen", [])) + list(tgt.get("concept_tags_seen", []))))
+            badges = list(set(list(src.get("badges", [])) + list(tgt.get("badges", []))))
+            badges = _apply_badge_rules(badges, total, sessions, solved_1, tags)
+
+            tgt_ref.set(
+                {
+                    "badges": badges,
+                    "total_interactions": total,
+                    "sessions": sessions,
+                    "concept_tags_seen": tags,
+                    "solved_at_level_1": solved_1,
+                    "updated_at": firestore.SERVER_TIMESTAMP,
+                },
+                merge=True,
+            )
+            users.document(source_uid).delete()
+            return True
+        except Exception as e:
+            print(f"[firebase] merge failed: {e}")
+            return False

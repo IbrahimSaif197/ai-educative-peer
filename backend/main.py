@@ -23,8 +23,9 @@ from models import (
     LineFlag,
     LineHintRequest,
     LineHintResponse,
+    MigrateRequest,
 )
-from auth import get_current_uid
+from auth import get_current_uid, verify_token
 from hinting_engine import build_engine
 from firebase_service import FirebaseService
 from languages import normalize_language
@@ -70,6 +71,29 @@ async def auth_login():
     html = html.replace("__FIREBASE_API_KEY__", os.environ.get("FIREBASE_WEB_API_KEY", ""))
     html = html.replace("__FIREBASE_AUTH_DOMAIN__", os.environ.get("FIREBASE_AUTH_DOMAIN", ""))
     return HTMLResponse(html)
+
+
+@app.post("/auth/migrate")
+async def migrate(req: MigrateRequest, uid: str = Depends(get_current_uid)):
+    """Merge progress from a previous identity into the signed-in account.
+
+    old_id_token proves ownership of the previous (anonymous) Firebase
+    account. legacy_user_id covers pre-auth random IDs, which were never
+    verifiable, so merging them is best-effort by design.
+    """
+    sources: List[str] = []
+    if req.old_id_token:
+        old_uid = verify_token(req.old_id_token)
+        if old_uid != uid:
+            sources.append(old_uid)
+    if req.legacy_user_id and req.legacy_user_id != uid:
+        sources.append(req.legacy_user_id)
+
+    merged = 0
+    for source in sources:
+        if await asyncio.to_thread(firebase.merge_user_sync, source, uid):
+            merged += 1
+    return {"status": "ok", "merged": merged}
 
 
 @app.post("/hint", response_model=HintResponse)
