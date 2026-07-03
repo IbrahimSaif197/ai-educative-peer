@@ -17,7 +17,10 @@ STRICT RULES:
 - If hint_level is 2: identify the specific line or concept that needs attention, explain the concept briefly
 - If hint_level is 3: provide pseudocode only, never real {language} syntax
 - Keep responses under 150 words
-- End every response with "What do you think should happen next?\""""
+- End every response with "What do you think should happen next?"
+- After that, on its own final line, write [concepts: tag-1, tag-2] with 1-3 tags
+  chosen ONLY from this list (the line is stripped before the student sees it):
+  {concepts}"""
 
 
 SCAN_SYSTEM_PROMPT_TEMPLATE = """You are EduPeer's static reviewer for beginner {language} code.
@@ -92,6 +95,23 @@ class HintingEngine:
         if not tags:
             tags.append("general")
         return tags[:6]
+
+    _CONCEPTS_LINE_RE = re.compile(r"\[\s*concepts\s*:\s*([^\]]*)\]", re.IGNORECASE)
+
+    @classmethod
+    def _parse_concepts_line(cls, text: str) -> Tuple[str, List[str]]:
+        """Strip the model-emitted "[concepts: a, b]" line, returning the
+        cleaned text and the raw (unvalidated) tags."""
+        tags: List[str] = []
+
+        def capture(match: "re.Match[str]") -> str:
+            tags.extend(
+                t.strip().lower() for t in match.group(1).split(",") if t.strip()
+            )
+            return ""
+
+        cleaned = cls._CONCEPTS_LINE_RE.sub(capture, text).rstrip()
+        return cleaned, tags
 
     @staticmethod
     def _extract_json(text: str) -> dict:
@@ -188,7 +208,10 @@ class HintingEngine:
     ) -> Tuple[str, List[str]]:
         level = max(1, min(3, int(hint_level)))
         lang = get_language(language)
-        system = SYSTEM_PROMPT_TEMPLATE.format(language=lang["display_name"])
+        system = SYSTEM_PROMPT_TEMPLATE.format(
+            language=lang["display_name"],
+            concepts=", ".join(concepts_for(language)),
+        )
 
         messages: List[dict] = [{"role": "system", "content": system}]
         for turn in (history or [])[-MAX_HISTORY_TURNS:]:
@@ -209,10 +232,14 @@ class HintingEngine:
             }
         )
 
-        hint_text = self._chat_messages(messages, 400).strip()
+        raw_text = self._chat_messages(messages, 400).strip()
+        hint_text, raw_tags = self._parse_concepts_line(raw_text)
         if "What do you think should happen next?" not in hint_text:
             hint_text = hint_text.rstrip() + "\n\nWhat do you think should happen next?"
-        tags = self._extract_concept_tags(code, question, hint_text, language)
+        known = set(concepts_for(language))
+        tags = [t for t in raw_tags if t in known][:6]
+        if not tags:
+            tags = self._extract_concept_tags(code, question, hint_text, language)
         return hint_text, tags
 
 

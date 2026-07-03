@@ -80,6 +80,67 @@ class TestHintingEngine:
             engine.generate_hint("x=1", "help", 1)
 
 
+class TestLLMConceptTags:
+    def _engine(self, response_text: str):
+        from hinting_engine import HintingEngine
+        engine = HintingEngine(api_key="test-key")
+        engine.client = _make_mock_client(response_text)
+        return engine
+
+    def test_concepts_line_parsed_and_stripped(self):
+        engine = self._engine(
+            "Check your loop bounds. What do you think should happen next?\n"
+            "[concepts: off-by-one, for-loop]"
+        )
+        hint, tags = engine.generate_hint("for i in range(11):", "help", 1)
+        assert tags == ["off-by-one", "for-loop"]
+        assert "[concepts" not in hint
+
+    def test_invalid_tags_filtered(self):
+        engine = self._engine(
+            "Think. What do you think should happen next?\n"
+            "[concepts: off-by-one, flux-capacitor]"
+        )
+        _, tags = engine.generate_hint("x", "help", 1)
+        assert "off-by-one" in tags
+        assert "flux-capacitor" not in tags
+
+    def test_all_invalid_tags_fall_back_to_keywords(self):
+        engine = self._engine(
+            "Look at your variables. What do you think should happen next?\n"
+            "[concepts: flux-capacitor]"
+        )
+        _, tags = engine.generate_hint("x = 1", "what are variables?", 1)
+        assert "variables" in tags
+
+    def test_missing_concepts_line_falls_back_to_keywords(self):
+        engine = self._engine(
+            "Think about your for-loop. What do you think should happen next?"
+        )
+        _, tags = engine.generate_hint("for i in range(5):", "help with for-loop", 1)
+        assert "for-loop" in tags
+
+    def test_closing_question_appended_after_strip(self):
+        engine = self._engine("Look closely.\n[concepts: loops]")
+        hint, tags = engine.generate_hint("while True: pass", "help", 1)
+        assert hint.endswith("What do you think should happen next?")
+        assert "[concepts" not in hint
+        assert tags == ["loops"]
+
+    def test_system_prompt_instructs_concepts_line(self):
+        engine = self._engine("ok. What do you think should happen next?")
+        engine.generate_hint("x = 1", "help", 1)
+        system = engine.client.chat.completions.create.call_args.kwargs["messages"][0]["content"]
+        assert "[concepts:" in system
+
+    def test_language_specific_tags_accepted(self):
+        engine = self._engine(
+            "Consider it. What do you think should happen next?\n[concepts: pointers]"
+        )
+        _, tags = engine.generate_hint("int *p;", "help", 1, language="c")
+        assert tags == ["pointers"]
+
+
 class TestMultiLanguage:
     def _engine(self, response_text: str):
         from hinting_engine import HintingEngine

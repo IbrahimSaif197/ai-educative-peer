@@ -1,6 +1,7 @@
 import os
 import asyncio
-from typing import List, Optional, Dict, Any
+from datetime import date, datetime, timedelta, timezone
+from typing import List, Optional, Dict, Any, Tuple
 
 import firebase_admin
 from firebase_admin import credentials, firestore
@@ -28,6 +29,68 @@ def _apply_badge_rules(badges, total_interactions, sessions, solved_at_level_1, 
         award(BADGE_HINT_MINIMISER)
     if len(concept_tags_seen) >= 5:
         award(BADGE_CONCEPT_EXPLORER)
+    return result
+
+
+def _today() -> date:
+    return datetime.now(timezone.utc).date()
+
+
+def _update_streak(
+    last_active_date: Optional[str], streak_days: int, today: date
+) -> Tuple[str, int]:
+    """Return (new last_active_date, new streak_days) for an activity today."""
+    today_iso = today.isoformat()
+    if last_active_date == today_iso:
+        return today_iso, max(1, int(streak_days or 0))
+    yesterday_iso = (today - timedelta(days=1)).isoformat()
+    if last_active_date == yesterday_iso:
+        return today_iso, int(streak_days or 0) + 1
+    return today_iso, 1
+
+
+def _update_concept_stats(
+    stats: Optional[Dict[str, Any]],
+    concept_tags: List[str],
+    hint_level: int,
+    today: date,
+) -> Dict[str, Any]:
+    """Fold one interaction into the per-concept stats map (copy, not in place)."""
+    result = {k: dict(v) for k, v in (stats or {}).items() if isinstance(v, dict)}
+    today_iso = today.isoformat()
+    for tag in concept_tags:
+        entry = result.setdefault(
+            tag,
+            {"encounters": 0, "level_sum": 0, "max_level": 0,
+             "last_seen": today_iso, "last_struggled": None},
+        )
+        entry["encounters"] = int(entry.get("encounters", 0)) + 1
+        entry["level_sum"] = int(entry.get("level_sum", 0)) + int(hint_level)
+        entry["max_level"] = max(int(entry.get("max_level", 0)), int(hint_level))
+        entry["last_seen"] = today_iso
+        if hint_level >= 2:
+            entry["last_struggled"] = today_iso
+    return result
+
+
+def _merge_concept_stats(
+    a: Optional[Dict[str, Any]], b: Optional[Dict[str, Any]]
+) -> Dict[str, Any]:
+    result = {k: dict(v) for k, v in (a or {}).items() if isinstance(v, dict)}
+    for tag, entry in (b or {}).items():
+        if not isinstance(entry, dict):
+            continue
+        if tag not in result:
+            result[tag] = dict(entry)
+            continue
+        tgt = result[tag]
+        tgt["encounters"] = int(tgt.get("encounters", 0)) + int(entry.get("encounters", 0))
+        tgt["level_sum"] = int(tgt.get("level_sum", 0)) + int(entry.get("level_sum", 0))
+        tgt["max_level"] = max(int(tgt.get("max_level", 0)), int(entry.get("max_level", 0)))
+        tgt["last_seen"] = max(tgt.get("last_seen") or "", entry.get("last_seen") or "") or None
+        tgt["last_struggled"] = (
+            max(tgt.get("last_struggled") or "", entry.get("last_struggled") or "") or None
+        )
     return result
 
 
@@ -96,6 +159,7 @@ class FirebaseService:
         hint_level_used: int,
         concept_tags: List[str],
         new_session: bool,
+        language: str = "python",
     ) -> List[str]:
         if not self.enabled:
             return []
@@ -114,6 +178,15 @@ class FirebaseService:
             if hint_level_used == 1:
                 solved_at_level_1 += 1
 
+            today = _today()
+            concept_stats = _update_concept_stats(
+                data.get("concept_stats"), concept_tags, hint_level_used, today
+            )
+            languages_used = sorted(set(list(data.get("languages_used", [])) + [language]))
+            last_active_date, streak_days = _update_streak(
+                data.get("last_active_date"), int(data.get("streak_days", 0)), today
+            )
+
             badges = _apply_badge_rules(
                 badges, total_interactions, sessions, solved_at_level_1, concept_tags_seen
             )
@@ -125,6 +198,10 @@ class FirebaseService:
                     "sessions": sessions,
                     "concept_tags_seen": concept_tags_seen,
                     "solved_at_level_1": solved_at_level_1,
+                    "concept_stats": concept_stats,
+                    "languages_used": languages_used,
+                    "last_active_date": last_active_date,
+                    "streak_days": streak_days,
                     "updated_at": firestore.SERVER_TIMESTAMP,
                 },
                 merge=True,
@@ -162,6 +239,7 @@ class FirebaseService:
             hint_level_used,
             concept_tags,
             new_session,
+            language,
         )
 
     def fire_and_forget(
@@ -224,6 +302,16 @@ class FirebaseService:
             tags = list(set(list(src.get("concept_tags_seen", [])) + list(tgt.get("concept_tags_seen", []))))
             badges = list(set(list(src.get("badges", [])) + list(tgt.get("badges", []))))
             badges = _apply_badge_rules(badges, total, sessions, solved_1, tags)
+            concept_stats = _merge_concept_stats(
+                src.get("concept_stats"), tgt.get("concept_stats")
+            )
+            languages_used = sorted(
+                set(list(src.get("languages_used", [])) + list(tgt.get("languages_used", [])))
+            )
+            streak_days = max(int(src.get("streak_days", 0)), int(tgt.get("streak_days", 0)))
+            last_active_date = (
+                max(src.get("last_active_date") or "", tgt.get("last_active_date") or "") or None
+            )
 
             tgt_ref.set(
                 {
@@ -232,6 +320,10 @@ class FirebaseService:
                     "sessions": sessions,
                     "concept_tags_seen": tags,
                     "solved_at_level_1": solved_1,
+                    "concept_stats": concept_stats,
+                    "languages_used": languages_used,
+                    "streak_days": streak_days,
+                    "last_active_date": last_active_date,
                     "updated_at": firestore.SERVER_TIMESTAMP,
                 },
                 merge=True,

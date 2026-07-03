@@ -130,6 +130,111 @@ class TestBadgeLogic:
         assert "Concept Explorer" in result
 
 
+class TestConceptStatsHelpers:
+    def test_new_concept_creates_entry(self):
+        from datetime import date
+        from firebase_service import _update_concept_stats
+        stats = _update_concept_stats({}, ["loops"], 1, date(2026, 7, 4))
+        assert stats["loops"]["encounters"] == 1
+        assert stats["loops"]["level_sum"] == 1
+        assert stats["loops"]["max_level"] == 1
+        assert stats["loops"]["last_seen"] == "2026-07-04"
+        assert stats["loops"]["last_struggled"] is None
+
+    def test_level_2_marks_struggle(self):
+        from datetime import date
+        from firebase_service import _update_concept_stats
+        stats = _update_concept_stats({}, ["loops"], 2, date(2026, 7, 4))
+        assert stats["loops"]["last_struggled"] == "2026-07-04"
+
+    def test_existing_concept_accumulates(self):
+        from datetime import date
+        from firebase_service import _update_concept_stats
+        existing = {"loops": {"encounters": 2, "level_sum": 4, "max_level": 3,
+                              "last_seen": "2026-07-01", "last_struggled": "2026-07-01"}}
+        stats = _update_concept_stats(existing, ["loops"], 1, date(2026, 7, 4))
+        assert stats["loops"]["encounters"] == 3
+        assert stats["loops"]["level_sum"] == 5
+        assert stats["loops"]["max_level"] == 3
+        assert stats["loops"]["last_seen"] == "2026-07-04"
+        # level 1 is not a struggle; timestamp untouched
+        assert stats["loops"]["last_struggled"] == "2026-07-01"
+
+    def test_input_dict_not_mutated(self):
+        from datetime import date
+        from firebase_service import _update_concept_stats
+        existing = {"loops": {"encounters": 1, "level_sum": 1, "max_level": 1,
+                              "last_seen": "2026-07-01", "last_struggled": None}}
+        _update_concept_stats(existing, ["loops"], 3, date(2026, 7, 4))
+        assert existing["loops"]["encounters"] == 1
+
+    def test_merge_concept_stats_sums_and_maxes(self):
+        from firebase_service import _merge_concept_stats
+        a = {"loops": {"encounters": 2, "level_sum": 3, "max_level": 2,
+                       "last_seen": "2026-07-01", "last_struggled": "2026-06-30"}}
+        b = {"loops": {"encounters": 1, "level_sum": 3, "max_level": 3,
+                       "last_seen": "2026-07-03", "last_struggled": None},
+             "strings": {"encounters": 1, "level_sum": 1, "max_level": 1,
+                         "last_seen": "2026-07-02", "last_struggled": None}}
+        merged = _merge_concept_stats(a, b)
+        assert merged["loops"]["encounters"] == 3
+        assert merged["loops"]["level_sum"] == 6
+        assert merged["loops"]["max_level"] == 3
+        assert merged["loops"]["last_seen"] == "2026-07-03"
+        assert merged["loops"]["last_struggled"] == "2026-06-30"
+        assert merged["strings"]["encounters"] == 1
+
+
+class TestStreakHelper:
+    def test_first_activity_starts_streak(self):
+        from datetime import date
+        from firebase_service import _update_streak
+        assert _update_streak(None, 0, date(2026, 7, 4)) == ("2026-07-04", 1)
+
+    def test_same_day_keeps_streak(self):
+        from datetime import date
+        from firebase_service import _update_streak
+        assert _update_streak("2026-07-04", 5, date(2026, 7, 4)) == ("2026-07-04", 5)
+
+    def test_consecutive_day_increments(self):
+        from datetime import date
+        from firebase_service import _update_streak
+        assert _update_streak("2026-07-03", 5, date(2026, 7, 4)) == ("2026-07-04", 6)
+
+    def test_gap_resets_to_one(self):
+        from datetime import date
+        from firebase_service import _update_streak
+        assert _update_streak("2026-07-01", 5, date(2026, 7, 4)) == ("2026-07-04", 1)
+
+
+class TestUserDocEnrichment:
+    def setup_method(self):
+        self.admin_mock, self.cred_mock, self.fs_mock = _patch_firebase_admin()
+
+    def _svc(self, user_data=None):
+        return _make_service(self.fs_mock, user_data)
+
+    def test_concept_stats_written_to_user_doc(self):
+        svc, doc_ref = self._svc(None)
+        svc._update_user_and_award_badges_sync("u1", 2, ["loops"], False)
+        data = doc_ref.set.call_args[0][0]
+        assert data["concept_stats"]["loops"]["encounters"] == 1
+        assert data["concept_stats"]["loops"]["max_level"] == 2
+
+    def test_language_recorded(self):
+        svc, doc_ref = self._svc({"languages_used": ["python"]})
+        svc._update_user_and_award_badges_sync("u1", 1, [], False, language="java")
+        data = doc_ref.set.call_args[0][0]
+        assert sorted(data["languages_used"]) == ["java", "python"]
+
+    def test_streak_fields_written(self):
+        svc, doc_ref = self._svc(None)
+        svc._update_user_and_award_badges_sync("u1", 1, [], False)
+        data = doc_ref.set.call_args[0][0]
+        assert data["streak_days"] == 1
+        assert data["last_active_date"]
+
+
 class TestMergeUser:
     def setup_method(self):
         self.admin_mock, self.cred_mock, self.fs_mock = _patch_firebase_admin()
@@ -181,6 +286,25 @@ class TestMergeUser:
         assert "Hint Minimiser" in data["badges"]
         assert data["badges"].count("First Question") == 1
         self.source_ref.delete.assert_called_once()
+
+    def test_concept_stats_and_languages_merged(self):
+        svc = self._svc_with_users(
+            {"total_interactions": 1, "languages_used": ["python"], "streak_days": 2,
+             "last_active_date": "2026-07-01",
+             "concept_stats": {"loops": {"encounters": 1, "level_sum": 2, "max_level": 2,
+                                         "last_seen": "2026-07-01", "last_struggled": "2026-07-01"}}},
+            {"total_interactions": 1, "languages_used": ["java"], "streak_days": 4,
+             "last_active_date": "2026-07-03",
+             "concept_stats": {"loops": {"encounters": 2, "level_sum": 2, "max_level": 1,
+                                         "last_seen": "2026-07-03", "last_struggled": None}}},
+        )
+        assert svc.merge_user_sync("old-uid", "new-uid") is True
+        data = self.target_ref.set.call_args[0][0]
+        assert data["concept_stats"]["loops"]["encounters"] == 3
+        assert data["concept_stats"]["loops"]["max_level"] == 2
+        assert sorted(data["languages_used"]) == ["java", "python"]
+        assert data["streak_days"] == 4
+        assert data["last_active_date"] == "2026-07-03"
 
     def test_missing_source_doc_returns_false(self):
         svc = self._svc_with_users(None, {"total_interactions": 1})
