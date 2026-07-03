@@ -300,6 +300,50 @@ class TestTutorModes:
         assert "[concepts" not in hint
 
 
+def _make_stream_chunk(text):
+    delta = MagicMock()
+    delta.content = text
+    choice = MagicMock()
+    choice.delta = delta
+    chunk = MagicMock()
+    chunk.choices = [choice]
+    return chunk
+
+
+class TestStreamHint:
+    def _engine(self, chunks):
+        from hinting_engine import HintingEngine
+        engine = HintingEngine(api_key="test-key")
+        client = MagicMock()
+        client.chat.completions.create.return_value = iter(
+            [_make_stream_chunk(c) for c in chunks]
+        )
+        engine.client = client
+        return engine
+
+    def test_deltas_then_done(self):
+        text = "Look at your loop bounds carefully. What do you think should happen next?"
+        engine = self._engine([text, "\n[concepts: off-by-one]"])
+        events = list(engine.stream_hint("for i in range(11):", "help", 1))
+        assert events[-1]["type"] == "done"
+        assert events[-1]["concept_tags"] == ["off-by-one"]
+        assert "[concepts" not in events[-1]["hint"]
+        deltas = "".join(e["text"] for e in events if e["type"] == "delta")
+        assert "[concepts" not in deltas
+        assert deltas.startswith("Look at your loop")
+
+    def test_stream_requests_streaming(self):
+        engine = self._engine(["ok"])
+        list(engine.stream_hint("x=1", "q", 1))
+        assert engine.client.chat.completions.create.call_args.kwargs["stream"] is True
+
+    def test_done_hint_matches_generate_hint_contract(self):
+        engine = self._engine(["Consider the index."])
+        events = list(engine.stream_hint("x[5]", "help", 2))
+        done = events[-1]
+        assert done["hint"].endswith("What do you think should happen next?")
+
+
 class TestConversationHistory:
     def _engine(self, response_text: str):
         from hinting_engine import HintingEngine

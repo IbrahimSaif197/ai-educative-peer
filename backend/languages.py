@@ -74,6 +74,44 @@ LANGUAGES: Dict[str, dict] = {
             "console-io", "semicolons", "braces", "string-comparison",
         ],
     },
+    "typescript": {
+        "display_name": "TypeScript",
+        "fence": "typescript",
+        "concepts": [
+            "type-annotations", "interfaces", "generics", "unions",
+            "enums", "let-const-var", "closures", "promises",
+            "async-await", "arrow-functions", "equality", "undefined",
+            "null", "any-vs-unknown", "array-methods", "json",
+        ],
+    },
+    "go": {
+        "display_name": "Go",
+        "fence": "go",
+        "concepts": [
+            "goroutines", "channels", "slices", "maps", "structs",
+            "interfaces", "pointers", "error-handling", "nil",
+            "packages", "range", "defer", "zero-values",
+        ],
+    },
+    "rust": {
+        "display_name": "Rust",
+        "fence": "rust",
+        "concepts": [
+            "ownership", "borrowing", "lifetimes", "mutability",
+            "match", "option", "result", "traits", "structs", "enums",
+            "vectors", "string-vs-str", "error-handling", "iterators",
+        ],
+    },
+    "sql": {
+        "display_name": "SQL",
+        "fence": "sql",
+        "concepts": [
+            "select", "joins", "where-clause", "group-by",
+            "aggregate-functions", "null-handling", "subqueries",
+            "order-by", "insert-update-delete", "primary-keys",
+            "foreign-keys", "distinct",
+        ],
+    },
 }
 
 DEFAULT_LANGUAGE = "python"
@@ -82,12 +120,16 @@ _ALIASES = {
     "py": "python",
     "js": "javascript",
     "node": "javascript",
-    "typescript": "javascript",
-    "typescriptreact": "javascript",
+    "ts": "typescript",
+    "typescriptreact": "typescript",
     "javascriptreact": "javascript",
     "c++": "cpp",
     "cs": "csharp",
     "c#": "csharp",
+    "golang": "go",
+    "rs": "rust",
+    "mysql": "sql",
+    "postgres": "sql",
 }
 
 

@@ -1,4 +1,4 @@
-import { ApiClient } from "../apiClient";
+import { ApiClient, parseSseChunk } from "../apiClient";
 
 const BASE = "http://localhost:8000";
 
@@ -111,5 +111,61 @@ describe("authenticated requests", () => {
     const fetchMock = mockFetch(200, { hint: "h", concept: "general" });
     await new ApiClient(BASE, makeTokens()).getLineHint("x=1", 3, "java");
     expect(JSON.parse(fetchMock.mock.calls[0][1].body)).toEqual({ code: "x=1", line: 3, language: "java" });
+  });
+});
+
+describe("parseSseChunk", () => {
+  it("parses complete events and keeps the remainder", () => {
+    const { events, rest } = parseSseChunk(
+      "",
+      'data: {"type":"meta","hint_level":2}\n\ndata: {"type":"delta","text":"Hi"}\n\ndata: {"type":"do'
+    );
+    expect(events).toEqual([
+      { type: "meta", hint_level: 2 },
+      { type: "delta", text: "Hi" },
+    ]);
+    expect(rest).toBe('data: {"type":"do');
+  });
+
+  it("joins a previous partial buffer with the new chunk", () => {
+    const first = parseSseChunk("", 'data: {"type":"del');
+    const second = parseSseChunk(first.rest, 'ta","text":"x"}\n\n');
+    expect(second.events).toEqual([{ type: "delta", text: "x" }]);
+    expect(second.rest).toBe("");
+  });
+
+  it("skips malformed json events", () => {
+    const { events } = parseSseChunk("", "data: {broken\n\n");
+    expect(events).toEqual([]);
+  });
+});
+
+describe("availability tracking", () => {
+  it("flips to unavailable on network failure and notifies once", async () => {
+    (global as any).fetch = jest.fn().mockRejectedValue(new Error("ECONNREFUSED"));
+    const api = new ApiClient(BASE, makeTokens());
+    const seen: boolean[] = [];
+    api.onAvailabilityChange((up) => seen.push(up));
+    await expect(api.getHint({ code: "x", question: "q", hint_level: 1 })).rejects.toThrow();
+    await expect(api.getHint({ code: "x", question: "q", hint_level: 1 })).rejects.toThrow();
+    expect(api.isAvailable).toBe(false);
+    expect(seen).toEqual([false]);
+  });
+
+  it("recovers when a request succeeds", async () => {
+    (global as any).fetch = jest.fn().mockRejectedValue(new Error("down"));
+    const api = new ApiClient(BASE, makeTokens());
+    await expect(api.resetSession()).rejects.toThrow();
+    expect(api.isAvailable).toBe(false);
+    mockFetch(200, { status: "reset", summary: "" });
+    await api.resetSession();
+    expect(api.isAvailable).toBe(true);
+  });
+
+  it("health() updates availability", async () => {
+    (global as any).fetch = jest.fn().mockRejectedValue(new Error("down"));
+    const api = new ApiClient(BASE, makeTokens());
+    await api.health();
+    expect(api.isAvailable).toBe(false);
   });
 });

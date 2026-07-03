@@ -1,14 +1,19 @@
 {
   "name": "edupeer",
   "displayName": "EduPeer",
-  "description": "A Socratic AI tutor for novice programmers (Python, JavaScript, Java, C, C++, C#).",
+  "description": "A Socratic AI tutor for novice programmers (Python, JavaScript, TypeScript, Java, C, C++, C#, Go, Rust, SQL).",
   "version": "1.0.0",
   "publisher": "edupeer",
   "engines": {
     "vscode": "^1.85.0"
   },
-  "categories": ["Education", "Other"],
-  "activationEvents": ["onStartupFinished"],
+  "categories": [
+    "Education",
+    "Other"
+  ],
+  "activationEvents": [
+    "onStartupFinished"
+  ],
   "main": "./out/extension.js",
   "contributes": {
     "viewsContainers": {
@@ -87,32 +92,32 @@
       "editor/context": [
         {
           "command": "edupeer.analyseSelection",
-          "when": "editorHasSelection && resourceLangId =~ /^(python|javascript|java|c|cpp|csharp)$/",
+          "when": "editorHasSelection && resourceLangId =~ /^(python|javascript|typescript|java|c|cpp|csharp|go|rust|sql)$/",
           "group": "edupeer"
         },
         {
           "command": "edupeer.nudgeLine",
-          "when": "resourceLangId =~ /^(python|javascript|java|c|cpp|csharp)$/",
+          "when": "resourceLangId =~ /^(python|javascript|typescript|java|c|cpp|csharp|go|rust|sql)$/",
           "group": "edupeer"
         },
         {
           "command": "edupeer.scanFile",
-          "when": "resourceLangId =~ /^(python|javascript|java|c|cpp|csharp)$/",
+          "when": "resourceLangId =~ /^(python|javascript|typescript|java|c|cpp|csharp|go|rust|sql)$/",
           "group": "edupeer"
         },
         {
           "command": "edupeer.explainSelection",
-          "when": "editorHasSelection && resourceLangId =~ /^(python|javascript|java|c|cpp|csharp)$/",
+          "when": "editorHasSelection && resourceLangId =~ /^(python|javascript|typescript|java|c|cpp|csharp|go|rust|sql)$/",
           "group": "edupeer"
         },
         {
           "command": "edupeer.predictOutput",
-          "when": "editorHasSelection && resourceLangId =~ /^(python|javascript|java|c|cpp|csharp)$/",
+          "when": "editorHasSelection && resourceLangId =~ /^(python|javascript|typescript|java|c|cpp|csharp|go|rust|sql)$/",
           "group": "edupeer"
         },
         {
           "command": "edupeer.explainError",
-          "when": "resourceLangId =~ /^(python|javascript|java|c|cpp|csharp)$/",
+          "when": "resourceLangId =~ /^(python|javascript|typescript|java|c|cpp|csharp|go|rust|sql)$/",
           "group": "edupeer"
         }
       ]
@@ -122,7 +127,7 @@
         "command": "edupeer.nudgeLine",
         "key": "ctrl+alt+h",
         "mac": "cmd+alt+h",
-        "when": "editorTextFocus && resourceLangId =~ /^(python|javascript|java|c|cpp|csharp)$/"
+        "when": "editorTextFocus && resourceLangId =~ /^(python|javascript|typescript|java|c|cpp|csharp|go|rust|sql)$/"
       }
     ],
     "configuration": {
@@ -153,15 +158,19 @@
     }
   },
   "scripts": {
-    "vscode:prepublish": "npm run compile",
+    "vscode:prepublish": "node -e \"fs.rmSync('out',{recursive:true,force:true})\" && npm run esbuild -- --minify",
+    "esbuild": "esbuild src/extension.ts --bundle --outfile=out/extension.js --external:vscode --format=cjs --platform=node",
     "compile": "tsc -p ./",
     "watch": "tsc -w -p ./",
+    "package": "vsce package --no-dependencies",
     "test": "jest --passWithNoTests"
   },
   "devDependencies": {
     "@types/jest": "^29.5.0",
     "@types/node": "^20.11.0",
     "@types/vscode": "^1.85.0",
+    "@vscode/vsce": "^3.9.2",
+    "esbuild": "^0.28.1",
     "jest": "^29.7.0",
     "ts-jest": "^29.2.0",
     "typescript": "^5.4.0"

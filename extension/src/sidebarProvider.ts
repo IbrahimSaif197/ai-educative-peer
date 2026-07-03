@@ -12,6 +12,7 @@ import {
   looksLikeErrorText,
   questionForMode,
 } from "./pedagogy";
+import { OfflineQueue } from "./offlineQueue";
 
 // How many prior turns are sent with each question (the backend caps
 // again on its side).
@@ -35,8 +36,14 @@ export class EduPeerSidebarProvider implements vscode.WebviewViewProvider {
     private readonly context: vscode.ExtensionContext,
     private readonly api: ApiClient,
     private readonly firebase: FirebaseClient,
-    private readonly auth: AuthManager
+    private readonly auth: AuthManager,
+    private readonly queue?: OfflineQueue
   ) {}
+
+  /** Show or hide the offline banner in the sidebar. */
+  public postOffline(offline: boolean) {
+    this.post({ type: "offline", value: offline });
+  }
 
   public resolveWebviewView(webviewView: vscode.WebviewView): void {
     this.view = webviewView;
@@ -52,6 +59,7 @@ export class EduPeerSidebarProvider implements vscode.WebviewViewProvider {
           await this.sendActiveCode();
           await this.sendBadges();
           this.postAuthState();
+          this.postOffline(!this.api.isAvailable);
           void this.checkReviewDue();
           return;
         case "startReview":
@@ -125,7 +133,8 @@ export class EduPeerSidebarProvider implements vscode.WebviewViewProvider {
     try {
       summary = await this.api.resetSession();
     } catch (err) {
-      console.error("reset failed", err);
+      console.error("reset failed; queuing for when the backend returns", err);
+      await this.queue?.enqueue({ kind: "reset" });
     }
     this.post({ type: "resetDone", summary });
   }
@@ -244,14 +253,27 @@ export class EduPeerSidebarProvider implements vscode.WebviewViewProvider {
     }
     this.post({ type: "loading", value: true });
     try {
-      const res = await this.api.getHint({
+      const request = {
         code: code ?? "",
         question,
         hint_level: 1,
         language: this.lastLanguageId,
         mode,
         history: this.history.slice(-MAX_HISTORY_TURNS),
-      });
+      };
+      let res;
+      try {
+        this.post({ type: "streamStart" });
+        res = await this.api.streamHint(request, (event) => {
+          if (event.type === "delta") {
+            this.post({ type: "streamDelta", text: event.text });
+          }
+        });
+      } catch {
+        // Older backend or interrupted stream: fall back to the plain call.
+        this.post({ type: "streamAbort" });
+        res = await this.api.getHint(request);
+      }
       this.history.push({ role: "student", content: question });
       this.history.push({ role: "tutor", content: res.hint });
       this.post({
@@ -322,6 +344,7 @@ export class EduPeerSidebarProvider implements vscode.WebviewViewProvider {
   <title>EduPeer</title>
 </head>
 <body>
+  <div id="offlineBanner" class="offline hidden">⚠ Backend unreachable — EduPeer is offline. Retrying…</div>
   <header class="header">
     <h2>EduPeer</h2>
     <div class="account">

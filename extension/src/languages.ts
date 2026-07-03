@@ -38,6 +38,22 @@ export const SUPPORTED_LANGUAGES: Record<string, LanguageInfo> = {
     label: "C#",
     lensRegex: /^\s*(public|private|protected|internal|static|class|interface|struct|enum)\b.*(\{|\))\s*\{?\s*$/,
   },
+  typescript: {
+    label: "TypeScript",
+    lensRegex: /^\s*(export\s+)?(async\s+)?(function\s+\w+|class\s+\w+|interface\s+\w+|(const|let|var)\s+\w+\s*=\s*(async\s*)?(\([^)]*\)|\w+)\s*=>)/,
+  },
+  go: {
+    label: "Go",
+    lensRegex: /^\s*func\s+(\(\w+ [^)]+\)\s*)?\w+\s*\(/,
+  },
+  rust: {
+    label: "Rust",
+    lensRegex: /^\s*(pub\s+)?(async\s+)?(fn\s+\w+|struct\s+\w+|enum\s+\w+|impl\b|trait\s+\w+)/,
+  },
+  sql: {
+    label: "SQL",
+    lensRegex: /^\s*(SELECT|INSERT|UPDATE|DELETE|CREATE|WITH)\b/i,
+  },
 };
 
 export const SUPPORTED_LANGUAGE_IDS = Object.keys(SUPPORTED_LANGUAGES);

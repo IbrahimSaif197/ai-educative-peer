@@ -250,3 +250,14 @@ button.small-btn {
   flex-wrap: wrap;
   margin: 4px 0 8px 8px;
 }
+
+.offline {
+  background: var(--vscode-inputValidation-warningBackground, #5a3d00);
+  border: 1px solid var(--vscode-inputValidation-warningBorder, #b58900);
+  padding: 6px 10px;
+  font-size: 0.85em;
+}
+
+.offline.hidden {
+  display: none;
+}

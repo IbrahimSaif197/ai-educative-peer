@@ -12,9 +12,11 @@ _root_env = os.path.join(os.path.dirname(os.path.dirname(__file__)), ".env")
 if os.path.exists(_root_env):
     load_dotenv(_root_env, override=False)
 
+import json
+
 from fastapi import Depends, FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, StreamingResponse
 
 from models import (
     HintRequest,
@@ -168,6 +170,61 @@ async def hint(req: HintRequest, uid: str = Depends(get_current_uid)) -> HintRes
     )
 
     return HintResponse(hint=hint_text, hint_level=level, concept_tags=concept_tags)
+
+
+@app.post("/hint/stream")
+async def hint_stream(req: HintRequest, uid: str = Depends(get_current_uid)):
+    """Server-sent-events variant of /hint: meta, delta..., done."""
+    if not req.question.strip():
+        raise HTTPException(status_code=400, detail="question must not be empty")
+
+    if req.mode == "hint":
+        level = await asyncio.to_thread(
+            store.next_hint_level, uid, code_fingerprint(req.code)
+        )
+    else:
+        level = req.hint_level
+
+    language = normalize_language(req.language)
+    history = [turn.model_dump() for turn in req.history]
+
+    pacing = ""
+    if req.mode == "hint":
+        profile = await _cached_profile(uid)
+        goal = profile.get("goal") or {}
+        pacing = pacing_summary(
+            profile.get("concept_stats"),
+            goal_text=str(goal.get("text", "")) if isinstance(goal, dict) else "",
+        )
+
+    def sse(payload: dict) -> str:
+        return f"data: {json.dumps(payload)}\n\n"
+
+    def event_source():
+        yield sse({"type": "meta", "hint_level": level})
+        done = None
+        try:
+            for event in engine.stream_hint(
+                req.code, req.question, level, language, history, req.mode, pacing
+            ):
+                if event.get("type") == "done":
+                    done = event
+                yield sse(event)
+        except Exception as e:
+            yield sse({"type": "error", "message": f"LLM error: {e}"})
+            return
+        if done is not None:
+            # This generator runs on a worker thread (no event loop), so log
+            # synchronously here instead of via fire_and_forget.
+            is_new_session = store.begin_session(uid)
+            firebase._log_interaction_sync(
+                uid, req.code, req.question, level, done["concept_tags"], language
+            )
+            firebase._update_user_and_award_badges_sync(
+                uid, level, done["concept_tags"], is_new_session, language
+            )
+
+    return StreamingResponse(event_source(), media_type="text/event-stream")
 
 
 @app.post("/reset")

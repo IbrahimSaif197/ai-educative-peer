@@ -2,7 +2,7 @@
 
 A VS Code extension that acts as a Socratic AI tutor for novice programmers. EduPeer guides students toward solutions through progressive hints rather than generating complete code.
 
-**Supported languages:** Python, JavaScript, Java, C, C++, C#.
+**Supported languages:** Python, JavaScript, TypeScript, Java, C, C++, C#, Go, Rust, SQL.
 
 The system consists of:
 
@@ -89,6 +89,12 @@ set to `16`.
 | `edupeer.resetSession`          | Clears chat history and resets hint level to 1.                    |
 | `edupeer.signIn`                | Opens the browser to sign in with Google, GitHub, or email.        |
 | `edupeer.signOut`               | Signs out and switches to a fresh anonymous profile.               |
+| `edupeer.explainError`          | Socratic walkthrough of a pasted error or stack trace.             |
+| `edupeer.explainSelection`      | Plain-language explanation of the selected construct.              |
+| `edupeer.predictOutput`         | Predict-the-output exercise on the selected code.                  |
+| `edupeer.reflectQuiz`           | One-question reflection quiz after you fix a bug.                  |
+| `edupeer.showProgress`          | Progress dashboard: badges, streak, concepts, session notes.       |
+| `edupeer.setGoal`               | Set (or clear) a free-text learning goal that biases the tutor.    |
 
 ## How hinting works
 
@@ -141,9 +147,12 @@ language is one registry entry in `backend/languages.py` plus one in
 Awarded automatically after each interaction:
 
 - **First Question** — 1 total interaction.
-- **Persistent Learner** — 5+ sessions.
-- **Hint Minimiser** — solved at hint level 1 three or more times.
+- **Persistent Learner / Marathon Learner / Scholar** — 5 / 15 / 50 sessions.
+- **Hint Minimiser I/II/III** — solved at hint level 1 three / ten / twenty-five times.
 - **Concept Explorer** — 5+ unique concept tags touched.
+- **3-Day Streak / Week Streak / Month Streak** — consecutive days of practice.
+- **<Language> Learner** — first interaction in each supported language.
+- **Polyglot** — practised in 3+ languages.
 
 ## Endpoints
 
@@ -158,5 +167,62 @@ Awarded automatically after each interaction:
 | POST   | `/scan`          | Scan code for potential issues.                |
 | POST   | `/line-hint`     | Get hint for a specific line.                  |
 | GET    | `/badges`        | Badges for the authenticated user.             |
+| POST   | `/hint/stream`   | SSE variant of `/hint` (meta, delta…, done).   |
+| GET    | `/progress`      | Progress report: badges, streak, concept stats. |
+| GET    | `/review`        | Spaced-review status and micro-exercise.       |
+| POST   | `/goal`          | Set or clear the student's learning goal.      |
 
 All endpoints except `GET /health`, `GET /auth/config`, and `GET /auth/login` require `Authorization: Bearer <Firebase ID token>` in the request header.
+
+## Tutor modes
+
+`POST /hint` takes a `mode` field. Only `hint` advances the 1→2→3 level; the
+rest are one-shot teaching moves the sidebar triggers contextually:
+
+- **hint** — the progressive Socratic flow (with an optional, skippable
+  "explain the code first" step the first time you ask about a file).
+- **reflect** — after you fix a bug (or when a rescan comes back clean), one
+  short quiz question about *why* the fix works.
+- **translate** — after a level-3 pseudocode hint, submit your code
+  translation and get feedback on the translation only.
+- **worked-example** — still stuck at level 3? A fully worked example of the
+  same concept on a *different* problem.
+- **explain-error** — paste a stack trace (auto-detected) or run
+  `EduPeer: Explain This Error`; teaches you to *read* the error, not the fix.
+- **explain-concept** / **predict-output** / **review-exercise** — construct
+  explanations, output-prediction exercises, and spaced-review drills.
+
+The extension also watches for teachable moments: a debugger stop on an
+exception and a failing terminal test run (VS Code 1.93+) each offer to talk
+it through.
+
+## Progress, review and goals
+
+Every hint is tagged with concepts (the model emits them; a keyword fallback
+guards parsing). Per-concept stats feed:
+
+- **Adaptive pacing** — the tutor scaffolds concepts you keep needing deep
+  hints on and stays terse where you solve at level 1.
+- **`EduPeer: Show My Progress`** — dashboard with badges, streak, languages,
+  struggles/strengths and session notes.
+- **Spaced review** — concepts you struggled with 3–7 days ago surface as a
+  🔁 Review button in the sidebar.
+- **Session summaries** — resetting a session stores a 3-bullet "what you
+  learned" note.
+
+## Streaming and offline behaviour
+
+The sidebar streams hints over SSE (`/hint/stream`) and falls back to the
+plain `/hint` call if streaming fails. When the backend is unreachable the
+sidebar shows an offline banner, retries `/health` every 30 s, and queues
+reset/goal mutations to sync when it returns.
+
+## Packaging a VSIX
+
+```bash
+cd extension && npm run package
+```
+
+This bundles the extension with esbuild and produces `edupeer-<version>.vsix`
+(installable via "Extensions: Install from VSIX..."). No publisher account or
+hosted services required.

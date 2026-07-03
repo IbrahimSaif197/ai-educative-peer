@@ -9,6 +9,9 @@ import { registerDebugCompanion } from "./debugCompanion";
 import { registerTestWatcher } from "./testWatcher";
 import { TutorMode, frameConstructExplanation } from "./pedagogy";
 import { buildProgressHtml } from "./progressPanel";
+import { OfflineQueue } from "./offlineQueue";
+
+const HEALTH_RETRY_MS = 30_000;
 
 export async function activate(context: vscode.ExtensionContext) {
   const config = vscode.workspace.getConfiguration("edupeer");
@@ -18,7 +21,23 @@ export async function activate(context: vscode.ExtensionContext) {
   await auth.initialize();
   const api = new ApiClient(backendUrl, auth);
   const firebase = new FirebaseClient(api);
-  const provider = new EduPeerSidebarProvider(context.extensionUri, context, api, firebase, auth);
+  const queue = new OfflineQueue(context.globalState);
+  const provider = new EduPeerSidebarProvider(
+    context.extensionUri, context, api, firebase, auth, queue
+  );
+
+  api.onAvailabilityChange((up) => {
+    provider.postOffline(!up);
+    if (up) {
+      void queue.flush(api);
+    }
+  });
+  const healthTimer = setInterval(() => {
+    if (!api.isAvailable) {
+      void api.health();
+    }
+  }, HEALTH_RETRY_MS);
+  context.subscriptions.push({ dispose: () => clearInterval(healthTimer) });
 
   context.subscriptions.push(
     vscode.window.registerWebviewViewProvider(EduPeerSidebarProvider.viewType, provider, {
@@ -163,16 +182,23 @@ export async function activate(context: vscode.ExtensionContext) {
         placeHolder: "e.g. get comfortable with recursion",
       });
       if (text === undefined) return;
+      const language = vscode.window.activeTextEditor?.document?.languageId ?? "python";
       try {
-        const editor = vscode.window.activeTextEditor;
-        const concepts = await api.setGoal(text, editor?.document?.languageId ?? "python");
+        const concepts = await api.setGoal(text, language);
         vscode.window.showInformationMessage(
           text.trim()
             ? `EduPeer: goal set${concepts.length ? ` (focus: ${concepts.join(", ")})` : ""}.`
             : "EduPeer: goal cleared."
         );
       } catch (err: any) {
-        vscode.window.showErrorMessage(`EduPeer: could not save goal (${err?.message ?? err}).`);
+        if (!api.isAvailable) {
+          await queue.enqueue({ kind: "goal", text, language });
+          vscode.window.showInformationMessage(
+            "EduPeer: backend unreachable — goal saved locally and will sync later."
+          );
+        } else {
+          vscode.window.showErrorMessage(`EduPeer: could not save goal (${err?.message ?? err}).`);
+        }
       }
     })
   );

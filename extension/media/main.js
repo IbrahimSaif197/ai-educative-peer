@@ -15,7 +15,17 @@
   const authBtn = document.getElementById("authBtn");
   const quizBtn = document.getElementById("quiz");
   const reviewBtn = document.getElementById("reviewBtn");
+  const offlineBannerEl = document.getElementById("offlineBanner");
   let signedIn = false;
+  // The in-progress streamed tutor bubble, replaced by the final "hint".
+  let streamingBubble = null;
+
+  function removeStreamingBubble() {
+    if (streamingBubble) {
+      streamingBubble.div.remove();
+      streamingBubble = null;
+    }
+  }
 
   const DEFAULT_PLACEHOLDER = "Describe your error or ask a question...";
   // What the next composer submission means: a normal hint ask, the answer to
@@ -195,7 +205,32 @@
         renderBubble({ role: "user", text: msg.text });
         persist();
         break;
+      case "streamStart": {
+        removeStreamingBubble();
+        const div = document.createElement("div");
+        div.className = "bubble ai";
+        const textNode = document.createElement("div");
+        div.appendChild(textNode);
+        chatEl.appendChild(div);
+        streamingBubble = { div, textNode };
+        break;
+      }
+      case "streamDelta":
+        if (streamingBubble) {
+          streamingBubble.textNode.textContent += msg.text || "";
+          chatEl.scrollTop = chatEl.scrollHeight;
+        }
+        break;
+      case "streamAbort":
+        removeStreamingBubble();
+        break;
+      case "offline":
+        offlineBannerEl.classList.toggle("hidden", !msg.value);
+        sendBtn.disabled = !!msg.value;
+        quizBtn.disabled = !!msg.value;
+        break;
       case "hint": {
+        removeStreamingBubble();
         const mode = msg.mode || "hint";
         renderBubble({
           role: "ai",
@@ -258,6 +293,7 @@
         persist();
         break;
       case "error":
+        removeStreamingBubble();
         renderBubble({ role: "error", text: `Error: ${msg.message}` });
         persist();
         break;

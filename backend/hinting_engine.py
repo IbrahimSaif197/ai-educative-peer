@@ -361,16 +361,16 @@ class HintingEngine:
         known_set = set(known)
         return [str(t).strip().lower() for t in raw if str(t).strip().lower() in known_set][:4]
 
-    def generate_hint(
+    def _prepare_hint_messages(
         self,
         code: str,
         question: str,
         hint_level: int,
-        language: str = "python",
-        history: Optional[List[dict]] = None,
-        mode: str = "hint",
-        pacing: str = "",
-    ) -> Tuple[str, List[str]]:
+        language: str,
+        history: Optional[List[dict]],
+        mode: str,
+        pacing: str,
+    ) -> Tuple[List[dict], str]:
         level = max(1, min(3, int(hint_level)))
         if mode not in MODE_SYSTEM_TEMPLATES:
             mode = "hint"
@@ -399,9 +399,12 @@ class HintingEngine:
                 "content": self._build_user_message(code, question, level, language, mode),
             }
         )
+        return messages, mode
 
-        raw_text = self._chat_messages(messages, 400).strip()
-        hint_text, raw_tags = self._parse_concepts_line(raw_text)
+    def _finalize_hint(
+        self, raw_text: str, code: str, question: str, language: str, mode: str
+    ) -> Tuple[str, List[str]]:
+        hint_text, raw_tags = self._parse_concepts_line(raw_text.strip())
         if mode == "hint" and "What do you think should happen next?" not in hint_text:
             hint_text = hint_text.rstrip() + "\n\nWhat do you think should happen next?"
         known = set(concepts_for(language))
@@ -409,6 +412,62 @@ class HintingEngine:
         if not tags:
             tags = self._extract_concept_tags(code, question, hint_text, language)
         return hint_text, tags
+
+    def generate_hint(
+        self,
+        code: str,
+        question: str,
+        hint_level: int,
+        language: str = "python",
+        history: Optional[List[dict]] = None,
+        mode: str = "hint",
+        pacing: str = "",
+    ) -> Tuple[str, List[str]]:
+        messages, mode = self._prepare_hint_messages(
+            code, question, hint_level, language, history, mode, pacing
+        )
+        raw_text = self._chat_messages(messages, 400)
+        return self._finalize_hint(raw_text, code, question, language, mode)
+
+    # How many trailing characters are withheld from streaming so the
+    # "[concepts: ...]" footer never flashes in the UI.
+    STREAM_HOLDBACK_CHARS = 40
+
+    def stream_hint(
+        self,
+        code: str,
+        question: str,
+        hint_level: int,
+        language: str = "python",
+        history: Optional[List[dict]] = None,
+        mode: str = "hint",
+        pacing: str = "",
+    ):
+        """Yield {"type": "delta", "text"} events followed by one
+        {"type": "done", "hint", "concept_tags"} event."""
+        messages, mode = self._prepare_hint_messages(
+            code, question, hint_level, language, history, mode, pacing
+        )
+        stream = self.client.chat.completions.create(
+            model=MODEL_NAME,
+            max_tokens=400,
+            messages=messages,
+            stream=True,
+        )
+        full = ""
+        emitted = 0
+        for chunk in stream:
+            try:
+                delta = chunk.choices[0].delta.content or ""
+            except (AttributeError, IndexError):
+                continue
+            full += delta
+            safe_len = max(0, len(full) - self.STREAM_HOLDBACK_CHARS)
+            if safe_len > emitted:
+                yield {"type": "delta", "text": full[emitted:safe_len]}
+                emitted = safe_len
+        hint_text, tags = self._finalize_hint(full, code, question, language, mode)
+        yield {"type": "done", "hint": hint_text, "concept_tags": tags}
 
 
 def build_engine() -> HintingEngine:

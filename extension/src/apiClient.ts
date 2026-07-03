@@ -65,18 +65,71 @@ export interface ReviewResponse {
   exercise: string;
 }
 
+export interface SseEvent {
+  type: string;
+  [key: string]: unknown;
+}
+
+/**
+ * Pull complete `data: {...}` SSE events out of buffer+chunk; returns the
+ * parsed events and the unconsumed remainder.
+ */
+export function parseSseChunk(buffer: string, chunk: string): { events: SseEvent[]; rest: string } {
+  let data = buffer + chunk;
+  const events: SseEvent[] = [];
+  let idx: number;
+  while ((idx = data.indexOf("\n\n")) >= 0) {
+    const block = data.slice(0, idx);
+    data = data.slice(idx + 2);
+    for (const line of block.split("\n")) {
+      if (!line.startsWith("data: ")) continue;
+      try {
+        events.push(JSON.parse(line.slice(6)) as SseEvent);
+      } catch {
+        /* skip malformed events */
+      }
+    }
+  }
+  return { events, rest: data };
+}
+
 export class ApiClient {
+  private available = true;
+  private readonly availabilityListeners: Array<(up: boolean) => void> = [];
+
   constructor(private baseUrl: string, private readonly tokens: TokenProvider) {}
 
   setBaseUrl(url: string) {
     this.baseUrl = url.replace(/\/$/, "");
   }
 
+  get isAvailable(): boolean {
+    return this.available;
+  }
+
+  onAvailabilityChange(listener: (up: boolean) => void): void {
+    this.availabilityListeners.push(listener);
+  }
+
+  private setAvailable(up: boolean): void {
+    if (this.available === up) return;
+    this.available = up;
+    for (const listener of this.availabilityListeners) {
+      try {
+        listener(up);
+      } catch {
+        /* listeners must not break the client */
+      }
+    }
+  }
+
   async health(): Promise<boolean> {
     try {
       const res = await fetch(`${this.baseUrl}/health`, { method: "GET" });
+      this.setAvailable(res.ok);
       return res.ok;
     } catch {
+      this.setAvailable(false);
       return false;
     }
   }
@@ -90,11 +143,18 @@ export class ApiClient {
         headers: { ...(init.headers as Record<string, string> | undefined), Authorization: `Bearer ${token}` },
       });
     };
-    let res = await attempt(false);
-    if (res.status === 401) {
-      res = await attempt(true);
+    try {
+      let res = await attempt(false);
+      if (res.status === 401) {
+        res = await attempt(true);
+      }
+      this.setAvailable(true);
+      return res;
+    } catch (err) {
+      // fetch only throws on network-level failures: the backend is down.
+      this.setAvailable(false);
+      throw err;
     }
-    return res;
   }
 
   private async authedJson(path: string, body: unknown): Promise<Response> {
@@ -114,16 +174,59 @@ export class ApiClient {
     return (await res.json()) as HintResponse;
   }
 
-  /** Resets the session; resolves to the "what you learned" summary ("" if none). */
-  async resetSession(): Promise<string> {
-    try {
-      const res = await this.authedFetch("/reset", { method: "POST" });
-      if (!res.ok) return "";
-      const data = (await res.json()) as { summary?: string };
-      return data.summary ?? "";
-    } catch {
-      return "";
+  /**
+   * Streaming variant of getHint. Calls onEvent for meta/delta events and
+   * resolves with the final hint. Throws when streaming is unavailable so the
+   * caller can fall back to getHint.
+   */
+  async streamHint(
+    req: HintRequest,
+    onEvent: (event: SseEvent) => void
+  ): Promise<HintResponse> {
+    const res = await this.authedJson("/hint/stream", req);
+    if (!res.ok || !res.body) {
+      throw new Error(`stream failed (${res.status})`);
     }
+    const reader = (res.body as any).getReader();
+    const decoder = new TextDecoder();
+    let buffer = "";
+    let level = req.hint_level ?? 1;
+    let done: SseEvent | undefined;
+    while (true) {
+      const { value, done: eof } = await reader.read();
+      if (eof) break;
+      const parsed = parseSseChunk(buffer, decoder.decode(value, { stream: true }));
+      buffer = parsed.rest;
+      for (const event of parsed.events) {
+        if (event.type === "error") {
+          throw new Error(String(event.message ?? "stream error"));
+        }
+        if (event.type === "meta") {
+          level = Number(event.hint_level ?? level);
+        }
+        if (event.type === "done") {
+          done = event;
+        }
+        onEvent(event);
+      }
+    }
+    if (!done) {
+      throw new Error("stream ended without a done event");
+    }
+    return {
+      hint: String(done.hint ?? ""),
+      hint_level: level,
+      concept_tags: (done.concept_tags as string[]) ?? [],
+    };
+  }
+
+  /** Resets the session; resolves to the "what you learned" summary ("" if none).
+   * Throws on network failure so callers can queue the reset for later. */
+  async resetSession(): Promise<string> {
+    const res = await this.authedFetch("/reset", { method: "POST" });
+    if (!res.ok) return "";
+    const data = (await res.json()) as { summary?: string };
+    return data.summary ?? "";
   }
 
   async getProgress(): Promise<ProgressReport> {

@@ -7,9 +7,10 @@ import {
 } from "../languages";
 
 describe("language registry", () => {
-  it("supports the six intro-course languages", () => {
+  it("supports the ten tutoring languages", () => {
     expect(SUPPORTED_LANGUAGE_IDS.sort()).toEqual(
-      ["c", "cpp", "csharp", "java", "javascript", "python"].sort()
+      ["c", "cpp", "csharp", "go", "java", "javascript",
+       "python", "rust", "sql", "typescript"].sort()
     );
   });
 

@@ -202,6 +202,64 @@ class TestTutorModesEndpoint:
         assert res.status_code == 422
 
 
+class TestHintStream:
+    def _events(self, body: str):
+        return [
+            __import__("json").loads(line[len("data: "):])
+            for line in body.splitlines()
+            if line.startswith("data: ")
+        ]
+
+    def test_stream_emits_meta_deltas_and_done(self, client, monkeypatch):
+        import main as app_main
+        app_main._profile_cache.clear()
+
+        def fake_stream(code, question, level, language, history, mode, pacing):
+            yield {"type": "delta", "text": "Look at "}
+            yield {"type": "delta", "text": "your loop."}
+            yield {"type": "done", "hint": "Look at your loop. What do you think should happen next?",
+                   "concept_tags": ["loops"]}
+
+        monkeypatch.setattr(app_main.engine, "stream_hint", fake_stream)
+        res = client.post("/hint/stream", json=VALID_HINT_PAYLOAD)
+        assert res.status_code == 200
+        assert res.headers["content-type"].startswith("text/event-stream")
+        events = self._events(res.text)
+        assert events[0] == {"type": "meta", "hint_level": 1}
+        assert events[1]["type"] == "delta"
+        assert events[-1]["type"] == "done"
+        assert events[-1]["concept_tags"] == ["loops"]
+
+    def test_stream_advances_hint_level(self, client, monkeypatch):
+        import main as app_main
+        app_main._profile_cache.clear()
+
+        def fake_stream(*args, **kwargs):
+            yield {"type": "done", "hint": "h", "concept_tags": []}
+
+        monkeypatch.setattr(app_main.engine, "stream_hint", fake_stream)
+        client.post("/hint/stream", json=VALID_HINT_PAYLOAD)
+        res = client.post("/hint/stream", json=VALID_HINT_PAYLOAD)
+        assert self._events(res.text)[0]["hint_level"] == 2
+
+    def test_stream_llm_failure_yields_error_event(self, client, monkeypatch):
+        import main as app_main
+        app_main._profile_cache.clear()
+
+        def broken_stream(*args, **kwargs):
+            raise RuntimeError("boom")
+            yield  # pragma: no cover
+
+        monkeypatch.setattr(app_main.engine, "stream_hint", broken_stream)
+        res = client.post("/hint/stream", json=VALID_HINT_PAYLOAD)
+        events = self._events(res.text)
+        assert events[-1]["type"] == "error"
+
+    def test_stream_empty_question_400(self, client):
+        res = client.post("/hint/stream", json={**VALID_HINT_PAYLOAD, "question": " "})
+        assert res.status_code == 400
+
+
 class TestProgressEndpoints:
     def test_progress_returns_shape_for_new_user(self, client, monkeypatch):
         import main as app_main

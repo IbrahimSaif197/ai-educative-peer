@@ -19,15 +19,21 @@ class TestNormalizeLanguage:
         "alias,expected",
         [
             ("js", "javascript"),
-            ("typescript", "javascript"),
+            ("ts", "typescript"),
+            ("typescriptreact", "typescript"),
             ("c++", "cpp"),
             ("c#", "csharp"),
             ("cs", "csharp"),
             ("py", "python"),
+            ("golang", "go"),
+            ("rs", "rust"),
         ],
     )
     def test_aliases(self, alias, expected):
         assert normalize_language(alias) == expected
+
+    def test_typescript_is_first_class(self):
+        assert normalize_language("typescript") == "typescript"
 
     def test_case_and_whitespace_insensitive(self):
         assert normalize_language("  Java ") == "java"
@@ -39,8 +45,10 @@ class TestNormalizeLanguage:
 
 
 class TestRegistry:
-    def test_supports_at_least_six_languages(self):
-        assert len(LANGUAGES) >= 6
+    def test_supports_at_least_ten_languages(self):
+        assert len(LANGUAGES) >= 10
+        for lang_id in ("typescript", "go", "rust", "sql"):
+            assert lang_id in LANGUAGES
 
     @pytest.mark.parametrize("lang_id", list(LANGUAGES.keys()))
     def test_entries_are_complete(self, lang_id):
