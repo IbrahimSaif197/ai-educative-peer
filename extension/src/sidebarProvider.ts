@@ -52,6 +52,10 @@ export class EduPeerSidebarProvider implements vscode.WebviewViewProvider {
           await this.sendActiveCode();
           await this.sendBadges();
           this.postAuthState();
+          void this.checkReviewDue();
+          return;
+        case "startReview":
+          await this.startReview();
           return;
         case "askHint":
           await this.handleAskFromWebview(
@@ -117,12 +121,48 @@ export class EduPeerSidebarProvider implements vscode.WebviewViewProvider {
     this.seenFingerprints.clear();
     this.pendingAsk = undefined;
     this.pendingPredict = undefined;
+    let summary = "";
     try {
-      await this.api.resetSession();
+      summary = await this.api.resetSession();
     } catch (err) {
       console.error("reset failed", err);
     }
-    this.post({ type: "resetDone" });
+    this.post({ type: "resetDone", summary });
+  }
+
+  /** Once per webview load, surface the Review button when a review is due. */
+  private async checkReviewDue() {
+    const res = await this.api.getReview(this.lastLanguageId, false);
+    if (res.due) {
+      this.post({ type: "reviewDue", concepts: res.concepts });
+    }
+  }
+
+  private async startReview() {
+    this.post({ type: "loading", value: true });
+    try {
+      const res = await this.api.getReview(this.lastLanguageId, true);
+      if (!res.due || !res.exercise) {
+        this.post({
+          type: "hint",
+          hint: "Nothing to review right now — nice work staying on top of things!",
+          hint_level: 1,
+          concept_tags: [],
+          mode: "review-exercise",
+        });
+        return;
+      }
+      this.history.push({ role: "tutor", content: res.exercise });
+      this.post({
+        type: "hint",
+        hint: res.exercise,
+        hint_level: 1,
+        concept_tags: res.concepts,
+        mode: "review-exercise",
+      });
+    } finally {
+      this.post({ type: "loading", value: false });
+    }
   }
 
   /** Start a predict-the-output exercise for the given snippet. */
@@ -294,6 +334,7 @@ export class EduPeerSidebarProvider implements vscode.WebviewViewProvider {
     <div class="code-header">
       <span id="fileName">No active file</span>
       <span id="langChip" class="lang-chip hidden"></span>
+      <button id="reviewBtn" class="small-btn hidden" title="A spaced-review exercise is ready">🔁 Review</button>
       <button id="refreshCode" class="small-btn">Refresh</button>
     </div>
     <pre id="codeSnippet" class="code"></pre>

@@ -1,6 +1,8 @@
 import os
 import asyncio
-from typing import List
+import time
+from datetime import datetime, timezone
+from typing import Dict, List, Tuple
 
 from dotenv import load_dotenv
 
@@ -24,11 +26,13 @@ from models import (
     LineHintRequest,
     LineHintResponse,
     MigrateRequest,
+    GoalRequest,
 )
 from auth import get_current_uid, verify_token
 from hinting_engine import build_engine
 from firebase_service import FirebaseService
 from languages import normalize_language
+from progress import build_progress, pacing_summary, review_due_concepts
 from session_store import build_session_store, code_fingerprint
 
 
@@ -45,6 +49,26 @@ app.add_middleware(
 engine = build_engine()
 firebase = FirebaseService()
 store = build_session_store(firebase)
+
+# Short-lived per-user profile cache so /hint doesn't hit Firestore every call.
+PROFILE_TTL_SECONDS = 60.0
+_profile_cache: Dict[str, Tuple[float, dict]] = {}
+
+
+def _utc_today():
+    return datetime.now(timezone.utc).date()
+
+
+async def _cached_profile(uid: str) -> dict:
+    now = time.monotonic()
+    hit = _profile_cache.get(uid)
+    if hit and now - hit[0] < PROFILE_TTL_SECONDS:
+        return hit[1]
+    data = await asyncio.to_thread(firebase.get_user_profile_sync, uid)
+    _profile_cache[uid] = (now, data)
+    if len(_profile_cache) > 5000:
+        _profile_cache.clear()
+    return data
 
 
 @app.get("/health", response_model=HealthResponse)
@@ -113,10 +137,20 @@ async def hint(req: HintRequest, uid: str = Depends(get_current_uid)) -> HintRes
 
     language = normalize_language(req.language)
     history = [turn.model_dump() for turn in req.history]
+
+    pacing = ""
+    if req.mode == "hint":
+        profile = await _cached_profile(uid)
+        goal = profile.get("goal") or {}
+        pacing = pacing_summary(
+            profile.get("concept_stats"),
+            goal_text=str(goal.get("text", "")) if isinstance(goal, dict) else "",
+        )
+
     try:
         hint_text, concept_tags = await asyncio.to_thread(
             engine.generate_hint,
-            req.code, req.question, level, language, history, req.mode,
+            req.code, req.question, level, language, history, req.mode, pacing,
         )
     except Exception as e:
         raise HTTPException(status_code=502, detail=f"LLM error: {e}")
@@ -138,8 +172,66 @@ async def hint(req: HintRequest, uid: str = Depends(get_current_uid)) -> HintRes
 
 @app.post("/reset")
 async def reset_session(uid: str = Depends(get_current_uid)):
+    summary = ""
+    interactions = await asyncio.to_thread(firebase.get_recent_interactions_sync, uid, 10)
+    if interactions:
+        try:
+            summary = await asyncio.to_thread(engine.summarize_session, interactions)
+        except Exception as e:
+            print(f"[reset] summary failed: {e}")
+            summary = ""
+        if summary:
+            await asyncio.to_thread(firebase.append_session_summary_sync, uid, summary)
     await asyncio.to_thread(store.reset, uid)
-    return {"status": "reset", "user_id": uid}
+    _profile_cache.pop(uid, None)
+    return {"status": "reset", "user_id": uid, "summary": summary}
+
+
+@app.get("/progress")
+async def get_progress(uid: str = Depends(get_current_uid)):
+    data = await asyncio.to_thread(firebase.get_user_profile_sync, uid)
+    return build_progress(data, _utc_today())
+
+
+@app.get("/review")
+async def get_review(
+    language: str = "python",
+    exercise: bool = True,
+    uid: str = Depends(get_current_uid),
+):
+    data = await _cached_profile(uid)
+    concepts = review_due_concepts(data.get("concept_stats"), _utc_today())
+    if not concepts:
+        return {"due": False, "concepts": [], "exercise": ""}
+    text = ""
+    if exercise:
+        question = (
+            "Please give me one small review exercise about: " + ", ".join(concepts)
+        )
+        try:
+            text, _ = await asyncio.to_thread(
+                engine.generate_hint,
+                "", question, 1, normalize_language(language), None, "review-exercise",
+            )
+        except Exception as e:
+            raise HTTPException(status_code=502, detail=f"LLM error: {e}")
+    return {"due": True, "concepts": concepts, "exercise": text}
+
+
+@app.post("/goal")
+async def set_goal(req: GoalRequest, uid: str = Depends(get_current_uid)):
+    text = req.text.strip()
+    concepts: List[str] = []
+    if text:
+        try:
+            concepts = await asyncio.to_thread(
+                engine.map_goal_to_concepts, text, normalize_language(req.language)
+            )
+        except Exception as e:
+            print(f"[goal] concept mapping failed: {e}")
+    await asyncio.to_thread(firebase.set_goal_sync, uid, text, concepts)
+    _profile_cache.pop(uid, None)
+    return {"status": "ok", "goal": text, "concepts": concepts}
 
 
 @app.get("/badges")

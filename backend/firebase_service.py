@@ -7,13 +7,31 @@ import firebase_admin
 from firebase_admin import credentials, firestore
 
 
+from languages import LANGUAGES
+
 BADGE_FIRST_QUESTION = "First Question"
 BADGE_PERSISTENT_LEARNER = "Persistent Learner"
 BADGE_HINT_MINIMISER = "Hint Minimiser"
 BADGE_CONCEPT_EXPLORER = "Concept Explorer"
+BADGE_STREAK_3 = "3-Day Streak"
+BADGE_STREAK_7 = "Week Streak"
+BADGE_STREAK_30 = "Month Streak"
+BADGE_POLYGLOT = "Polyglot"
+BADGE_HINT_MINIMISER_2 = "Hint Minimiser II"
+BADGE_HINT_MINIMISER_3 = "Hint Minimiser III"
+BADGE_MARATHON = "Marathon Learner"
+BADGE_SCHOLAR = "Scholar"
 
 
-def _apply_badge_rules(badges, total_interactions, sessions, solved_at_level_1, concept_tags_seen):
+def _apply_badge_rules(
+    badges,
+    total_interactions,
+    sessions,
+    solved_at_level_1,
+    concept_tags_seen,
+    streak_days=0,
+    languages_used=(),
+):
     """Return the badge list with any newly-earned badges appended."""
     result = list(badges)
 
@@ -25,10 +43,29 @@ def _apply_badge_rules(badges, total_interactions, sessions, solved_at_level_1, 
         award(BADGE_FIRST_QUESTION)
     if sessions >= 5:
         award(BADGE_PERSISTENT_LEARNER)
+    if sessions >= 15:
+        award(BADGE_MARATHON)
+    if sessions >= 50:
+        award(BADGE_SCHOLAR)
     if solved_at_level_1 >= 3:
         award(BADGE_HINT_MINIMISER)
+    if solved_at_level_1 >= 10:
+        award(BADGE_HINT_MINIMISER_2)
+    if solved_at_level_1 >= 25:
+        award(BADGE_HINT_MINIMISER_3)
     if len(concept_tags_seen) >= 5:
         award(BADGE_CONCEPT_EXPLORER)
+    if streak_days >= 3:
+        award(BADGE_STREAK_3)
+    if streak_days >= 7:
+        award(BADGE_STREAK_7)
+    if streak_days >= 30:
+        award(BADGE_STREAK_30)
+    known_languages = [l for l in languages_used if l in LANGUAGES]
+    for lang_id in known_languages:
+        award(f"{LANGUAGES[lang_id]['display_name']} Learner")
+    if len(known_languages) >= 3:
+        award(BADGE_POLYGLOT)
     return result
 
 
@@ -188,7 +225,8 @@ class FirebaseService:
             )
 
             badges = _apply_badge_rules(
-                badges, total_interactions, sessions, solved_at_level_1, concept_tags_seen
+                badges, total_interactions, sessions, solved_at_level_1, concept_tags_seen,
+                streak_days=streak_days, languages_used=languages_used,
             )
 
             user_ref.set(
@@ -269,6 +307,67 @@ class FirebaseService:
         except RuntimeError:
             pass
 
+    def get_user_profile_sync(self, user_id: str) -> Dict[str, Any]:
+        """The full users doc, or {} when unavailable."""
+        if not self.enabled:
+            return {}
+        try:
+            snap = self._client.collection("users").document(user_id).get()
+            return snap.to_dict() or {} if snap.exists else {}
+        except Exception as e:
+            print(f"[firebase] read profile failed: {e}")
+            return {}
+
+    def set_goal_sync(self, user_id: str, text: str, concepts: List[str]) -> None:
+        if not self.enabled:
+            return
+        try:
+            goal = (
+                {"text": text, "concepts": concepts, "set_at": _today().isoformat()}
+                if text.strip()
+                else None
+            )
+            self._client.collection("users").document(user_id).set(
+                {"goal": goal, "updated_at": firestore.SERVER_TIMESTAMP}, merge=True
+            )
+        except Exception as e:
+            print(f"[firebase] set goal failed: {e}")
+
+    def get_recent_interactions_sync(self, user_id: str, limit: int = 10) -> List[Dict[str, Any]]:
+        if not self.enabled:
+            return []
+        try:
+            query = self._client.collection("interactions").where("user_id", "==", user_id)
+            try:
+                docs = list(
+                    query.order_by("timestamp", direction=firestore.Query.DESCENDING)
+                    .limit(limit)
+                    .stream()
+                )
+            except Exception:
+                # Ordered query needs a composite index; fall back to unordered.
+                docs = list(query.limit(limit).stream())
+            return [d.to_dict() or {} for d in docs]
+        except Exception as e:
+            print(f"[firebase] read interactions failed: {e}")
+            return []
+
+    def append_session_summary_sync(self, user_id: str, summary: str) -> None:
+        if not self.enabled or not summary.strip():
+            return
+        try:
+            ref = self._client.collection("users").document(user_id)
+            snap = ref.get()
+            data = snap.to_dict() or {} if snap.exists else {}
+            summaries = [s for s in data.get("session_summaries", []) if isinstance(s, dict)]
+            summaries.append({"text": summary, "date": _today().isoformat()})
+            ref.set(
+                {"session_summaries": summaries[-20:], "updated_at": firestore.SERVER_TIMESTAMP},
+                merge=True,
+            )
+        except Exception as e:
+            print(f"[firebase] append summary failed: {e}")
+
     def get_user_badges_sync(self, user_id: str) -> List[str]:
         if not self.enabled:
             return []
@@ -301,7 +400,6 @@ class FirebaseService:
             solved_1 = int(src.get("solved_at_level_1", 0)) + int(tgt.get("solved_at_level_1", 0))
             tags = list(set(list(src.get("concept_tags_seen", [])) + list(tgt.get("concept_tags_seen", []))))
             badges = list(set(list(src.get("badges", [])) + list(tgt.get("badges", []))))
-            badges = _apply_badge_rules(badges, total, sessions, solved_1, tags)
             concept_stats = _merge_concept_stats(
                 src.get("concept_stats"), tgt.get("concept_stats")
             )
@@ -311,6 +409,10 @@ class FirebaseService:
             streak_days = max(int(src.get("streak_days", 0)), int(tgt.get("streak_days", 0)))
             last_active_date = (
                 max(src.get("last_active_date") or "", tgt.get("last_active_date") or "") or None
+            )
+            badges = _apply_badge_rules(
+                badges, total, sessions, solved_1, tags,
+                streak_days=streak_days, languages_used=languages_used,
             )
 
             tgt_ref.set(

@@ -130,6 +130,55 @@ class TestBadgeLogic:
         assert "Concept Explorer" in result
 
 
+class TestExpandedBadgeRules:
+    def _rules(self, **kwargs):
+        from firebase_service import _apply_badge_rules
+        defaults = dict(
+            badges=[], total_interactions=1, sessions=1,
+            solved_at_level_1=0, concept_tags_seen=[],
+        )
+        defaults.update(kwargs)
+        return _apply_badge_rules(
+            defaults["badges"], defaults["total_interactions"], defaults["sessions"],
+            defaults["solved_at_level_1"], defaults["concept_tags_seen"],
+            streak_days=defaults.get("streak_days", 0),
+            languages_used=defaults.get("languages_used", ()),
+        )
+
+    def test_streak_badges(self):
+        assert "3-Day Streak" in self._rules(streak_days=3)
+        assert "Week Streak" in self._rules(streak_days=7)
+        assert "Month Streak" in self._rules(streak_days=30)
+        assert "3-Day Streak" not in self._rules(streak_days=2)
+
+    def test_per_language_badges(self):
+        badges = self._rules(languages_used=["python", "java"])
+        assert "Python Learner" in badges
+        assert "Java Learner" in badges
+
+    def test_polyglot_at_three_languages(self):
+        assert "Polyglot" in self._rules(languages_used=["python", "java", "c"])
+        assert "Polyglot" not in self._rules(languages_used=["python", "java"])
+
+    def test_hint_minimiser_tiers(self):
+        assert "Hint Minimiser II" in self._rules(solved_at_level_1=10)
+        assert "Hint Minimiser III" in self._rules(solved_at_level_1=25)
+        assert "Hint Minimiser II" not in self._rules(solved_at_level_1=9)
+
+    def test_session_tiers(self):
+        assert "Marathon Learner" in self._rules(sessions=15)
+        assert "Scholar" in self._rules(sessions=50)
+
+    def test_unknown_language_ignored(self):
+        badges = self._rules(languages_used=["klingon"])
+        assert not any("Klingon" in b for b in badges)
+
+    def test_legacy_call_without_new_args_still_works(self):
+        from firebase_service import _apply_badge_rules
+        badges = _apply_badge_rules([], 1, 1, 0, [])
+        assert "First Question" in badges
+
+
 class TestConceptStatsHelpers:
     def test_new_concept_creates_entry(self):
         from datetime import date

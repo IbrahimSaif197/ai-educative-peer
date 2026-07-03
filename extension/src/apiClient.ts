@@ -40,6 +40,31 @@ export interface LineHintResponse {
   concept: string;
 }
 
+export interface ConceptStat {
+  concept: string;
+  encounters: number;
+  avg_level: number;
+}
+
+export interface ProgressReport {
+  badges: string[];
+  total_interactions: number;
+  sessions: number;
+  streak_days: number;
+  languages_used: string[];
+  goal: { text: string; concepts: string[] } | null;
+  concept_struggles: ConceptStat[];
+  concept_strengths: ConceptStat[];
+  session_summaries: Array<{ text: string; date: string }>;
+  review_due: boolean;
+}
+
+export interface ReviewResponse {
+  due: boolean;
+  concepts: string[];
+  exercise: string;
+}
+
 export class ApiClient {
   constructor(private baseUrl: string, private readonly tokens: TokenProvider) {}
 
@@ -89,8 +114,44 @@ export class ApiClient {
     return (await res.json()) as HintResponse;
   }
 
-  async resetSession(): Promise<void> {
-    await this.authedFetch("/reset", { method: "POST" });
+  /** Resets the session; resolves to the "what you learned" summary ("" if none). */
+  async resetSession(): Promise<string> {
+    try {
+      const res = await this.authedFetch("/reset", { method: "POST" });
+      if (!res.ok) return "";
+      const data = (await res.json()) as { summary?: string };
+      return data.summary ?? "";
+    } catch {
+      return "";
+    }
+  }
+
+  async getProgress(): Promise<ProgressReport> {
+    const res = await this.authedFetch("/progress");
+    if (!res.ok) {
+      throw new Error(`progress failed (${res.status})`);
+    }
+    return (await res.json()) as ProgressReport;
+  }
+
+  async getReview(language = "python", exercise = true): Promise<ReviewResponse> {
+    try {
+      const params = new URLSearchParams({ language, exercise: String(exercise) });
+      const res = await this.authedFetch(`/review?${params}`);
+      if (!res.ok) return { due: false, concepts: [], exercise: "" };
+      return (await res.json()) as ReviewResponse;
+    } catch {
+      return { due: false, concepts: [], exercise: "" };
+    }
+  }
+
+  async setGoal(text: string, language = "python"): Promise<string[]> {
+    const res = await this.authedJson("/goal", { text, language });
+    if (!res.ok) {
+      throw new Error(`goal failed (${res.status})`);
+    }
+    const data = (await res.json()) as { concepts?: string[] };
+    return data.concepts ?? [];
   }
 
   async scanCode(code: string, language = "python"): Promise<ScanResponse> {

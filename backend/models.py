@@ -82,3 +82,8 @@ class LineHintResponse(BaseModel):
 class MigrateRequest(BaseModel):
     old_id_token: Optional[str] = None
     legacy_user_id: Optional[str] = None
+
+
+class GoalRequest(BaseModel):
+    text: str = Field(default="", description="Free-text learning goal; empty clears it")
+    language: str = Field(default="python", description="Language context for concept mapping")

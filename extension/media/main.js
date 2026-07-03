@@ -14,6 +14,7 @@
   const accountLabelEl = document.getElementById("accountLabel");
   const authBtn = document.getElementById("authBtn");
   const quizBtn = document.getElementById("quiz");
+  const reviewBtn = document.getElementById("reviewBtn");
   let signedIn = false;
 
   const DEFAULT_PLACEHOLDER = "Describe your error or ask a question...";
@@ -158,6 +159,11 @@
     expectReflectAnswer = true;
     vscode.postMessage({ type: "askHint", question: "", code: currentCode, mode: "reflect" });
   });
+
+  reviewBtn.addEventListener("click", () => {
+    reviewBtn.classList.add("hidden");
+    vscode.postMessage({ type: "startReview" });
+  });
   inputEl.addEventListener("keydown", (e) => {
     if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) {
       e.preventDefault();
@@ -266,11 +272,17 @@
         accountLabelEl.textContent = msg.label;
         authBtn.textContent = signedIn ? "Sign out" : "Sign in";
         break;
+      case "reviewDue":
+        reviewBtn.classList.remove("hidden");
+        break;
       case "resetDone":
         chatEl.innerHTML = "";
         setComposerMode("hint");
         expectReflectAnswer = false;
         persist();
+        if (msg.summary) {
+          renderBubble({ role: "ai", text: msg.summary, meta: "What you learned this session" });
+        }
         renderBubble({ role: "ai", text: "Session reset. Hint level starts over at 1." });
         persist();
         break;

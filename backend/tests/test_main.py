@@ -202,6 +202,85 @@ class TestTutorModesEndpoint:
         assert res.status_code == 422
 
 
+class TestProgressEndpoints:
+    def test_progress_returns_shape_for_new_user(self, client, monkeypatch):
+        import main as app_main
+        app_main._profile_cache.clear()
+        monkeypatch.setattr(app_main.firebase, "get_user_profile_sync", lambda uid: {})
+        res = client.get("/progress")
+        assert res.status_code == 200
+        data = res.json()
+        assert data["badges"] == []
+        assert data["review_due"] is False
+
+    def test_review_not_due_returns_no_exercise(self, client):
+        import main as app_main
+        app_main._profile_cache.clear()
+        res = client.get("/review")
+        assert res.status_code == 200
+        assert res.json() == {"due": False, "concepts": [], "exercise": ""}
+
+    def test_review_due_generates_exercise(self, client, monkeypatch, _patch_groq_client):
+        import main as app_main
+        from datetime import date, timedelta
+        app_main._profile_cache.clear()
+        struggled = (app_main._utc_today() - timedelta(days=4)).isoformat()
+        monkeypatch.setattr(
+            app_main.firebase,
+            "get_user_profile_sync",
+            lambda uid: {"concept_stats": {"loops": {
+                "encounters": 3, "level_sum": 7, "max_level": 3,
+                "last_seen": struggled, "last_struggled": struggled}}},
+        )
+        res = client.get("/review?language=python")
+        assert res.status_code == 200
+        data = res.json()
+        assert data["due"] is True
+        assert data["concepts"] == ["loops"]
+        assert data["exercise"]
+
+    def test_goal_round_trip(self, client, monkeypatch):
+        import main as app_main
+        app_main._profile_cache.clear()
+        saved = {}
+        monkeypatch.setattr(
+            app_main.firebase, "set_goal_sync",
+            lambda uid, text, concepts: saved.update(uid=uid, text=text, concepts=concepts),
+        )
+        monkeypatch.setattr(
+            app_main.engine, "map_goal_to_concepts", lambda text, lang: ["recursion"]
+        )
+        res = client.post("/goal", json={"text": "get better at recursion"})
+        assert res.status_code == 200
+        assert res.json()["concepts"] == ["recursion"]
+        assert saved["text"] == "get better at recursion"
+
+    def test_reset_returns_summary_field(self, client):
+        res = client.post("/reset")
+        assert res.status_code == 200
+        assert "summary" in res.json()
+
+    def test_reset_summarizes_recent_interactions(self, client, monkeypatch):
+        import main as app_main
+        monkeypatch.setattr(
+            app_main.firebase, "get_recent_interactions_sync",
+            lambda uid, limit=10: [{"question": "why loop?", "concept_tags": ["loops"],
+                                    "hint_level_used": 2}],
+        )
+        monkeypatch.setattr(
+            app_main.engine, "summarize_session",
+            lambda items: "- You practised loops",
+        )
+        appended = {}
+        monkeypatch.setattr(
+            app_main.firebase, "append_session_summary_sync",
+            lambda uid, s: appended.update(uid=uid, s=s),
+        )
+        res = client.post("/reset")
+        assert res.json()["summary"] == "- You practised loops"
+        assert appended["s"] == "- You practised loops"
+
+
 class TestHintLanguageAndHistory:
     def test_language_field_accepted(self, client, _patch_groq_client):
         payload = {**VALID_HINT_PAYLOAD, "language": "java", "code": "int x = 1;"}

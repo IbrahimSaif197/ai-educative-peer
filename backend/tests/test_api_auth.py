@@ -55,7 +55,7 @@ def test_auth_config_stays_public(client):
 def test_reset_uses_uid_from_token(signed_in):
     res = signed_in.post("/reset")
     assert res.status_code == 200
-    assert res.json() == {"status": "reset", "user_id": "uid-1"}
+    assert res.json() == {"status": "reset", "user_id": "uid-1", "summary": ""}
 
 
 def test_badges_returns_list_for_token_uid(signed_in):

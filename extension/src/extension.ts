@@ -8,6 +8,7 @@ import { InlineTutor } from "./inlineTutor";
 import { registerDebugCompanion } from "./debugCompanion";
 import { registerTestWatcher } from "./testWatcher";
 import { TutorMode, frameConstructExplanation } from "./pedagogy";
+import { buildProgressHtml } from "./progressPanel";
 
 export async function activate(context: vscode.ExtensionContext) {
   const config = vscode.workspace.getConfiguration("edupeer");
@@ -133,6 +134,46 @@ export async function activate(context: vscode.ExtensionContext) {
     vscode.commands.registerCommand("edupeer.resetSession", async () => {
       await provider.resetSession();
       vscode.window.showInformationMessage("EduPeer: session reset.");
+    })
+  );
+
+  context.subscriptions.push(
+    vscode.commands.registerCommand("edupeer.showProgress", async () => {
+      try {
+        const progress = await api.getProgress();
+        const panel = vscode.window.createWebviewPanel(
+          "edupeer.progress",
+          "EduPeer Progress",
+          vscode.ViewColumn.One,
+          {}
+        );
+        panel.webview.html = buildProgressHtml(progress);
+      } catch (err: any) {
+        vscode.window.showErrorMessage(
+          `EduPeer: could not load progress (${err?.message ?? err}).`
+        );
+      }
+    })
+  );
+
+  context.subscriptions.push(
+    vscode.commands.registerCommand("edupeer.setGoal", async () => {
+      const text = await vscode.window.showInputBox({
+        prompt: "What do you want to get better at? (leave empty to clear your goal)",
+        placeHolder: "e.g. get comfortable with recursion",
+      });
+      if (text === undefined) return;
+      try {
+        const editor = vscode.window.activeTextEditor;
+        const concepts = await api.setGoal(text, editor?.document?.languageId ?? "python");
+        vscode.window.showInformationMessage(
+          text.trim()
+            ? `EduPeer: goal set${concepts.length ? ` (focus: ${concepts.join(", ")})` : ""}.`
+            : "EduPeer: goal cleared."
+        );
+      } catch (err: any) {
+        vscode.window.showErrorMessage(`EduPeer: could not save goal (${err?.message ?? err}).`);
+      }
     })
   );
 

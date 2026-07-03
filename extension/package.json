@@ -67,6 +67,14 @@
         "title": "EduPeer: Predict the Output"
       },
       {
+        "command": "edupeer.showProgress",
+        "title": "EduPeer: Show My Progress"
+      },
+      {
+        "command": "edupeer.setGoal",
+        "title": "EduPeer: Set Learning Goal"
+      },
+      {
         "command": "edupeer.signIn",
         "title": "EduPeer: Sign In"
       },

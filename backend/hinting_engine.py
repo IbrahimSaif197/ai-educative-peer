@@ -143,6 +143,17 @@ respond with ONE Socratic nudge of at most 12 words. No code. No direct answer. 
 Also output the primary concept tag. Output STRICT JSON only:
 {{"hint":"<<=12 words>>","concept":"<tag>"}}"""
 
+SESSION_SUMMARY_PROMPT = """You are EduPeer. Summarise what a student practised this session.
+Given their questions and the concepts involved, write EXACTLY 3 short bullet lines,
+each starting with "- ", describing what they worked on and what to remember.
+Address the student as "you". No code. Nothing except the 3 bullets."""
+
+
+GOAL_MAPPING_PROMPT = """You map a student's learning goal to concept tags.
+Choose at most 4 tags ONLY from this list: {concepts}
+Output STRICT JSON only: {{"concepts": ["tag-1", "tag-2"]}}"""
+
+
 MODEL_NAME = "llama-3.3-70b-versatile"
 
 # How many prior conversation turns are replayed to the model.
@@ -319,6 +330,37 @@ class HintingEngine:
             hint = " ".join(hint.split()[:14])
         return hint, concept or "general"
 
+    def summarize_session(self, interactions: List[dict]) -> str:
+        """A 3-bullet "what you learned" note from this session's interactions."""
+        lines = []
+        for item in interactions[:10]:
+            if not isinstance(item, dict):
+                continue
+            question = str(item.get("question", "")).strip()
+            if not question:
+                continue
+            tags = ", ".join(item.get("concept_tags", []) or [])
+            lines.append(f"- Q: {question[:200]} (concepts: {tags or 'general'}, "
+                         f"hint level {item.get('hint_level_used', 1)})")
+        if not lines:
+            return ""
+        text = self._chat(SESSION_SUMMARY_PROMPT, "\n".join(lines), 220).strip()
+        return text
+
+    def map_goal_to_concepts(self, goal_text: str, language: str = "python") -> List[str]:
+        """Map a free-text learning goal to known concept tags (empty on failure)."""
+        if not goal_text.strip():
+            return []
+        known = concepts_for(language)
+        system = GOAL_MAPPING_PROMPT.format(concepts=", ".join(known))
+        text = self._chat(system, f"Goal: {goal_text.strip()}", 120)
+        data = self._extract_json(text)
+        raw = data.get("concepts") if isinstance(data, dict) else None
+        if not isinstance(raw, list):
+            return []
+        known_set = set(known)
+        return [str(t).strip().lower() for t in raw if str(t).strip().lower() in known_set][:4]
+
     def generate_hint(
         self,
         code: str,
@@ -327,6 +369,7 @@ class HintingEngine:
         language: str = "python",
         history: Optional[List[dict]] = None,
         mode: str = "hint",
+        pacing: str = "",
     ) -> Tuple[str, List[str]]:
         level = max(1, min(3, int(hint_level)))
         if mode not in MODE_SYSTEM_TEMPLATES:
@@ -335,6 +378,8 @@ class HintingEngine:
         system = MODE_SYSTEM_TEMPLATES[mode].format(
             language=lang["display_name"]
         ) + CONCEPTS_FOOTER_TEMPLATE.format(concepts=", ".join(concepts_for(language)))
+        if pacing:
+            system += "\n\n" + pacing
 
         messages: List[dict] = [{"role": "system", "content": system}]
         for turn in (history or [])[-MAX_HISTORY_TURNS:]:
