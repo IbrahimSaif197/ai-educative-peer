@@ -195,6 +195,67 @@ class TestMultiLanguage:
         assert "C#" in messages[0]["content"]
 
 
+class TestTutorModes:
+    def _engine(self, response_text: str):
+        from hinting_engine import HintingEngine
+        engine = HintingEngine(api_key="test-key")
+        engine.client = _make_mock_client(response_text)
+        return engine
+
+    def _system(self, engine):
+        return engine.client.chat.completions.create.call_args.kwargs["messages"][0]["content"]
+
+    def test_default_mode_is_socratic_hint(self):
+        engine = self._engine("ok. What do you think should happen next?")
+        engine.generate_hint("x=1", "help", 1)
+        assert "Socratic" in self._system(engine)
+        assert "hint_level" in self._system(engine)
+
+    def test_reflect_mode_prompt(self):
+        engine = self._engine("Why did that work?")
+        engine.generate_hint("x=1", "quiz me", 1, mode="reflect")
+        assert "FIXED" in self._system(engine)
+
+    def test_translate_mode_prompt(self):
+        engine = self._engine("Close. What does your loop do first?")
+        engine.generate_hint("x=1", "my translation", 1, mode="translate")
+        assert "translation" in self._system(engine)
+
+    def test_worked_example_mode_prompt(self):
+        engine = self._engine("Consider counting apples instead.")
+        engine.generate_hint("x=1", "show me", 1, mode="worked-example")
+        assert "WORKED EXAMPLE" in self._system(engine)
+
+    def test_explain_error_mode_prompt(self):
+        engine = self._engine("The last line names the exception.")
+        engine.generate_hint("", "Traceback ...", 1, mode="explain-error")
+        assert "error message" in self._system(engine).lower()
+
+    def test_non_hint_mode_skips_closing_question(self):
+        engine = self._engine("Why does swapping the operands fix it?")
+        hint, _ = engine.generate_hint("x=1", "quiz me", 1, mode="reflect")
+        assert "What do you think should happen next?" not in hint
+
+    def test_all_modes_emit_concepts_footer(self):
+        engine = self._engine("ok\n[concepts: variables]")
+        for mode in ("hint", "reflect", "translate", "worked-example",
+                     "explain-error", "explain-concept", "predict-output",
+                     "review-exercise"):
+            engine.generate_hint("x=1", "q", 1, mode=mode)
+            assert "[concepts:" in self._system(engine), mode
+
+    def test_unknown_mode_falls_back_to_hint(self):
+        engine = self._engine("ok. What do you think should happen next?")
+        engine.generate_hint("x=1", "q", 1, mode="bogus")
+        assert "Socratic" in self._system(engine)
+
+    def test_concept_tags_still_parsed_in_modes(self):
+        engine = self._engine("Why did it work?\n[concepts: off-by-one]")
+        hint, tags = engine.generate_hint("x=1", "quiz me", 1, mode="reflect")
+        assert tags == ["off-by-one"]
+        assert "[concepts" not in hint
+
+
 class TestConversationHistory:
     def _engine(self, response_text: str):
         from hinting_engine import HintingEngine

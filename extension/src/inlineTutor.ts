@@ -7,20 +7,14 @@ import {
   supportedLanguageList,
 } from "./languages";
 
+import { codeFingerprint as fingerprintCode } from "./pedagogy";
+
 type LineHintCache = Map<string, { hint: string; concept: string }>;
 
 interface FileState {
   flags: LineFlag[];
   scanFingerprint: string;
   lineHints: LineHintCache;
-}
-
-function fingerprintCode(code: string): string {
-  let h = 0;
-  for (let i = 0; i < code.length; i++) {
-    h = (h * 31 + code.charCodeAt(i)) | 0;
-  }
-  return `${code.length}:${h}`;
 }
 
 function fingerprintLine(uri: string, lineNum: number, text: string): string {
@@ -39,6 +33,10 @@ export class InlineTutor {
   private debounceHandle: NodeJS.Timeout | undefined;
   private scanHandle: NodeJS.Timeout | undefined;
   private pendingLineKey: string | undefined;
+  /** Flag counts from the previous scan, per document. */
+  private readonly lastFlagCounts = new Map<string, number>();
+  /** Code fingerprints we already offered a reflection quiz for. */
+  private readonly reflectOffered = new Set<string>();
 
   constructor(
     private readonly context: vscode.ExtensionContext,
@@ -314,9 +312,32 @@ export class InlineTutor {
       if (editor && editor.document === doc) {
         this.renderActiveLineDecoration(editor);
       }
+      this.maybeOfferReflection(doc, code, state.flags.length);
     } catch {
       /* scan failures are non-fatal */
     }
+  }
+
+  /** After a file goes from flagged to clean, offer a reflection quiz once. */
+  private maybeOfferReflection(doc: vscode.TextDocument, code: string, flagCount: number) {
+    const key = doc.uri.toString();
+    const prev = this.lastFlagCounts.get(key) ?? 0;
+    this.lastFlagCounts.set(key, flagCount);
+    if (prev === 0 || flagCount > 0) return;
+    const fp = fingerprintCode(code);
+    if (this.reflectOffered.has(fp)) return;
+    this.reflectOffered.add(fp);
+    void vscode.window
+      .showInformationMessage(
+        "EduPeer: your file scans clean now. Want a quick reflection quiz on the fix?",
+        "Quiz me",
+        "Not now"
+      )
+      .then((choice) => {
+        if (choice === "Quiz me") {
+          void vscode.commands.executeCommand("edupeer.reflectQuiz");
+        }
+      });
   }
 
   private applyFlagsToDoc(doc: vscode.TextDocument, flags: LineFlag[]) {

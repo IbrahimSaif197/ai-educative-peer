@@ -243,3 +243,10 @@ button.small-btn {
   color: var(--vscode-badge-foreground, #fff);
   opacity: 0.8;
 }
+
+.action-row {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+  margin: 4px 0 8px 8px;
+}

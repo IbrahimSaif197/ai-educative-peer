@@ -3,6 +3,13 @@ import { ApiClient, ChatTurn } from "./apiClient";
 import { AuthManager } from "./authManager";
 import { FirebaseClient } from "./firebaseClient";
 import { isSupportedLanguage, languageLabel } from "./languages";
+import {
+  EXPLAIN_FIRST_PROMPT,
+  TutorMode,
+  codeFingerprint,
+  frameExplainedQuestion,
+  questionForMode,
+} from "./pedagogy";
 
 // How many prior turns are sent with each question (the backend caps
 // again on its side).
@@ -14,6 +21,10 @@ export class EduPeerSidebarProvider implements vscode.WebviewViewProvider {
   private view?: vscode.WebviewView;
   private history: ChatTurn[] = [];
   private lastLanguageId = "python";
+  /** Code fingerprints that already went through the explain-first gate. */
+  private seenFingerprints = new Set<string>();
+  /** The ask that is paused behind the explain-first gate. */
+  private pendingAsk?: { question: string; code: string };
 
   constructor(
     private readonly extensionUri: vscode.Uri,
@@ -39,7 +50,17 @@ export class EduPeerSidebarProvider implements vscode.WebviewViewProvider {
           this.postAuthState();
           return;
         case "askHint":
-          await this.handleAsk(msg.question as string, msg.code as string);
+          await this.handleAskFromWebview(
+            msg.question as string,
+            msg.code as string,
+            (msg.mode as TutorMode) ?? "hint"
+          );
+          return;
+        case "explainAnswer":
+          await this.handleExplainAnswer(msg.explanation as string);
+          return;
+        case "explainSkip":
+          await this.handleExplainSkip();
           return;
         case "reset":
           await this.resetSession();
@@ -76,14 +97,18 @@ export class EduPeerSidebarProvider implements vscode.WebviewViewProvider {
     this.view?.show?.(true);
   }
 
-  public async askExternal(question: string, code: string) {
+  public async askExternal(question: string, code: string, mode: TutorMode = "hint") {
     this.reveal();
     this.post({ type: "externalAsk", question, code });
-    await this.handleAsk(question, code);
+    // External asks (context menu, reflection toast) bypass the gate.
+    this.seenFingerprints.add(codeFingerprint(code ?? ""));
+    await this.handleAsk(questionForMode(mode, question), code, mode);
   }
 
   public async resetSession() {
     this.history = [];
+    this.seenFingerprints.clear();
+    this.pendingAsk = undefined;
     try {
       await this.api.resetSession();
     } catch (err) {
@@ -92,11 +117,58 @@ export class EduPeerSidebarProvider implements vscode.WebviewViewProvider {
     this.post({ type: "resetDone" });
   }
 
-  private async handleAsk(question: string, code: string) {
+  private async handleAskFromWebview(question: string, code: string, mode: TutorMode) {
+    const filled = questionForMode(mode, question);
+    if (mode === "hint") {
+      const fp = codeFingerprint(code ?? "");
+      if (!this.seenFingerprints.has(fp)) {
+        this.seenFingerprints.add(fp);
+        this.pendingAsk = { question: filled, code: code ?? "" };
+        this.post({ type: "userMessage", text: filled });
+        this.post({ type: "explainFirst", prompt: EXPLAIN_FIRST_PROMPT });
+        return;
+      }
+    }
+    await this.handleAsk(filled, code, mode);
+  }
+
+  private async handleExplainAnswer(explanation: string) {
+    const pending = this.pendingAsk;
+    this.pendingAsk = undefined;
+    if (!pending) return;
+    const text = (explanation || "").trim();
+    if (text) {
+      this.post({ type: "userMessage", text });
+      await this.handleAsk(
+        frameExplainedQuestion(text, pending.question),
+        pending.code,
+        "hint",
+        { echoUser: false }
+      );
+    } else {
+      await this.handleAsk(pending.question, pending.code, "hint", { echoUser: false });
+    }
+  }
+
+  private async handleExplainSkip() {
+    const pending = this.pendingAsk;
+    this.pendingAsk = undefined;
+    if (!pending) return;
+    await this.handleAsk(pending.question, pending.code, "hint", { echoUser: false });
+  }
+
+  private async handleAsk(
+    question: string,
+    code: string,
+    mode: TutorMode = "hint",
+    opts: { echoUser?: boolean } = {}
+  ) {
     if (!question || !question.trim()) {
       return;
     }
-    this.post({ type: "userMessage", text: question });
+    if (opts.echoUser !== false) {
+      this.post({ type: "userMessage", text: question });
+    }
     this.post({ type: "loading", value: true });
     try {
       const res = await this.api.getHint({
@@ -104,6 +176,7 @@ export class EduPeerSidebarProvider implements vscode.WebviewViewProvider {
         question,
         hint_level: 1,
         language: this.lastLanguageId,
+        mode,
         history: this.history.slice(-MAX_HISTORY_TURNS),
       });
       this.history.push({ role: "student", content: question });
@@ -113,6 +186,7 @@ export class EduPeerSidebarProvider implements vscode.WebviewViewProvider {
         hint: res.hint,
         hint_level: res.hint_level,
         concept_tags: res.concept_tags,
+        mode,
       });
       await this.sendBadges();
     } catch (err: any) {
@@ -200,6 +274,7 @@ export class EduPeerSidebarProvider implements vscode.WebviewViewProvider {
     <textarea id="input" placeholder="Describe your error or ask a question..." rows="3"></textarea>
     <div class="actions">
       <button id="send" class="primary">Ask</button>
+      <button id="quiz" class="secondary" title="Get a reflection question about your fix">I fixed it 🎓</button>
       <button id="reset" class="secondary">Reset Session</button>
     </div>
   </footer>

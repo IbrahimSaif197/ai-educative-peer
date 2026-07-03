@@ -7,11 +7,21 @@ class ChatTurn(BaseModel):
     content: str
 
 
+TutorMode = Literal[
+    "hint", "reflect", "translate", "worked-example",
+    "explain-error", "explain-concept", "predict-output", "review-exercise",
+]
+
+
 class HintRequest(BaseModel):
     code: str = Field(default="", description="The student's current code")
     question: str = Field(..., description="The student's question or described error")
     hint_level: int = Field(default=1, ge=1, le=3)
     language: str = Field(default="python", description="VS Code languageId of the code")
+    mode: TutorMode = Field(
+        default="hint",
+        description="Tutor mode; only 'hint' advances the progressive hint level",
+    )
     history: List[ChatTurn] = Field(
         default_factory=list,
         description="Prior conversation turns, oldest first",

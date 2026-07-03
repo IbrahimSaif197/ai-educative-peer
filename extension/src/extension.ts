@@ -62,6 +62,15 @@ export async function activate(context: vscode.ExtensionContext) {
   );
 
   context.subscriptions.push(
+    vscode.commands.registerCommand("edupeer.reflectQuiz", async () => {
+      const editor = vscode.window.activeTextEditor;
+      const code = editor?.document?.getText() ?? "";
+      await vscode.commands.executeCommand("workbench.view.extension.edupeer-sidebar");
+      await provider.askExternal("", code, "reflect");
+    })
+  );
+
+  context.subscriptions.push(
     vscode.commands.registerCommand("edupeer.resetSession", async () => {
       await provider.resetSession();
       vscode.window.showInformationMessage("EduPeer: session reset.");

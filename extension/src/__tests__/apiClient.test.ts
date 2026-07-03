@@ -50,6 +50,13 @@ describe("authenticated requests", () => {
     expect(JSON.parse(init.body)).toEqual(req);
   });
 
+  it("passes the tutor mode through to /hint", async () => {
+    const fetchMock = mockFetch(200, validResponse);
+    const api = new ApiClient(BASE, makeTokens());
+    await api.getHint({ code: "x=1", question: "quiz me", hint_level: 1, mode: "reflect" });
+    expect(JSON.parse(fetchMock.mock.calls[0][1].body).mode).toBe("reflect");
+  });
+
   it("retries once with a forced refresh on 401", async () => {
     const responses = [
       { ok: false, status: 401, json: async () => ({}), text: async () => "unauthorized" },

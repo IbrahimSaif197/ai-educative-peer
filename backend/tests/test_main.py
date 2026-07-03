@@ -175,6 +175,33 @@ class TestHintEndpoint:
         assert res.status_code == 200
 
 
+class TestTutorModesEndpoint:
+    def test_mode_defaults_to_hint_and_advances_level(self, client):
+        client.post("/hint", json=VALID_HINT_PAYLOAD)
+        res = client.post("/hint", json=VALID_HINT_PAYLOAD)
+        assert res.json()["hint_level"] == 2
+
+    def test_non_hint_mode_does_not_advance_level(self, client):
+        payload = {**VALID_HINT_PAYLOAD, "mode": "reflect"}
+        client.post("/hint", json=payload)
+        client.post("/hint", json=payload)
+        # a subsequent real hint on the same code still starts at level 1
+        res = client.post("/hint", json=VALID_HINT_PAYLOAD)
+        assert res.json()["hint_level"] == 1
+
+    def test_reflect_mode_uses_reflect_prompt(self, client, _patch_groq_client):
+        payload = {**VALID_HINT_PAYLOAD, "mode": "reflect", "question": "quiz me"}
+        res = client.post("/hint", json=payload)
+        assert res.status_code == 200
+        messages = _patch_groq_client.chat.completions.create.call_args.kwargs["messages"]
+        assert "FIXED" in messages[0]["content"]
+
+    def test_invalid_mode_rejected(self, client):
+        payload = {**VALID_HINT_PAYLOAD, "mode": "cheat"}
+        res = client.post("/hint", json=payload)
+        assert res.status_code == 422
+
+
 class TestHintLanguageAndHistory:
     def test_language_field_accepted(self, client, _patch_groq_client):
         payload = {**VALID_HINT_PAYLOAD, "language": "java", "code": "int x = 1;"}

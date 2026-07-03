@@ -12,6 +12,7 @@ export interface HintRequest {
   question: string;
   hint_level: number;
   language?: string;
+  mode?: string;
   history?: ChatTurn[];
 }
 

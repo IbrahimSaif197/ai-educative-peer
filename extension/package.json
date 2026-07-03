@@ -51,6 +51,10 @@
         "title": "EduPeer: Scan File for Issues"
       },
       {
+        "command": "edupeer.reflectQuiz",
+        "title": "EduPeer: Reflection Quiz on My Fix"
+      },
+      {
         "command": "edupeer.signIn",
         "title": "EduPeer: Sign In"
       },

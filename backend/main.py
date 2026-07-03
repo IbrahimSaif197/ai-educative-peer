@@ -104,15 +104,19 @@ async def hint(req: HintRequest, uid: str = Depends(get_current_uid)) -> HintRes
     if not req.question.strip():
         raise HTTPException(status_code=400, detail="question must not be empty")
 
-    level = await asyncio.to_thread(
-        store.next_hint_level, uid, code_fingerprint(req.code)
-    )
+    if req.mode == "hint":
+        level = await asyncio.to_thread(
+            store.next_hint_level, uid, code_fingerprint(req.code)
+        )
+    else:
+        level = req.hint_level
 
     language = normalize_language(req.language)
     history = [turn.model_dump() for turn in req.history]
     try:
         hint_text, concept_tags = await asyncio.to_thread(
-            engine.generate_hint, req.code, req.question, level, language, history
+            engine.generate_hint,
+            req.code, req.question, level, language, history, req.mode,
         )
     except Exception as e:
         raise HTTPException(status_code=502, detail=f"LLM error: {e}")

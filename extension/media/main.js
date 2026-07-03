@@ -13,7 +13,26 @@
   const badgesEl = document.getElementById("badges");
   const accountLabelEl = document.getElementById("accountLabel");
   const authBtn = document.getElementById("authBtn");
+  const quizBtn = document.getElementById("quiz");
   let signedIn = false;
+
+  const DEFAULT_PLACEHOLDER = "Describe your error or ask a question...";
+  // What the next composer submission means: a normal hint ask, the answer to
+  // the explain-first prompt, a pseudocode translation, or a reflect answer.
+  let composerMode = "hint";
+  // Set when the reflect quiz question is on its way, so the reply that follows
+  // is treated as the student's quiz answer.
+  let expectReflectAnswer = false;
+
+  const MODE_META = {
+    reflect: "Reflection quiz",
+    translate: "Translation feedback",
+    "worked-example": "Worked example",
+    "explain-error": "Reading the error",
+    "explain-concept": "Concept explained",
+    "predict-output": "Output prediction",
+    "review-exercise": "Review exercise",
+  };
 
   authBtn.addEventListener("click", () => {
     vscode.postMessage({ type: signedIn ? "signOut" : "signIn" });
@@ -84,14 +103,54 @@
     });
   }
 
+  function setComposerMode(mode, placeholder) {
+    composerMode = mode;
+    inputEl.placeholder = placeholder || DEFAULT_PLACEHOLDER;
+  }
+
+  function removeActionRows() {
+    chatEl.querySelectorAll(".action-row").forEach((el) => el.remove());
+  }
+
+  function addActionRow(buttons) {
+    const row = document.createElement("div");
+    row.className = "action-row";
+    buttons.forEach(({ label, onClick }) => {
+      const btn = document.createElement("button");
+      btn.className = "small-btn";
+      btn.textContent = label;
+      btn.addEventListener("click", () => {
+        row.remove();
+        onClick();
+      });
+      row.appendChild(btn);
+    });
+    chatEl.appendChild(row);
+    chatEl.scrollTop = chatEl.scrollHeight;
+  }
+
   function send() {
     const q = inputEl.value.trim();
+    if (composerMode === "explain") {
+      removeActionRows();
+      setComposerMode("hint");
+      vscode.postMessage({ type: "explainAnswer", explanation: q });
+      inputEl.value = "";
+      return;
+    }
     if (!q) return;
-    vscode.postMessage({ type: "askHint", question: q, code: currentCode });
+    const mode = composerMode === "hint" ? "hint" : composerMode;
+    setComposerMode("hint");
+    vscode.postMessage({ type: "askHint", question: q, code: currentCode, mode });
     inputEl.value = "";
   }
 
   sendBtn.addEventListener("click", send);
+
+  quizBtn.addEventListener("click", () => {
+    expectReflectAnswer = true;
+    vscode.postMessage({ type: "askHint", question: "", code: currentCode, mode: "reflect" });
+  });
   inputEl.addEventListener("keydown", (e) => {
     if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) {
       e.preventDefault();
@@ -123,13 +182,55 @@
         renderBubble({ role: "user", text: msg.text });
         persist();
         break;
-      case "hint":
+      case "hint": {
+        const mode = msg.mode || "hint";
         renderBubble({
           role: "ai",
           text: msg.hint,
-          meta: `Hint level ${msg.hint_level}`,
+          meta: mode === "hint" ? `Hint level ${msg.hint_level}` : MODE_META[mode] || mode,
           tags: msg.concept_tags || [],
         });
+        if (mode === "hint" && msg.hint_level === 3) {
+          addActionRow([
+            {
+              label: "✍️ Submit my translation",
+              onClick: () =>
+                setComposerMode(
+                  "translate",
+                  "Paste your code translation of the pseudocode..."
+                ),
+            },
+            {
+              label: "📘 Show a worked example",
+              onClick: () =>
+                vscode.postMessage({
+                  type: "askHint",
+                  question: "",
+                  code: currentCode,
+                  mode: "worked-example",
+                }),
+            },
+          ]);
+        }
+        if (mode === "reflect" && expectReflectAnswer) {
+          expectReflectAnswer = false;
+          setComposerMode("reflect", "Type your answer to the quiz question...");
+        }
+        persist();
+        break;
+      }
+      case "explainFirst":
+        renderBubble({ role: "ai", text: msg.prompt, meta: "Explain first" });
+        addActionRow([
+          {
+            label: "Skip and get my hint",
+            onClick: () => {
+              setComposerMode("hint");
+              vscode.postMessage({ type: "explainSkip" });
+            },
+          },
+        ]);
+        setComposerMode("explain", "Type what you think the code does...");
         persist();
         break;
       case "error":
@@ -149,6 +250,8 @@
         break;
       case "resetDone":
         chatEl.innerHTML = "";
+        setComposerMode("hint");
+        expectReflectAnswer = false;
         persist();
         renderBubble({ role: "ai", text: "Session reset. Hint level starts over at 1." });
         persist();
