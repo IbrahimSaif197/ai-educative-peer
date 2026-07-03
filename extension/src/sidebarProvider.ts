@@ -8,6 +8,8 @@ import {
   TutorMode,
   codeFingerprint,
   frameExplainedQuestion,
+  framePrediction,
+  looksLikeErrorText,
   questionForMode,
 } from "./pedagogy";
 
@@ -25,6 +27,8 @@ export class EduPeerSidebarProvider implements vscode.WebviewViewProvider {
   private seenFingerprints = new Set<string>();
   /** The ask that is paused behind the explain-first gate. */
   private pendingAsk?: { question: string; code: string };
+  /** The snippet awaiting the student's output prediction. */
+  private pendingPredict?: { snippet: string; code: string };
 
   constructor(
     private readonly extensionUri: vscode.Uri,
@@ -61,6 +65,9 @@ export class EduPeerSidebarProvider implements vscode.WebviewViewProvider {
           return;
         case "explainSkip":
           await this.handleExplainSkip();
+          return;
+        case "predictAnswer":
+          await this.handlePredictAnswer(msg.prediction as string);
           return;
         case "reset":
           await this.resetSession();
@@ -109,6 +116,7 @@ export class EduPeerSidebarProvider implements vscode.WebviewViewProvider {
     this.history = [];
     this.seenFingerprints.clear();
     this.pendingAsk = undefined;
+    this.pendingPredict = undefined;
     try {
       await this.api.resetSession();
     } catch (err) {
@@ -117,7 +125,32 @@ export class EduPeerSidebarProvider implements vscode.WebviewViewProvider {
     this.post({ type: "resetDone" });
   }
 
+  /** Start a predict-the-output exercise for the given snippet. */
+  public startPrediction(snippet: string, code: string) {
+    this.reveal();
+    this.pendingPredict = { snippet, code };
+    this.post({ type: "predictFirst", snippet });
+  }
+
+  private async handlePredictAnswer(prediction: string) {
+    const pending = this.pendingPredict;
+    this.pendingPredict = undefined;
+    if (!pending || !(prediction || "").trim()) return;
+    this.post({ type: "userMessage", text: prediction });
+    await this.handleAsk(
+      framePrediction(pending.snippet, prediction),
+      pending.code,
+      "predict-output",
+      { echoUser: false }
+    );
+  }
+
   private async handleAskFromWebview(question: string, code: string, mode: TutorMode) {
+    // A pasted stack trace or compiler error is a lesson in reading errors,
+    // not a level-1 hint.
+    if (mode === "hint" && looksLikeErrorText(question)) {
+      mode = "explain-error";
+    }
     const filled = questionForMode(mode, question);
     if (mode === "hint") {
       const fp = codeFingerprint(code ?? "");

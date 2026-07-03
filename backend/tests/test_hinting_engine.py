@@ -195,6 +195,50 @@ class TestMultiLanguage:
         assert "C#" in messages[0]["content"]
 
 
+class TestScanKinds:
+    def _engine(self, response_text: str):
+        from hinting_engine import HintingEngine
+        engine = HintingEngine(api_key="test-key")
+        engine.client = _make_mock_client(response_text)
+        return engine
+
+    def test_kind_parsed_and_defaults_to_bug(self):
+        engine = self._engine(
+            '{"flags":[{"line":1,"end_line":1,"question":"Whats the loop bound?",'
+            '"concept":"off-by-one","severity":"warning","kind":"bug"},'
+            '{"line":2,"end_line":2,"question":"Does this name say what it holds?",'
+            '"concept":"variables","severity":"info","kind":"style"},'
+            '{"line":3,"end_line":3,"question":"No kind given?",'
+            '"concept":"general","severity":"info"}]}'
+        )
+        flags = engine.scan_code("a\nb\nc\n")
+        assert flags[0]["kind"] == "bug"
+        assert flags[1]["kind"] == "style"
+        assert flags[2]["kind"] == "bug"
+
+    def test_invalid_kind_coerced_to_bug(self):
+        engine = self._engine(
+            '{"flags":[{"line":1,"end_line":1,"question":"q?","kind":"vibes"}]}'
+        )
+        flags = engine.scan_code("a\n")
+        assert flags[0]["kind"] == "bug"
+
+    def test_style_flags_capped_at_two(self):
+        items = ",".join(
+            f'{{"line":{i},"end_line":{i},"question":"q{i}?","kind":"style"}}'
+            for i in range(1, 5)
+        )
+        engine = self._engine(f'{{"flags":[{items}]}}')
+        flags = engine.scan_code("a\nb\nc\nd\n")
+        assert sum(1 for f in flags if f["kind"] == "style") == 2
+
+    def test_scan_prompt_mentions_style(self):
+        engine = self._engine('{"flags":[]}')
+        engine.scan_code("x = 1")
+        system = engine.client.chat.completions.create.call_args.kwargs["messages"][0]["content"]
+        assert "style" in system.lower()
+
+
 class TestTutorModes:
     def _engine(self, response_text: str):
         from hinting_engine import HintingEngine

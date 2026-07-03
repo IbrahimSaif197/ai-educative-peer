@@ -59,6 +59,9 @@ class LineFlag(BaseModel):
     question: str = Field(..., description="Short Socratic question (<=14 words)")
     concept: str = Field(default="general")
     severity: str = Field(default="info", description="info | warning")
+    kind: Literal["bug", "style"] = Field(
+        default="bug", description="bug flags point at defects; style at readability"
+    )
 
 
 class ScanResponse(BaseModel):

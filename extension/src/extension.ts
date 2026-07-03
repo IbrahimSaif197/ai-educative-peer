@@ -5,6 +5,9 @@ import { signInViaBrowser } from "./signInFlow";
 import { FirebaseClient } from "./firebaseClient";
 import { EduPeerSidebarProvider } from "./sidebarProvider";
 import { InlineTutor } from "./inlineTutor";
+import { registerDebugCompanion } from "./debugCompanion";
+import { registerTestWatcher } from "./testWatcher";
+import { TutorMode, frameConstructExplanation } from "./pedagogy";
 
 export async function activate(context: vscode.ExtensionContext) {
   const config = vscode.workspace.getConfiguration("edupeer");
@@ -61,12 +64,68 @@ export async function activate(context: vscode.ExtensionContext) {
     })
   );
 
+  const askWithActiveFile = async (question: string, mode: TutorMode) => {
+    const editor = vscode.window.activeTextEditor;
+    const code = editor?.document?.getText() ?? "";
+    await vscode.commands.executeCommand("workbench.view.extension.edupeer-sidebar");
+    await provider.askExternal(question, code, mode);
+  };
+
+  registerDebugCompanion(context, (q) => askWithActiveFile(q, "explain-error"));
+  registerTestWatcher(context, (q) => askWithActiveFile(q, "hint"));
+
   context.subscriptions.push(
     vscode.commands.registerCommand("edupeer.reflectQuiz", async () => {
+      await askWithActiveFile("", "reflect");
+    })
+  );
+
+  context.subscriptions.push(
+    vscode.commands.registerCommand("edupeer.explainError", async () => {
       const editor = vscode.window.activeTextEditor;
-      const code = editor?.document?.getText() ?? "";
+      let text = editor ? editor.document.getText(editor.selection) : "";
+      if (!text.trim()) {
+        text =
+          (await vscode.window.showInputBox({
+            prompt: "Paste the error message or stack trace",
+            placeHolder: "Traceback (most recent call last): ...",
+          })) ?? "";
+      }
+      if (!text.trim()) return;
+      await askWithActiveFile(`Help me read this error:\n\n${text}`, "explain-error");
+    })
+  );
+
+  context.subscriptions.push(
+    vscode.commands.registerCommand("edupeer.explainSelection", async () => {
+      const editor = vscode.window.activeTextEditor;
+      if (!editor) {
+        vscode.window.showInformationMessage("EduPeer: open a file first.");
+        return;
+      }
+      const selection =
+        editor.document.getText(editor.selection).trim() ||
+        editor.document.lineAt(editor.selection.active.line).text.trim();
+      if (!selection) {
+        vscode.window.showInformationMessage("EduPeer: select some code first.");
+        return;
+      }
+      await askWithActiveFile(frameConstructExplanation(selection), "explain-concept");
+    })
+  );
+
+  context.subscriptions.push(
+    vscode.commands.registerCommand("edupeer.predictOutput", async () => {
+      const editor = vscode.window.activeTextEditor;
+      const snippet = editor ? editor.document.getText(editor.selection) : "";
+      if (!snippet.trim()) {
+        vscode.window.showInformationMessage(
+          "EduPeer: select the code whose output you want to predict."
+        );
+        return;
+      }
       await vscode.commands.executeCommand("workbench.view.extension.edupeer-sidebar");
-      await provider.askExternal("", code, "reflect");
+      provider.startPrediction(snippet, editor!.document.getText());
     })
   );
 

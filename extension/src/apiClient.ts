@@ -28,6 +28,7 @@ export interface LineFlag {
   question: string;
   concept: string;
   severity: "info" | "warning";
+  kind?: "bug" | "style";
 }
 
 export interface ScanResponse {

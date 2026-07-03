@@ -122,17 +122,19 @@ MODE_SYSTEM_TEMPLATES = {
 
 
 SCAN_SYSTEM_PROMPT_TEMPLATE = """You are EduPeer's static reviewer for beginner {language} code.
-Identify up to 5 lines that look suspicious, buggy, or conceptually confused.
+Identify up to 5 lines that look suspicious, buggy, or conceptually confused (kind "bug").
+You may ALSO flag up to 2 lines with gentle readability or naming observations (kind "style"),
+e.g. a variable name that hides its purpose or deeply nested logic.
 For each, craft ONE Socratic question (<=14 words) pointing the student toward the issue WITHOUT revealing the fix.
 
 Output STRICT JSON only. Schema:
-{{"flags":[{{"line":<int,1-based>,"end_line":<int,1-based>,"question":"<string>","concept":"<one-of-known-concepts-or-general>","severity":"info"|"warning"}}]}}
+{{"flags":[{{"line":<int,1-based>,"end_line":<int,1-based>,"question":"<string>","concept":"<one-of-known-concepts-or-general>","severity":"info"|"warning","kind":"bug"|"style"}}]}}
 
 Rules:
 - If nothing is suspicious, output {{"flags":[]}}
 - Never include code, {language} syntax, or the answer in the question
 - Never use more than 14 words per question
-- Prefer "warning" only for likely bugs; everything else is "info"
+- Prefer "warning" only for likely bugs; "style" flags are always "info"
 - No markdown, no prose, JSON only"""
 
 
@@ -246,7 +248,9 @@ class HintingEngine:
             return []
         total_lines = max(1, len(code.splitlines()))
         cleaned: List[dict] = []
-        for f in flags[:5]:
+        bug_count = 0
+        style_count = 0
+        for f in flags:
             if not isinstance(f, dict):
                 continue
             try:
@@ -265,6 +269,18 @@ class HintingEngine:
             severity = str(f.get("severity", "info")).strip().lower()
             if severity not in ("info", "warning"):
                 severity = "info"
+            kind = str(f.get("kind", "bug")).strip().lower()
+            if kind not in ("bug", "style"):
+                kind = "bug"
+            if kind == "style":
+                if style_count >= 2:
+                    continue
+                style_count += 1
+                severity = "info"
+            else:
+                if bug_count >= 5:
+                    continue
+                bug_count += 1
             cleaned.append(
                 {
                     "line": line,
@@ -272,6 +288,7 @@ class HintingEngine:
                     "question": question,
                     "concept": concept,
                     "severity": severity,
+                    "kind": kind,
                 }
             )
         return cleaned

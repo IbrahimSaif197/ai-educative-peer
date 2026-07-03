@@ -21,6 +21,10 @@ function fingerprintLine(uri: string, lineNum: number, text: string): string {
   return `${uri}::${lineNum}::${text.trim()}`;
 }
 
+function flagEmoji(flag: LineFlag): string {
+  return flag.kind === "style" ? "🎨" : "🤔";
+}
+
 export class InlineTutor {
   private readonly ghostDecoration: vscode.TextEditorDecorationType;
   private readonly flagGutterInfo: vscode.TextEditorDecorationType;
@@ -267,7 +271,7 @@ export class InlineTutor {
     const contentText = cached?.hint
       ? `💡 ${cached.hint}`
       : flag
-      ? `🤔 ${flag.question}`
+      ? `${flagEmoji(flag)} ${flag.question}`
       : "";
 
     if (!contentText) {
@@ -354,7 +358,7 @@ export class InlineTutor {
         f.severity === "warning"
           ? vscode.DiagnosticSeverity.Warning
           : vscode.DiagnosticSeverity.Information;
-      const diag = new vscode.Diagnostic(range, `🤔 ${f.question}`, severity);
+      const diag = new vscode.Diagnostic(range, `${flagEmoji(f)} ${f.question}`, severity);
       diag.source = "EduPeer";
       diag.code = f.concept;
       diags.push(diag);
@@ -383,7 +387,7 @@ export class InlineTutor {
       const range = new vscode.Range(line, 0, line, 0);
       lenses.push(
         new vscode.CodeLens(range, {
-          title: `🤔 ${flag.question}`,
+          title: `${flagEmoji(flag)} ${flag.question}`,
           command: "edupeer.nudgeLine",
           arguments: [doc.uri, line],
         })
@@ -428,11 +432,11 @@ export class InlineTutor {
     md.isTrusted = true;
     md.appendMarkdown("**EduPeer**\n\n");
     if (cached?.hint) md.appendMarkdown(`💡 ${cached.hint}\n\n`);
-    if (flag) md.appendMarkdown(`🤔 ${flag.question}\n\n_concept: ${flag.concept}_\n\n`);
+    if (flag) md.appendMarkdown(`${flagEmoji(flag)} ${flag.question}\n\n_concept: ${flag.concept}_\n\n`);
     md.appendMarkdown(
       `[Ask for a deeper nudge](command:edupeer.nudgeLine?${encodeURIComponent(
         JSON.stringify([doc.uri.toString(), pos.line])
-      )})`
+      )}) · [Explain this line](command:edupeer.explainSelection)`
     );
     return new vscode.Hover(md);
   }

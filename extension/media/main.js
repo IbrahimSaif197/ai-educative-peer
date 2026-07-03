@@ -138,6 +138,13 @@
       inputEl.value = "";
       return;
     }
+    if (composerMode === "predict") {
+      if (!q) return;
+      setComposerMode("hint");
+      vscode.postMessage({ type: "predictAnswer", prediction: q });
+      inputEl.value = "";
+      return;
+    }
     if (!q) return;
     const mode = composerMode === "hint" ? "hint" : composerMode;
     setComposerMode("hint");
@@ -219,6 +226,17 @@
         persist();
         break;
       }
+      case "predictFirst":
+        renderBubble({
+          role: "ai",
+          text:
+            "Prediction time! Without running it, what do you think this code prints or does?\n\n" +
+            msg.snippet,
+          meta: "Predict the output",
+        });
+        setComposerMode("predict", "Type your prediction...");
+        persist();
+        break;
       case "explainFirst":
         renderBubble({ role: "ai", text: msg.prompt, meta: "Explain first" });
         addActionRow([
