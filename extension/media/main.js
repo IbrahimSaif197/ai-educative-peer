@@ -1,285 +1,537 @@
 (function () {
   const vscode = acquireVsCodeApi();
 
-  const chatEl = document.getElementById("chat");
-  const inputEl = document.getElementById("input");
-  const sendBtn = document.getElementById("send");
-  const resetBtn = document.getElementById("reset");
-  const refreshBtn = document.getElementById("refreshCode");
-  const codeEl = document.getElementById("codeSnippet");
-  const fileNameEl = document.getElementById("fileName");
-  const langChipEl = document.getElementById("langChip");
-  const loadingEl = document.getElementById("loading");
-  const badgesEl = document.getElementById("badges");
-  const accountLabelEl = document.getElementById("accountLabel");
-  const authBtn = document.getElementById("authBtn");
-  const quizBtn = document.getElementById("quiz");
-  const reviewBtn = document.getElementById("reviewBtn");
-  const offlineBannerEl = document.getElementById("offlineBanner");
-  let signedIn = false;
-  // The in-progress streamed tutor bubble, replaced by the final "hint".
-  let streamingBubble = null;
+  const el = (id) => document.getElementById(id);
+  const chatEl = el("chat");
+  const inputEl = el("input");
+  const sendBtn = el("send");
+  const quizBtn = el("quiz");
+  const resetBtn = el("reset");
+  const refreshBtn = el("refreshCode");
+  const collapseBtn = el("collapseCode");
+  const codeEl = el("codeSnippet");
+  const fileNameEl = el("fileName");
+  const langChipEl = el("langChip");
+  const loadingEl = el("loading");
+  const badgesEl = el("badges");
+  const badgeCountEl = el("badgeCount");
+  const badgesWrapEl = el("badgesWrap");
+  const accountLabelEl = el("accountLabel");
+  const authBtn = el("authBtn");
+  const reviewBtn = el("reviewBtn");
+  const offlineBannerEl = el("offlineBanner");
+  const stepperEl = el("stepper");
+  const confidenceEl = el("confidence");
 
-  function removeStreamingBubble() {
-    if (streamingBubble) {
-      streamingBubble.div.remove();
-      streamingBubble = null;
-    }
-  }
+  const DEFAULT_PLACEHOLDER = "Describe your error or ask a question…";
+  const MAX_PREVIEW_LINES = 200;
 
-  const DEFAULT_PLACEHOLDER = "Describe your error or ask a question...";
-  // What the next composer submission means: a normal hint ask, the answer to
-  // the explain-first prompt, a pseudocode translation, or a reflect answer.
-  let composerMode = "hint";
-  // Set when the reflect quiz question is on its way, so the reply that follows
-  // is treated as the student's quiz answer.
-  let expectReflectAnswer = false;
-
-  const MODE_META = {
-    reflect: "Reflection quiz",
-    translate: "Translation feedback",
+  /** Eyebrow text per tutor move. Hint mode is level-dependent. */
+  const MODE_LABEL = {
+    reflect: "Reflection",
+    translate: "Translation check",
     "worked-example": "Worked example",
     "explain-error": "Reading the error",
-    "explain-concept": "Concept explained",
-    "predict-output": "Output prediction",
-    "review-exercise": "Review exercise",
+    "explain-concept": "Concept",
+    "predict-output": "Prediction check",
+    "review-exercise": "Review",
+    "subgoal-label": "Step labels",
+    "trace-check": "Trace check",
+    "attempt-gate": "Same depth",
+    "rate-limited": "Slow down",
+    offline: "Offline nudge",
   };
 
-  authBtn.addEventListener("click", () => {
-    vscode.postMessage({ type: signedIn ? "signOut" : "signIn" });
-  });
+  /** Modes that are the tutor withholding rather than teaching. */
+  const FLAGGED_MODES = new Set(["attempt-gate", "rate-limited", "offline"]);
 
   let currentCode = "";
+  let signedIn = false;
+  // What the next composer submission means.
+  let composerMode = "hint";
+  let expectReflectAnswer = false;
+  let confidence = 0;
+  let streamingTurn = null;
+  // Rendered turns, mirrored to the extension so they survive a reload.
+  let turns = [];
 
-  const prev = vscode.getState();
-  if (prev && prev.messages) {
-    prev.messages.forEach(renderBubble);
-  }
+  // ------------------------------------------------------------------ chat
 
   function persist() {
-    const bubbles = Array.from(chatEl.querySelectorAll(".bubble")).map((b) => ({
-      role: b.classList.contains("user") ? "user" : b.classList.contains("error") ? "error" : "ai",
-      text: b.dataset.text || b.textContent,
-      meta: b.dataset.meta || "",
-      tags: b.dataset.tags ? JSON.parse(b.dataset.tags) : [],
-    }));
-    vscode.setState({ messages: bubbles });
+    vscode.setState({ turns });
+    vscode.postMessage({ type: "persistChat", messages: turns });
   }
 
-  function renderBubble(msg) {
-    const div = document.createElement("div");
-    div.className = "bubble " + msg.role;
-    div.dataset.text = msg.text;
-    const textNode = document.createElement("div");
-    textNode.textContent = msg.text;
-    div.appendChild(textNode);
-    if (msg.meta) {
-      div.dataset.meta = msg.meta;
-      const meta = document.createElement("div");
-      meta.className = "meta";
-      meta.textContent = msg.meta;
-      div.appendChild(meta);
+  function clearChat() {
+    while (chatEl.firstChild) chatEl.removeChild(chatEl.firstChild);
+  }
+
+  function showEmptyState() {
+    clearChat();
+    const wrap = document.createElement("div");
+    wrap.className = "empty";
+    const title = document.createElement("strong");
+    title.textContent = "Stuck on something?";
+    wrap.appendChild(title);
+    wrap.appendChild(
+      document.createTextNode(
+        "Open a file and tell me what's going wrong. I ask questions rather than hand over answers, " +
+          "so you keep the part where you work it out."
+      )
+    );
+    chatEl.appendChild(wrap);
+  }
+
+  function dropEmptyState() {
+    const empty = chatEl.querySelector(".empty");
+    if (empty) empty.remove();
+  }
+
+  function buildTurn(turn) {
+    dropEmptyState();
+    const wrap = document.createElement("div");
+    wrap.className = `turn turn--${turn.role === "student" ? "student" : "tutor"}`;
+    if (turn.role === "error") wrap.classList.add("is-error");
+    if (turn.flagged) wrap.classList.add("is-flagged");
+
+    if (turn.eyebrow) {
+      const eyebrow = document.createElement("div");
+      eyebrow.className = "turn__eyebrow";
+      eyebrow.textContent = turn.eyebrow;
+      wrap.appendChild(eyebrow);
     }
-    if (msg.tags && msg.tags.length) {
-      div.dataset.tags = JSON.stringify(msg.tags);
+
+    const body = document.createElement("div");
+    body.className = "turn__body";
+    if (turn.role === "student") {
+      body.textContent = turn.text;
+    } else {
+      window.renderMarkdown(turn.text, body);
+    }
+    wrap.appendChild(body);
+
+    if (turn.tags && turn.tags.length) {
       const tags = document.createElement("div");
       tags.className = "tags";
-      msg.tags.forEach((t) => {
-        const span = document.createElement("span");
-        span.className = "tag";
-        span.textContent = t;
-        tags.appendChild(span);
-      });
-      div.appendChild(tags);
+      for (const name of turn.tags) {
+        const tag = document.createElement("span");
+        tag.className = "tag";
+        tag.textContent = name;
+        tags.appendChild(tag);
+      }
+      wrap.appendChild(tags);
     }
-    chatEl.appendChild(div);
+
+    chatEl.appendChild(wrap);
+    scrollToEnd();
+    return { wrap, body };
+  }
+
+  function addTurn(turn) {
+    const nodes = buildTurn(turn);
+    turns.push(turn);
+    persist();
+    return nodes;
+  }
+
+  function scrollToEnd() {
     chatEl.scrollTop = chatEl.scrollHeight;
   }
 
-  function renderBadges(list) {
-    badgesEl.innerHTML = "";
-    if (!list || list.length === 0) {
-      const empty = document.createElement("span");
-      empty.className = "badge";
-      empty.textContent = "No badges yet";
-      empty.style.opacity = "0.6";
-      badgesEl.appendChild(empty);
-      return;
+  function removeStreamingTurn() {
+    if (streamingTurn) {
+      streamingTurn.wrap.remove();
+      streamingTurn = null;
     }
-    list.forEach((name) => {
-      const el = document.createElement("span");
-      el.className = "badge";
-      el.textContent = name;
-      badgesEl.appendChild(el);
-    });
-  }
-
-  function setComposerMode(mode, placeholder) {
-    composerMode = mode;
-    inputEl.placeholder = placeholder || DEFAULT_PLACEHOLDER;
   }
 
   function removeActionRows() {
-    chatEl.querySelectorAll(".action-row").forEach((el) => el.remove());
+    chatEl.querySelectorAll(".actions").forEach((row) => row.remove());
   }
 
   function addActionRow(buttons) {
     const row = document.createElement("div");
-    row.className = "action-row";
-    buttons.forEach(({ label, onClick }) => {
+    row.className = "actions";
+    for (const { label, onClick } of buttons) {
       const btn = document.createElement("button");
-      btn.className = "small-btn";
+      btn.className = "btn btn--ghost btn--sm";
       btn.textContent = label;
       btn.addEventListener("click", () => {
         row.remove();
         onClick();
       });
       row.appendChild(btn);
-    });
+    }
     chatEl.appendChild(row);
-    chatEl.scrollTop = chatEl.scrollHeight;
+    scrollToEnd();
+  }
+
+  // --------------------------------------------------------------- stepper
+
+  function setLevel(level) {
+    if (!level || level < 1) {
+      stepperEl.hidden = true;
+      return;
+    }
+    stepperEl.hidden = false;
+    stepperEl.classList.remove("is-held");
+    stepperEl
+      .querySelectorAll(".stepper__step")
+      .forEach((step) =>
+        step.classList.toggle("is-on", Number(step.dataset.level) <= level)
+      );
+  }
+
+  function holdLevel() {
+    if (stepperEl.hidden) return;
+    stepperEl.classList.remove("is-held");
+    // Reflow so the animation restarts even on consecutive holds.
+    void stepperEl.offsetWidth;
+    stepperEl.classList.add("is-held");
+  }
+
+  // ------------------------------------------------------------ confidence
+
+  function setConfidence(value) {
+    confidence = value;
+    confidenceEl.querySelectorAll(".conf").forEach((btn) => {
+      btn.setAttribute("aria-pressed", String(Number(btn.dataset.value) === value));
+    });
+  }
+
+  confidenceEl.querySelectorAll(".conf").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      const value = Number(btn.dataset.value);
+      setConfidence(confidence === value ? 0 : value);
+    });
+  });
+
+  // ---------------------------------------------------------------- badges
+
+  function renderBadges(list) {
+    while (badgesEl.firstChild) badgesEl.removeChild(badgesEl.firstChild);
+    const items = list || [];
+    badgeCountEl.textContent = items.length
+      ? `${items.length} badge${items.length === 1 ? "" : "s"}`
+      : "No badges yet";
+    badgesWrapEl.hidden = items.length === 0;
+    for (const name of items) {
+      const badge = document.createElement("span");
+      badge.className = "badge";
+      badge.textContent = name;
+      badgesEl.appendChild(badge);
+    }
+  }
+
+  // ----------------------------------------------------------- code preview
+
+  function renderCode(code) {
+    while (codeEl.firstChild) codeEl.removeChild(codeEl.firstChild);
+    if (!code) {
+      const line = document.createElement("span");
+      line.className = "ln ln--empty";
+      line.textContent = "No file open";
+      codeEl.appendChild(line);
+      return;
+    }
+    const lines = code.split("\n");
+    const shown = lines.slice(0, MAX_PREVIEW_LINES);
+    for (const text of shown) {
+      const line = document.createElement("span");
+      line.className = "ln";
+      line.textContent = text || " ";
+      codeEl.appendChild(line);
+    }
+    if (lines.length > shown.length) {
+      const more = document.createElement("span");
+      more.className = "ln ln--empty";
+      more.textContent = `… ${lines.length - shown.length} more lines`;
+      codeEl.appendChild(more);
+    }
+  }
+
+  collapseBtn.addEventListener("click", () => {
+    const collapsed = !codeEl.hidden;
+    codeEl.hidden = collapsed;
+    collapseBtn.textContent = collapsed ? "Show" : "Hide";
+    collapseBtn.setAttribute("aria-expanded", String(!collapsed));
+  });
+
+  // ---------------------------------------------------------- trace exercise
+
+  function renderTraceExercise(msg) {
+    dropEmptyState();
+    addTurn({
+      role: "tutor",
+      text: msg.prompt || "Work through this line by line and fill in each value.",
+      eyebrow: "Trace it yourself",
+    });
+
+    const variables = msg.variables || [];
+    const steps = Math.max(1, Number(msg.steps) || 1);
+
+    const panel = document.createElement("div");
+    panel.className = "trace";
+
+    const hint = document.createElement("div");
+    hint.className = "trace__prompt";
+    hint.textContent = "Fill in each variable's value after every step. Leave a cell blank if you're unsure.";
+    panel.appendChild(hint);
+
+    const table = document.createElement("table");
+    table.className = "trace__grid";
+
+    const head = document.createElement("tr");
+    const stepHead = document.createElement("th");
+    stepHead.textContent = "#";
+    head.appendChild(stepHead);
+    for (const name of variables) {
+      const th = document.createElement("th");
+      th.textContent = name;
+      head.appendChild(th);
+    }
+    table.appendChild(head);
+
+    const inputs = [];
+    for (let step = 0; step < steps; step++) {
+      const row = document.createElement("tr");
+      const label = document.createElement("td");
+      label.className = "trace__step";
+      label.textContent = String(step + 1);
+      row.appendChild(label);
+
+      const rowInputs = [];
+      variables.forEach((name, column) => {
+        const cell = document.createElement("td");
+        const input = document.createElement("input");
+        input.type = "text";
+        input.className = "trace__cell";
+        input.setAttribute("aria-label", `${name} after step ${step + 1}`);
+        cell.appendChild(input);
+        row.appendChild(cell);
+        rowInputs[column] = input;
+      });
+      inputs.push(rowInputs);
+      table.appendChild(row);
+    }
+    panel.appendChild(table);
+
+    const submit = document.createElement("button");
+    submit.className = "btn btn--primary";
+    submit.textContent = "Check my trace";
+    submit.addEventListener("click", () => {
+      const rows = inputs.map((row) => row.map((input) => input.value));
+      panel.remove();
+      addTurn({ role: "student", text: "Here's my trace." });
+      vscode.postMessage({ type: "traceAnswer", rows });
+    });
+    panel.appendChild(submit);
+
+    chatEl.appendChild(panel);
+    scrollToEnd();
+  }
+
+  // -------------------------------------------------------------- composer
+
+  function setComposerMode(mode, placeholder) {
+    composerMode = mode;
+    inputEl.placeholder = placeholder || DEFAULT_PLACEHOLDER;
   }
 
   function send() {
-    const q = inputEl.value.trim();
+    const text = inputEl.value.trim();
+
     if (composerMode === "explain") {
       removeActionRows();
       setComposerMode("hint");
-      vscode.postMessage({ type: "explainAnswer", explanation: q });
+      vscode.postMessage({ type: "explainAnswer", explanation: text });
       inputEl.value = "";
       return;
     }
     if (composerMode === "predict") {
-      if (!q) return;
+      if (!text) return;
       setComposerMode("hint");
-      vscode.postMessage({ type: "predictAnswer", prediction: q });
+      vscode.postMessage({ type: "predictAnswer", prediction: text });
       inputEl.value = "";
       return;
     }
-    if (!q) return;
+    if (!text) return;
+
     const mode = composerMode === "hint" ? "hint" : composerMode;
     setComposerMode("hint");
-    vscode.postMessage({ type: "askHint", question: q, code: currentCode, mode });
+    vscode.postMessage({
+      type: "askHint",
+      question: text,
+      code: currentCode,
+      mode,
+      confidence: mode === "hint" ? confidence : 0,
+    });
     inputEl.value = "";
+    setConfidence(0);
   }
 
   sendBtn.addEventListener("click", send);
+
+  inputEl.addEventListener("keydown", (event) => {
+    if (event.key === "Enter" && (event.ctrlKey || event.metaKey)) {
+      event.preventDefault();
+      send();
+    }
+  });
 
   quizBtn.addEventListener("click", () => {
     expectReflectAnswer = true;
     vscode.postMessage({ type: "askHint", question: "", code: currentCode, mode: "reflect" });
   });
 
+  resetBtn.addEventListener("click", () => vscode.postMessage({ type: "reset" }));
+  refreshBtn.addEventListener("click", () => vscode.postMessage({ type: "refreshCode" }));
+  authBtn.addEventListener("click", () =>
+    vscode.postMessage({ type: signedIn ? "signOut" : "signIn" })
+  );
   reviewBtn.addEventListener("click", () => {
-    reviewBtn.classList.add("hidden");
+    reviewBtn.hidden = true;
     vscode.postMessage({ type: "startReview" });
   });
-  inputEl.addEventListener("keydown", (e) => {
-    if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) {
-      e.preventDefault();
-      send();
+
+  // ------------------------------------------------------ message handling
+
+  function handleHint(msg) {
+    removeStreamingTurn();
+    const mode = msg.mode || "hint";
+    const level = Number(msg.hint_level) || 0;
+
+    if (mode === "hint") {
+      setLevel(level);
+    } else if (mode === "attempt-gate") {
+      holdLevel();
     }
-  });
 
-  resetBtn.addEventListener("click", () => {
-    vscode.postMessage({ type: "reset" });
-  });
+    addTurn({
+      role: "tutor",
+      text: msg.hint,
+      eyebrow: mode === "hint" ? `Hint ${level}` : MODE_LABEL[mode] || mode,
+      tags: msg.concept_tags || [],
+      flagged: FLAGGED_MODES.has(mode),
+    });
 
-  refreshBtn.addEventListener("click", () => {
-    vscode.postMessage({ type: "refreshCode" });
-  });
+    if (mode === "hint" && level === 3) {
+      addActionRow([
+        {
+          label: "Submit my translation",
+          onClick: () =>
+            setComposerMode("translate", "Paste your code translation of the pseudocode…"),
+        },
+        {
+          label: "Show a worked example",
+          onClick: () =>
+            vscode.postMessage({
+              type: "askHint",
+              question: "",
+              code: currentCode,
+              mode: "worked-example",
+            }),
+        },
+      ]);
+    }
+
+    if (mode === "worked-example") {
+      addActionRow([
+        {
+          label: "Label the steps",
+          onClick: () =>
+            setComposerMode("subgoal-label", "What does each numbered step accomplish?"),
+        },
+      ]);
+    }
+
+    if (mode === "reflect" && expectReflectAnswer) {
+      expectReflectAnswer = false;
+      setComposerMode("reflect", "Type your answer to the quiz question…");
+    }
+  }
 
   window.addEventListener("message", (event) => {
     const msg = event.data;
     switch (msg.type) {
+      case "restoreChat": {
+        const restored = Array.isArray(msg.messages) ? msg.messages : [];
+        turns = [];
+        clearChat();
+        for (const turn of restored) {
+          buildTurn(turn);
+          turns.push(turn);
+        }
+        if (!turns.length) showEmptyState();
+        break;
+      }
+
       case "activeCode":
         currentCode = msg.code || "";
-        codeEl.textContent = currentCode || "(no active file)";
+        renderCode(currentCode);
         fileNameEl.textContent = msg.fileName
           ? msg.fileName.split(/[\\/]/).pop()
           : "No active file";
         langChipEl.textContent = msg.language || "";
-        langChipEl.classList.toggle("hidden", !msg.language);
+        langChipEl.hidden = !msg.language;
         break;
+
       case "userMessage":
-        renderBubble({ role: "user", text: msg.text });
-        persist();
+        addTurn({ role: "student", text: msg.text });
         break;
+
       case "streamStart": {
-        removeStreamingBubble();
-        const div = document.createElement("div");
-        div.className = "bubble ai";
-        const textNode = document.createElement("div");
-        div.appendChild(textNode);
-        chatEl.appendChild(div);
-        streamingBubble = { div, textNode };
+        removeStreamingTurn();
+        dropEmptyState();
+        const wrap = document.createElement("div");
+        wrap.className = "turn turn--tutor";
+        const body = document.createElement("div");
+        body.className = "turn__body";
+        const text = document.createElement("span");
+        const caret = document.createElement("span");
+        caret.className = "caret";
+        body.appendChild(text);
+        body.appendChild(caret);
+        wrap.appendChild(body);
+        chatEl.appendChild(wrap);
+        streamingTurn = { wrap, text };
+        scrollToEnd();
         break;
       }
+
       case "streamDelta":
-        if (streamingBubble) {
-          streamingBubble.textNode.textContent += msg.text || "";
-          chatEl.scrollTop = chatEl.scrollHeight;
+        if (streamingTurn) {
+          streamingTurn.text.textContent += msg.text || "";
+          scrollToEnd();
         }
         break;
+
       case "streamAbort":
-        removeStreamingBubble();
+        removeStreamingTurn();
         break;
-      case "offline":
-        offlineBannerEl.classList.toggle("hidden", !msg.value);
-        sendBtn.disabled = !!msg.value;
-        quizBtn.disabled = !!msg.value;
+
+      case "hint":
+        handleHint(msg);
         break;
-      case "hint": {
-        removeStreamingBubble();
-        const mode = msg.mode || "hint";
-        renderBubble({
-          role: "ai",
-          text: msg.hint,
-          meta: mode === "hint" ? `Hint level ${msg.hint_level}` : MODE_META[mode] || mode,
-          tags: msg.concept_tags || [],
-        });
-        if (mode === "hint" && msg.hint_level === 3) {
-          addActionRow([
-            {
-              label: "✍️ Submit my translation",
-              onClick: () =>
-                setComposerMode(
-                  "translate",
-                  "Paste your code translation of the pseudocode..."
-                ),
-            },
-            {
-              label: "📘 Show a worked example",
-              onClick: () =>
-                vscode.postMessage({
-                  type: "askHint",
-                  question: "",
-                  code: currentCode,
-                  mode: "worked-example",
-                }),
-            },
-          ]);
-        }
-        if (mode === "reflect" && expectReflectAnswer) {
-          expectReflectAnswer = false;
-          setComposerMode("reflect", "Type your answer to the quiz question...");
-        }
-        persist();
+
+      case "traceTable":
+        renderTraceExercise(msg);
         break;
-      }
+
       case "predictFirst":
-        renderBubble({
-          role: "ai",
+        addTurn({
+          role: "tutor",
           text:
-            "Prediction time! Without running it, what do you think this code prints or does?\n\n" +
-            msg.snippet,
-          meta: "Predict the output",
+            "Without running it, what does this print or do?\n\n```\n" +
+            (msg.snippet || "") +
+            "\n```",
+          eyebrow: "Predict the output",
         });
-        setComposerMode("predict", "Type your prediction...");
-        persist();
+        setComposerMode("predict", "Type your prediction…");
         break;
+
       case "explainFirst":
-        renderBubble({ role: "ai", text: msg.prompt, meta: "Explain first" });
+        addTurn({ role: "tutor", text: msg.prompt, eyebrow: "Explain first" });
         addActionRow([
           {
             label: "Skip and get my hint",
@@ -289,45 +541,72 @@
             },
           },
         ]);
-        setComposerMode("explain", "Type what you think the code does...");
-        persist();
+        setComposerMode("explain", "Type what you think the code does…");
         break;
+
       case "error":
-        removeStreamingBubble();
-        renderBubble({ role: "error", text: `Error: ${msg.message}` });
-        persist();
+        removeStreamingTurn();
+        addTurn({ role: "error", text: msg.message, eyebrow: "Something went wrong" });
         break;
+
       case "loading":
-        loadingEl.classList.toggle("hidden", !msg.value);
+        loadingEl.hidden = !msg.value;
+        sendBtn.disabled = !!msg.value;
         break;
+
+      case "offline":
+        offlineBannerEl.hidden = !msg.value;
+        break;
+
       case "badges":
-        renderBadges(msg.badges || []);
+        renderBadges(msg.badges);
         break;
+
       case "authState":
         signedIn = !!msg.signedIn;
         accountLabelEl.textContent = msg.label;
+        accountLabelEl.title = msg.label;
         authBtn.textContent = signedIn ? "Sign out" : "Sign in";
         break;
+
       case "reviewDue":
-        reviewBtn.classList.remove("hidden");
+        reviewBtn.hidden = false;
         break;
+
       case "resetDone":
-        chatEl.innerHTML = "";
+        turns = [];
+        clearChat();
         setComposerMode("hint");
+        setConfidence(0);
+        setLevel(0);
         expectReflectAnswer = false;
-        persist();
         if (msg.summary) {
-          renderBubble({ role: "ai", text: msg.summary, meta: "What you learned this session" });
+          addTurn({ role: "tutor", text: msg.summary, eyebrow: "What you learned" });
         }
-        renderBubble({ role: "ai", text: "Session reset. Hint level starts over at 1." });
-        persist();
+        addTurn({
+          role: "tutor",
+          text: "Session reset. We're back at hint 1.",
+          eyebrow: "Fresh start",
+        });
         break;
+
       case "externalAsk":
         currentCode = msg.code || currentCode;
-        codeEl.textContent = currentCode;
+        renderCode(currentCode);
         break;
     }
   });
+
+  // Paint something immediately from webview state, then let the extension
+  // replace it with the durable copy once it answers "ready".
+  const saved = vscode.getState();
+  if (saved && Array.isArray(saved.turns) && saved.turns.length) {
+    turns = saved.turns;
+    for (const turn of turns) buildTurn(turn);
+  } else {
+    showEmptyState();
+  }
+  renderCode("");
 
   vscode.postMessage({ type: "ready" });
 })();

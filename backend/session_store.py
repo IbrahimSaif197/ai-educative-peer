@@ -29,6 +29,20 @@ class InMemorySessionStore:
             self._levels.popitem(last=False)
         return new_level
 
+    def current_hint_level(self, user_id: str, fingerprint: str) -> int:
+        """The level for this code without advancing it.
+
+        Used when the student asks again without editing anything: they get
+        the same depth of hint back rather than a free escalation.
+        """
+        key = (user_id, fingerprint)
+        level = max(1, self._levels.get(key, 0))
+        self._levels[key] = level
+        self._levels.move_to_end(key)
+        while len(self._levels) > self._max_entries:
+            self._levels.popitem(last=False)
+        return level
+
     def begin_session(self, user_id: str) -> bool:
         if self._active.get(user_id, False):
             return False
@@ -81,6 +95,30 @@ class FirestoreSessionStore:
             return new_level
         except Exception as e:
             print(f"[session] next_hint_level failed: {e}")
+            return 1
+
+    def current_hint_level(self, user_id: str, fingerprint: str) -> int:
+        """The level for this code without advancing it (see the in-memory twin)."""
+        try:
+            ref = self._client.collection(self.SESSIONS).document(
+                self._doc_id(user_id, fingerprint)
+            )
+            snap = ref.get(timeout=self.TIMEOUT)
+            current = int(snap.to_dict().get("hint_level", 0)) if snap.exists else 0
+            if current >= 1:
+                return min(3, current)
+            ref.set(
+                {
+                    "user_id": user_id,
+                    "fingerprint": fingerprint,
+                    "hint_level": 1,
+                    "updated_at": firestore.SERVER_TIMESTAMP,
+                },
+                timeout=self.TIMEOUT,
+            )
+            return 1
+        except Exception as e:
+            print(f"[session] current_hint_level failed: {e}")
             return 1
 
     def begin_session(self, user_id: str) -> bool:

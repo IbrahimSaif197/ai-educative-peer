@@ -1,5 +1,6 @@
 import os
 import asyncio
+import math
 import time
 from datetime import datetime, timezone
 from typing import Dict, List, Tuple
@@ -29,12 +30,16 @@ from models import (
     LineHintResponse,
     MigrateRequest,
     GoalRequest,
+    TraceRequest,
+    TraceResponse,
 )
 from auth import get_current_uid, verify_token
+from cache import TtlCache
 from hinting_engine import build_engine
 from firebase_service import FirebaseService
 from languages import normalize_language
 from progress import build_progress, pacing_summary, review_due_concepts
+from ratelimit import RateLimiterRegistry
 from session_store import build_session_store, code_fingerprint
 
 
@@ -55,6 +60,37 @@ store = build_session_store(firebase)
 # Short-lived per-user profile cache so /hint doesn't hit Firestore every call.
 PROFILE_TTL_SECONDS = 60.0
 _profile_cache: Dict[str, Tuple[float, dict]] = {}
+
+# The inline tutor fires these two automatically as the student types, so an
+# unchanged file must not cost a fresh LLM call. /hint is deliberately not
+# cached: the same question deserves a fresh answer, and its level advances.
+SCAN_CACHE = TtlCache(ttl_seconds=300.0, max_entries=1000)
+LINE_HINT_CACHE = TtlCache(ttl_seconds=300.0, max_entries=2000)
+
+# Per-user budgets protecting the Groq free tier: (requests, per seconds).
+limiters = RateLimiterRegistry(
+    {
+        "hint": (30, 60.0),
+        "inline": (60, 60.0),
+        "trace": (10, 60.0),
+    }
+)
+
+
+def rate_limited(bucket: str):
+    """FastAPI dependency: verify the token, then spend a rate-limit token."""
+
+    async def dependency(uid: str = Depends(get_current_uid)) -> str:
+        allowed, retry_after = limiters.check(bucket, uid)
+        if not allowed:
+            raise HTTPException(
+                status_code=429,
+                detail="EduPeer is getting a lot of questions from you — give it a moment.",
+                headers={"Retry-After": str(max(1, math.ceil(retry_after)))},
+            )
+        return uid
+
+    return dependency
 
 
 def _utc_today():
@@ -125,34 +161,46 @@ async def migrate(req: MigrateRequest, uid: str = Depends(get_current_uid)):
     return {"status": "ok", "merged": merged}
 
 
+async def _resolve_hint_level(req: HintRequest, uid: str) -> int:
+    """The level this request should answer at.
+
+    Only 'hint' mode is progressive, and it only advances when the client says
+    the student actually changed something (`escalate`). Asking the same
+    question again on untouched code re-uses the level instead of walking the
+    student to a free pseudocode answer.
+    """
+    if req.mode != "hint":
+        return req.hint_level
+    advance = store.next_hint_level if req.escalate else store.current_hint_level
+    return await asyncio.to_thread(advance, uid, code_fingerprint(req.code))
+
+
+async def _pacing_for(req: HintRequest, uid: str) -> str:
+    if req.mode != "hint":
+        return ""
+    profile = await _cached_profile(uid)
+    goal = profile.get("goal") or {}
+    return pacing_summary(
+        profile.get("concept_stats"),
+        goal_text=str(goal.get("text", "")) if isinstance(goal, dict) else "",
+    )
+
+
 @app.post("/hint", response_model=HintResponse)
-async def hint(req: HintRequest, uid: str = Depends(get_current_uid)) -> HintResponse:
+async def hint(req: HintRequest, uid: str = Depends(rate_limited("hint"))) -> HintResponse:
     if not req.question.strip():
         raise HTTPException(status_code=400, detail="question must not be empty")
 
-    if req.mode == "hint":
-        level = await asyncio.to_thread(
-            store.next_hint_level, uid, code_fingerprint(req.code)
-        )
-    else:
-        level = req.hint_level
-
+    level = await _resolve_hint_level(req, uid)
     language = normalize_language(req.language)
     history = [turn.model_dump() for turn in req.history]
-
-    pacing = ""
-    if req.mode == "hint":
-        profile = await _cached_profile(uid)
-        goal = profile.get("goal") or {}
-        pacing = pacing_summary(
-            profile.get("concept_stats"),
-            goal_text=str(goal.get("text", "")) if isinstance(goal, dict) else "",
-        )
+    pacing = await _pacing_for(req, uid)
 
     try:
         hint_text, concept_tags = await asyncio.to_thread(
             engine.generate_hint,
             req.code, req.question, level, language, history, req.mode, pacing,
+            req.edit_summary,
         )
     except Exception as e:
         raise HTTPException(status_code=502, detail=f"LLM error: {e}")
@@ -167,35 +215,22 @@ async def hint(req: HintRequest, uid: str = Depends(get_current_uid)) -> HintRes
         concept_tags=concept_tags,
         new_session=is_new_session,
         language=language,
+        confidence=req.confidence,
     )
 
     return HintResponse(hint=hint_text, hint_level=level, concept_tags=concept_tags)
 
 
 @app.post("/hint/stream")
-async def hint_stream(req: HintRequest, uid: str = Depends(get_current_uid)):
+async def hint_stream(req: HintRequest, uid: str = Depends(rate_limited("hint"))):
     """Server-sent-events variant of /hint: meta, delta..., done."""
     if not req.question.strip():
         raise HTTPException(status_code=400, detail="question must not be empty")
 
-    if req.mode == "hint":
-        level = await asyncio.to_thread(
-            store.next_hint_level, uid, code_fingerprint(req.code)
-        )
-    else:
-        level = req.hint_level
-
+    level = await _resolve_hint_level(req, uid)
     language = normalize_language(req.language)
     history = [turn.model_dump() for turn in req.history]
-
-    pacing = ""
-    if req.mode == "hint":
-        profile = await _cached_profile(uid)
-        goal = profile.get("goal") or {}
-        pacing = pacing_summary(
-            profile.get("concept_stats"),
-            goal_text=str(goal.get("text", "")) if isinstance(goal, dict) else "",
-        )
+    pacing = await _pacing_for(req, uid)
 
     def sse(payload: dict) -> str:
         return f"data: {json.dumps(payload)}\n\n"
@@ -205,7 +240,8 @@ async def hint_stream(req: HintRequest, uid: str = Depends(get_current_uid)):
         done = None
         try:
             for event in engine.stream_hint(
-                req.code, req.question, level, language, history, req.mode, pacing
+                req.code, req.question, level, language, history, req.mode, pacing,
+                req.edit_summary,
             ):
                 if event.get("type") == "done":
                     done = event
@@ -218,10 +254,12 @@ async def hint_stream(req: HintRequest, uid: str = Depends(get_current_uid)):
             # synchronously here instead of via fire_and_forget.
             is_new_session = store.begin_session(uid)
             firebase._log_interaction_sync(
-                uid, req.code, req.question, level, done["concept_tags"], language
+                uid, req.code, req.question, level, done["concept_tags"], language,
+                req.confidence,
             )
             firebase._update_user_and_award_badges_sync(
-                uid, level, done["concept_tags"], is_new_session, language
+                uid, level, done["concept_tags"], is_new_session, language,
+                req.confidence,
             )
 
     return StreamingResponse(event_source(), media_type="text/event-stream")
@@ -297,26 +335,59 @@ async def get_badges(uid: str = Depends(get_current_uid)) -> List[str]:
 
 
 @app.post("/scan", response_model=ScanResponse)
-async def scan(req: ScanRequest, uid: str = Depends(get_current_uid)) -> ScanResponse:
+async def scan(req: ScanRequest, uid: str = Depends(rate_limited("inline"))) -> ScanResponse:
     if not req.code.strip():
         return ScanResponse(flags=[])
+    language = normalize_language(req.language)
+    # uid is part of the key so one student's cached scan is never served to
+    # another, even though the code fingerprint alone would collide.
+    key = (uid, language, code_fingerprint(req.code))
+    cached = SCAN_CACHE.get(key)
+    if cached is not None:
+        return ScanResponse(flags=[LineFlag(**f) for f in cached])
     try:
-        raw_flags = await asyncio.to_thread(
-            engine.scan_code, req.code, normalize_language(req.language)
-        )
+        raw_flags = await asyncio.to_thread(engine.scan_code, req.code, language)
     except Exception as e:
         raise HTTPException(status_code=502, detail=f"LLM error: {e}")
+    SCAN_CACHE.set(key, raw_flags)
     return ScanResponse(flags=[LineFlag(**f) for f in raw_flags])
 
 
 @app.post("/line-hint", response_model=LineHintResponse)
-async def line_hint(req: LineHintRequest, uid: str = Depends(get_current_uid)) -> LineHintResponse:
+async def line_hint(
+    req: LineHintRequest, uid: str = Depends(rate_limited("inline"))
+) -> LineHintResponse:
     if not req.code.strip():
         return LineHintResponse(hint="", concept="general")
+    language = normalize_language(req.language)
+    key = (uid, language, req.line, code_fingerprint(req.code))
+    cached = LINE_HINT_CACHE.get(key)
+    if cached is not None:
+        return LineHintResponse(hint=cached[0], concept=cached[1])
     try:
         hint_text, concept = await asyncio.to_thread(
-            engine.generate_line_hint, req.code, req.line, normalize_language(req.language)
+            engine.generate_line_hint, req.code, req.line, language
         )
     except Exception as e:
         raise HTTPException(status_code=502, detail=f"LLM error: {e}")
+    LINE_HINT_CACHE.set(key, (hint_text, concept))
     return LineHintResponse(hint=hint_text, concept=concept)
+
+
+@app.post("/trace", response_model=TraceResponse)
+async def trace(req: TraceRequest, uid: str = Depends(rate_limited("trace"))) -> TraceResponse:
+    """Design a desk-check exercise: which variables to track, over how many steps.
+
+    An empty response (steps == 0) means the snippet has no state worth
+    tracing; the extension quietly falls back to a prediction exercise.
+    """
+    snippet = req.selection.strip() or req.code.strip()
+    if not snippet:
+        return TraceResponse()
+    try:
+        variables, steps, prompt = await asyncio.to_thread(
+            engine.design_trace_table, snippet, normalize_language(req.language)
+        )
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"LLM error: {e}")
+    return TraceResponse(variables=variables, steps=steps, prompt=prompt)

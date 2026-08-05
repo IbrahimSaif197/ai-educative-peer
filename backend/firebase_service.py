@@ -8,6 +8,7 @@ from firebase_admin import credentials, firestore
 
 
 from languages import LANGUAGES
+from progress import classify_calibration
 
 BADGE_FIRST_QUESTION = "First Question"
 BADGE_PERSISTENT_LEARNER = "Persistent Learner"
@@ -110,6 +111,65 @@ def _update_concept_stats(
     return result
 
 
+def _update_calibration(
+    calibration: Optional[Dict[str, Any]], verdict: Optional[str]
+) -> Dict[str, Any]:
+    """Fold one confidence-vs-outcome verdict into the counters (copy)."""
+    result = {
+        key: int((calibration or {}).get(key, 0))
+        for key in ("calibrated", "overconfident", "underconfident")
+    }
+    if verdict in result:
+        result[verdict] += 1
+    return result
+
+
+def _update_hint_level_counts(
+    counts: Optional[Dict[str, Any]], hint_level: int
+) -> Dict[str, int]:
+    result = {key: int((counts or {}).get(key, 0)) for key in ("1", "2", "3")}
+    key = str(max(1, min(3, int(hint_level))))
+    result[key] += 1
+    return result
+
+
+def _update_activity(
+    activity: Optional[Dict[str, Any]], today: date, keep_days: int = 30
+) -> Dict[str, int]:
+    """Per-day interaction counts, trimmed to the most recent `keep_days`."""
+    result: Dict[str, int] = {}
+    for iso, value in (activity or {}).items():
+        try:
+            result[str(iso)] = int(value)
+        except (TypeError, ValueError):
+            continue
+    today_iso = today.isoformat()
+    result[today_iso] = result.get(today_iso, 0) + 1
+    cutoff = (today - timedelta(days=keep_days)).isoformat()
+    return {iso: n for iso, n in result.items() if iso >= cutoff}
+
+
+def _merge_activity(
+    a: Optional[Dict[str, Any]], b: Optional[Dict[str, Any]]
+) -> Dict[str, int]:
+    result: Dict[str, int] = {}
+    for source in (a or {}), (b or {}):
+        for iso, value in source.items():
+            try:
+                result[str(iso)] = result.get(str(iso), 0) + int(value)
+            except (TypeError, ValueError):
+                continue
+    return result
+
+
+def _merge_counters(
+    a: Optional[Dict[str, Any]], b: Optional[Dict[str, Any]], keys: Tuple[str, ...]
+) -> Dict[str, int]:
+    return {
+        key: int((a or {}).get(key, 0)) + int((b or {}).get(key, 0)) for key in keys
+    }
+
+
 def _merge_concept_stats(
     a: Optional[Dict[str, Any]], b: Optional[Dict[str, Any]]
 ) -> Dict[str, Any]:
@@ -173,6 +233,7 @@ class FirebaseService:
         hint_level_used: int,
         concept_tags: List[str],
         language: str = "python",
+        confidence: int = 0,
     ) -> None:
         if not self.enabled:
             return
@@ -185,6 +246,7 @@ class FirebaseService:
                 "hint_level_used": hint_level_used,
                 "concept_tags": concept_tags,
                 "language": language,
+                "confidence": int(confidence or 0),
             }
             self._client.collection("interactions").add(doc)
         except Exception as e:
@@ -197,6 +259,7 @@ class FirebaseService:
         concept_tags: List[str],
         new_session: bool,
         language: str = "python",
+        confidence: int = 0,
     ) -> List[str]:
         if not self.enabled:
             return []
@@ -224,6 +287,15 @@ class FirebaseService:
                 data.get("last_active_date"), int(data.get("streak_days", 0)), today
             )
 
+            calibration = _update_calibration(
+                data.get("calibration"),
+                classify_calibration(int(confidence or 0), hint_level_used),
+            )
+            level_counts = _update_hint_level_counts(
+                data.get("hint_level_counts"), hint_level_used
+            )
+            activity = _update_activity(data.get("activity"), today)
+
             badges = _apply_badge_rules(
                 badges, total_interactions, sessions, solved_at_level_1, concept_tags_seen,
                 streak_days=streak_days, languages_used=languages_used,
@@ -240,6 +312,9 @@ class FirebaseService:
                     "languages_used": languages_used,
                     "last_active_date": last_active_date,
                     "streak_days": streak_days,
+                    "calibration": calibration,
+                    "hint_level_counts": level_counts,
+                    "activity": activity,
                     "updated_at": firestore.SERVER_TIMESTAMP,
                 },
                 merge=True,
@@ -258,6 +333,7 @@ class FirebaseService:
         concept_tags: List[str],
         new_session: bool,
         language: str = "python",
+        confidence: int = 0,
     ) -> None:
         loop = asyncio.get_running_loop()
         loop.run_in_executor(
@@ -269,6 +345,7 @@ class FirebaseService:
             hint_level_used,
             concept_tags,
             language,
+            confidence,
         )
         loop.run_in_executor(
             None,
@@ -278,6 +355,7 @@ class FirebaseService:
             concept_tags,
             new_session,
             language,
+            confidence,
         )
 
     def fire_and_forget(
@@ -289,6 +367,7 @@ class FirebaseService:
         concept_tags: List[str],
         new_session: bool,
         language: str = "python",
+        confidence: int = 0,
     ) -> None:
         try:
             task = asyncio.create_task(
@@ -300,6 +379,7 @@ class FirebaseService:
                     concept_tags,
                     new_session,
                     language,
+                    confidence,
                 )
             )
             self._pending_tasks.add(task)
@@ -410,6 +490,15 @@ class FirebaseService:
             last_active_date = (
                 max(src.get("last_active_date") or "", tgt.get("last_active_date") or "") or None
             )
+            calibration = _merge_counters(
+                src.get("calibration"),
+                tgt.get("calibration"),
+                ("calibrated", "overconfident", "underconfident"),
+            )
+            level_counts = _merge_counters(
+                src.get("hint_level_counts"), tgt.get("hint_level_counts"), ("1", "2", "3")
+            )
+            activity = _merge_activity(src.get("activity"), tgt.get("activity"))
             badges = _apply_badge_rules(
                 badges, total, sessions, solved_1, tags,
                 streak_days=streak_days, languages_used=languages_used,
@@ -426,6 +515,9 @@ class FirebaseService:
                     "languages_used": languages_used,
                     "streak_days": streak_days,
                     "last_active_date": last_active_date,
+                    "calibration": calibration,
+                    "hint_level_counts": level_counts,
+                    "activity": activity,
                     "updated_at": firestore.SERVER_TIMESTAMP,
                 },
                 merge=True,

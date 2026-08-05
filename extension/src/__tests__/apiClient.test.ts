@@ -1,4 +1,4 @@
-import { ApiClient, parseSseChunk } from "../apiClient";
+import { ApiClient, RateLimitError, parseSseChunk } from "../apiClient";
 
 const BASE = "http://localhost:8000";
 
@@ -167,5 +167,150 @@ describe("availability tracking", () => {
     const api = new ApiClient(BASE, makeTokens());
     await api.health();
     expect(api.isAvailable).toBe(false);
+  });
+});
+
+describe("rate limiting", () => {
+  function mockThrottled(retryAfter?: string): jest.Mock {
+    const mock = jest.fn().mockResolvedValue({
+      ok: false,
+      status: 429,
+      headers: { get: (name: string) => (name === "Retry-After" ? retryAfter ?? null : null) },
+      json: async () => ({ detail: "slow down" }),
+      text: async () => "slow down",
+    });
+    (global as any).fetch = mock;
+    return mock;
+  }
+
+  it("throws a RateLimitError from /hint", async () => {
+    mockThrottled("12");
+    const api = new ApiClient(BASE, makeTokens());
+    await expect(api.getHint({ code: "", question: "q", hint_level: 1 })).rejects.toBeInstanceOf(
+      RateLimitError
+    );
+  });
+
+  it("carries the Retry-After value", async () => {
+    mockThrottled("12");
+    const api = new ApiClient(BASE, makeTokens());
+    await api.getHint({ code: "", question: "q", hint_level: 1 }).catch((err) => {
+      expect((err as RateLimitError).retryAfterSeconds).toBe(12);
+    });
+    expect.assertions(1);
+  });
+
+  it("falls back to a sane wait when the header is missing", async () => {
+    mockThrottled(undefined);
+    const api = new ApiClient(BASE, makeTokens());
+    await api.scanCode("x=1").catch((err) => {
+      expect((err as RateLimitError).retryAfterSeconds).toBe(30);
+    });
+    expect.assertions(1);
+  });
+
+  it("throws rather than silently degrading on /scan", async () => {
+    mockThrottled("5");
+    const api = new ApiClient(BASE, makeTokens());
+    await expect(api.scanCode("x=1")).rejects.toBeInstanceOf(RateLimitError);
+  });
+
+  it("throws rather than silently degrading on /line-hint", async () => {
+    mockThrottled("5");
+    const api = new ApiClient(BASE, makeTokens());
+    await expect(api.getLineHint("x=1", 1)).rejects.toBeInstanceOf(RateLimitError);
+  });
+
+  it("does not treat a 429 stream as a fallback-to-/hint case", async () => {
+    // Retrying /hint would just spend the same exhausted budget.
+    mockThrottled("5");
+    const api = new ApiClient(BASE, makeTokens());
+    await expect(
+      api.streamHint({ code: "", question: "q", hint_level: 1 }, () => {})
+    ).rejects.toBeInstanceOf(RateLimitError);
+  });
+
+  it("leaves the backend marked available — throttled is not down", async () => {
+    mockThrottled("5");
+    const api = new ApiClient(BASE, makeTokens());
+    await api.getHint({ code: "", question: "q", hint_level: 1 }).catch(() => undefined);
+    expect(api.isAvailable).toBe(true);
+  });
+});
+
+describe("ApiClient.getTrace", () => {
+  it("returns the designed exercise", async () => {
+    mockFetch(200, { variables: ["i", "total"], steps: 4, prompt: "Trace the loop." });
+    const api = new ApiClient(BASE, makeTokens());
+    expect(await api.getTrace("code", "snippet", "python")).toEqual({
+      variables: ["i", "total"],
+      steps: 4,
+      prompt: "Trace the loop.",
+    });
+  });
+
+  it("sends the selection and language", async () => {
+    const fetchMock = mockFetch(200, { variables: [], steps: 0, prompt: "" });
+    const api = new ApiClient(BASE, makeTokens());
+    await api.getTrace("whole file", "just this", "rust");
+    const body = JSON.parse(fetchMock.mock.calls[0][1].body);
+    expect(body).toEqual({ code: "whole file", selection: "just this", language: "rust" });
+  });
+
+  it("degrades to an empty exercise on a backend error", async () => {
+    mockFetch(500, {});
+    const api = new ApiClient(BASE, makeTokens());
+    expect(await api.getTrace("code", "snippet")).toEqual({
+      variables: [],
+      steps: 0,
+      prompt: "",
+    });
+  });
+
+  it("degrades to an empty exercise when the backend is unreachable", async () => {
+    (global as any).fetch = jest.fn().mockRejectedValue(new Error("ECONNREFUSED"));
+    const api = new ApiClient(BASE, makeTokens());
+    expect((await api.getTrace("code", "snippet")).steps).toBe(0);
+  });
+
+  it("degrades rather than throwing when throttled", async () => {
+    // The trace exercise is optional; a 429 should not surface as an error.
+    (global as any).fetch = jest.fn().mockResolvedValue({
+      ok: false,
+      status: 429,
+      headers: { get: () => "5" },
+      json: async () => ({}),
+      text: async () => "",
+    });
+    const api = new ApiClient(BASE, makeTokens());
+    expect((await api.getTrace("code", "snippet")).steps).toBe(0);
+  });
+});
+
+describe("hint request fields", () => {
+  it("forwards escalate, edit_summary and confidence", async () => {
+    const fetchMock = mockFetch(200, { hint: "h", hint_level: 2, concept_tags: [] });
+    const api = new ApiClient(BASE, makeTokens());
+    await api.getHint({
+      code: "x=1",
+      question: "help",
+      hint_level: 1,
+      escalate: false,
+      edit_summary: "1 - a\n1 + b",
+      confidence: 3,
+    });
+    const body = JSON.parse(fetchMock.mock.calls[0][1].body);
+    expect(body.escalate).toBe(false);
+    expect(body.edit_summary).toBe("1 - a\n1 + b");
+    expect(body.confidence).toBe(3);
+  });
+
+  it("omits the new fields entirely when unset", async () => {
+    const fetchMock = mockFetch(200, { hint: "h", hint_level: 1, concept_tags: [] });
+    const api = new ApiClient(BASE, makeTokens());
+    await api.getHint({ code: "x=1", question: "help", hint_level: 1 });
+    const body = JSON.parse(fetchMock.mock.calls[0][1].body);
+    expect(body).not.toHaveProperty("escalate");
+    expect(body).not.toHaveProperty("confidence");
   });
 });

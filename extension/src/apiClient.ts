@@ -14,6 +14,25 @@ export interface HintRequest {
   language?: string;
   mode?: string;
   history?: ChatTurn[];
+  /** False re-uses the current hint level instead of advancing it. */
+  escalate?: boolean;
+  /** Compact diff of what the student changed since the last hint. */
+  edit_summary?: string;
+  /** Self-rated confidence 1-3 before the hint; 0 or omitted means not given. */
+  confidence?: number;
+}
+
+/** Thrown when the backend asks us to slow down, so callers can stay quiet. */
+export class RateLimitError extends Error {
+  constructor(readonly retryAfterSeconds: number) {
+    super("EduPeer is getting a lot of questions from you — give it a moment.");
+    this.name = "RateLimitError";
+  }
+}
+
+function rateLimitErrorFrom(res: Response): RateLimitError {
+  const header = Number(res.headers?.get?.("Retry-After"));
+  return new RateLimitError(Number.isFinite(header) && header > 0 ? header : 30);
 }
 
 export interface HintResponse {
@@ -57,12 +76,36 @@ export interface ProgressReport {
   concept_strengths: ConceptStat[];
   session_summaries: Array<{ text: string; date: string }>;
   review_due: boolean;
+  /** Added in v2; absent when talking to an older backend. */
+  calibration?: CalibrationReport;
+  hint_level_counts?: Record<string, number>;
+  activity?: ActivityDay[];
 }
 
 export interface ReviewResponse {
   due: boolean;
   concepts: string[];
   exercise: string;
+}
+
+export interface TraceResponse {
+  variables: string[];
+  steps: number;
+  prompt: string;
+}
+
+export interface CalibrationReport {
+  samples: number;
+  score: number;
+  calibrated: number;
+  overconfident: number;
+  underconfident: number;
+  enough_data: boolean;
+}
+
+export interface ActivityDay {
+  date: string;
+  count: number;
 }
 
 export interface SseEvent {
@@ -167,11 +210,30 @@ export class ApiClient {
 
   async getHint(req: HintRequest): Promise<HintResponse> {
     const res = await this.authedJson("/hint", req);
+    if (res.status === 429) {
+      throw rateLimitErrorFrom(res);
+    }
     if (!res.ok) {
       const text = await res.text();
       throw new Error(`Backend error (${res.status}): ${text}`);
     }
     return (await res.json()) as HintResponse;
+  }
+
+  /**
+   * Ask the backend to design a desk-check exercise for a snippet. Returns
+   * steps: 0 when there is nothing worth tracing or the backend is unhappy —
+   * callers fall back to a free-text prediction rather than showing an error.
+   */
+  async getTrace(code: string, selection: string, language = "python"): Promise<TraceResponse> {
+    const empty: TraceResponse = { variables: [], steps: 0, prompt: "" };
+    try {
+      const res = await this.authedJson("/trace", { code, selection, language });
+      if (!res.ok) return empty;
+      return (await res.json()) as TraceResponse;
+    } catch {
+      return empty;
+    }
   }
 
   /**
@@ -184,6 +246,11 @@ export class ApiClient {
     onEvent: (event: SseEvent) => void
   ): Promise<HintResponse> {
     const res = await this.authedJson("/hint/stream", req);
+    if (res.status === 429) {
+      // Not a stream failure — falling back to /hint would just burn the same
+      // exhausted budget, so surface it and let the caller show the message.
+      throw rateLimitErrorFrom(res);
+    }
     if (!res.ok || !res.body) {
       throw new Error(`stream failed (${res.status})`);
     }
@@ -259,6 +326,9 @@ export class ApiClient {
 
   async scanCode(code: string, language = "python"): Promise<ScanResponse> {
     const res = await this.authedJson("/scan", { code, language });
+    if (res.status === 429) {
+      throw rateLimitErrorFrom(res);
+    }
     if (!res.ok) {
       throw new Error(`scan failed (${res.status})`);
     }
@@ -267,6 +337,9 @@ export class ApiClient {
 
   async getLineHint(code: string, line: number, language = "python"): Promise<LineHintResponse> {
     const res = await this.authedJson("/line-hint", { code, line, language });
+    if (res.status === 429) {
+      throw rateLimitErrorFrom(res);
+    }
     if (!res.ok) {
       throw new Error(`line-hint failed (${res.status})`);
     }

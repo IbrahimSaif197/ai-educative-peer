@@ -393,3 +393,190 @@ class TestConversationHistory:
         engine.generate_hint("x=1", "help", 1)
         messages = self._sent_messages(engine)
         assert len(messages) == 2
+
+
+class TestEditSummary:
+    def _engine(self, response_text: str):
+        from hinting_engine import HintingEngine
+        engine = HintingEngine(api_key="test-key")
+        engine.client = _make_mock_client(response_text)
+        return engine
+
+    def _user_message(self, engine):
+        messages = engine.client.chat.completions.create.call_args.kwargs["messages"]
+        return messages[-1]["content"]
+
+    def test_edit_summary_reaches_the_prompt(self):
+        engine = self._engine("ok. What do you think should happen next?")
+        engine.generate_hint(
+            "x = 1", "still broken", 2, edit_summary="12 - range(n)\n12 + range(n+1)"
+        )
+        content = self._user_message(engine)
+        assert "changed since the last hint" in content
+        assert "range(n+1)" in content
+
+    def test_no_edit_summary_adds_no_section(self):
+        engine = self._engine("ok. What do you think should happen next?")
+        engine.generate_hint("x = 1", "help", 1)
+        assert "changed since the last hint" not in self._user_message(engine)
+
+    def test_whitespace_only_summary_is_ignored(self):
+        engine = self._engine("ok. What do you think should happen next?")
+        engine.generate_hint("x = 1", "help", 1, edit_summary="   \n  ")
+        assert "changed since the last hint" not in self._user_message(engine)
+
+    def test_edit_summary_included_for_non_hint_modes(self):
+        engine = self._engine("ok")
+        engine.generate_hint(
+            "x = 1", "here is my fix", 1, mode="reflect", edit_summary="3 + fixed"
+        )
+        assert "3 + fixed" in self._user_message(engine)
+
+    def test_streaming_passes_edit_summary_through(self):
+        engine = self._engine("ok")
+        chunk = MagicMock()
+        chunk.choices[0].delta.content = "hi"
+        engine.client.chat.completions.create.return_value = [chunk]
+        list(engine.stream_hint("x=1", "q", 1, edit_summary="9 + total = 0"))
+        assert "9 + total = 0" in self._user_message(engine)
+
+
+class TestSubgoalAndTraceModes:
+    def _engine(self, response_text: str):
+        from hinting_engine import HintingEngine
+        engine = HintingEngine(api_key="test-key")
+        engine.client = _make_mock_client(response_text)
+        return engine
+
+    def _system_message(self, engine):
+        return engine.client.chat.completions.create.call_args.kwargs["messages"][0]["content"]
+
+    def test_subgoal_label_mode_uses_its_own_prompt(self):
+        engine = self._engine("Good label for step 2.")
+        engine.generate_hint("", "step 1 sets up the counter", 1, mode="subgoal-label")
+        assert "label" in self._system_message(engine).lower()
+
+    def test_trace_check_mode_uses_its_own_prompt(self):
+        engine = self._engine("Step 3 diverges.")
+        engine.generate_hint("", "i=0 total=0", 1, mode="trace-check")
+        system = self._system_message(engine).lower()
+        assert "desk check" in system or "hand-trace" in system
+
+    def test_worked_example_asks_for_unlabelled_numbered_steps(self):
+        engine = self._engine("1. do a thing")
+        engine.generate_hint("", "stuck", 3, mode="worked-example")
+        system = self._system_message(engine)
+        assert "NUMBERED" in system
+        assert "student will do that" in system
+
+    def test_non_hint_modes_do_not_append_the_socratic_closer(self):
+        engine = self._engine("Nicely labelled.")
+        hint, _ = engine.generate_hint("", "labels", 1, mode="subgoal-label")
+        assert "What do you think should happen next?" not in hint
+
+    def test_unknown_mode_falls_back_to_hint(self):
+        engine = self._engine("ok")
+        hint, _ = engine.generate_hint("x=1", "q", 1, mode="not-a-mode")
+        assert hint.endswith("What do you think should happen next?")
+
+
+class TestDesignTraceTable:
+    def _engine(self, response_text: str):
+        from hinting_engine import HintingEngine
+        engine = HintingEngine(api_key="test-key")
+        engine.client = _make_mock_client(response_text)
+        return engine
+
+    def test_parses_a_well_formed_reply(self):
+        engine = self._engine(
+            '{"variables": ["i", "total"], "steps": 4, "prompt": "Trace the loop."}'
+        )
+        variables, steps, prompt = engine.design_trace_table("for i in range(4): total += i")
+        assert variables == ["i", "total"]
+        assert steps == 4
+        assert prompt == "Trace the loop."
+
+    def test_empty_snippet_makes_no_llm_call(self):
+        engine = self._engine('{"variables": ["i", "j"], "steps": 3, "prompt": "x"}')
+        assert engine.design_trace_table("   ") == ([], 0, "")
+        engine.client.chat.completions.create.assert_not_called()
+
+    def test_model_declining_yields_nothing_to_trace(self):
+        engine = self._engine('{"variables": [], "steps": 0, "prompt": ""}')
+        assert engine.design_trace_table("x = 1") == ([], 0, "")
+
+    def test_unparseable_reply_yields_nothing(self):
+        engine = self._engine("I am afraid I cannot do that")
+        assert engine.design_trace_table("for i in range(3): pass") == ([], 0, "")
+
+    def test_single_variable_is_rejected(self):
+        engine = self._engine('{"variables": ["i"], "steps": 4, "prompt": "Trace it."}')
+        assert engine.design_trace_table("code") == ([], 0, "")
+
+    def test_variables_capped_at_four(self):
+        engine = self._engine(
+            '{"variables": ["a","b","c","d","e","f"], "steps": 4, "prompt": "Trace."}'
+        )
+        variables, _, _ = engine.design_trace_table("code")
+        assert variables == ["a", "b", "c", "d"]
+
+    def test_duplicate_variables_dropped(self):
+        engine = self._engine('{"variables": ["i","i","total"], "steps": 3, "prompt": "Trace."}')
+        variables, _, _ = engine.design_trace_table("code")
+        assert variables == ["i", "total"]
+
+    def test_prose_masquerading_as_a_variable_is_dropped(self):
+        engine = self._engine(
+            '{"variables": ["i", "the running total; watch it", "total"], '
+            '"steps": 3, "prompt": "Trace."}'
+        )
+        variables, _, _ = engine.design_trace_table("code")
+        assert variables == ["i", "total"]
+
+    def test_indexed_and_dotted_names_are_allowed(self):
+        engine = self._engine('{"variables": ["arr[0]", "obj.count"], "steps": 3, "prompt": "T."}')
+        variables, _, _ = engine.design_trace_table("code")
+        assert variables == ["arr[0]", "obj.count"]
+
+    def test_overlong_variable_name_dropped(self):
+        from hinting_engine import MAX_TRACE_VARIABLE_CHARS
+        long_name = "v" * (MAX_TRACE_VARIABLE_CHARS + 1)
+        engine = self._engine(
+            '{"variables": ["i", "' + long_name + '", "total"], "steps": 3, "prompt": "T."}'
+        )
+        variables, _, _ = engine.design_trace_table("code")
+        assert variables == ["i", "total"]
+
+    def test_steps_clamped_up_to_the_minimum(self):
+        from hinting_engine import MIN_TRACE_STEPS
+        engine = self._engine('{"variables": ["i","j"], "steps": 1, "prompt": "T."}')
+        _, steps, _ = engine.design_trace_table("code")
+        assert steps == MIN_TRACE_STEPS
+
+    def test_steps_clamped_down_to_the_maximum(self):
+        from hinting_engine import MAX_TRACE_STEPS
+        engine = self._engine('{"variables": ["i","j"], "steps": 500, "prompt": "T."}')
+        _, steps, _ = engine.design_trace_table("code")
+        assert steps == MAX_TRACE_STEPS
+
+    def test_non_numeric_steps_yields_nothing(self):
+        engine = self._engine('{"variables": ["i","j"], "steps": "four", "prompt": "T."}')
+        assert engine.design_trace_table("code") == ([], 0, "")
+
+    def test_missing_prompt_yields_nothing(self):
+        engine = self._engine('{"variables": ["i","j"], "steps": 4, "prompt": ""}')
+        assert engine.design_trace_table("code") == ([], 0, "")
+
+    def test_prompt_is_collapsed_and_truncated(self):
+        padding = "x" * 300
+        engine = self._engine(
+            '{"variables": ["i","j"], "steps": 4, '
+            '"prompt": "  Trace\\n  the   loop. ' + padding + '"}'
+        )
+        _, _, prompt = engine.design_trace_table("code")
+        assert prompt.startswith("Trace the loop.")
+        assert len(prompt) <= 200
+
+    def test_variables_of_wrong_type_yields_nothing(self):
+        engine = self._engine('{"variables": "i and j", "steps": 4, "prompt": "T."}')
+        assert engine.design_trace_table("code") == ([], 0, "")

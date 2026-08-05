@@ -3,6 +3,8 @@ import {
   formatExceptionQuestion,
   frameExplainedQuestion,
   framePrediction,
+  frameSubgoalLabels,
+  frameTraceTable,
   frameTranslation,
   looksLikeErrorText,
   questionForMode,
@@ -103,5 +105,70 @@ describe("formatExceptionQuestion", () => {
     const q = formatExceptionQuestion("E", "f", "a.py:1", vars);
     expect(q).toContain("v14 =");
     expect(q).not.toContain("v15 =");
+  });
+});
+
+describe("frameTraceTable", () => {
+  const SNIPPET = "for i in range(3):\n    total += i";
+
+  it("renders a header row from the variable names", () => {
+    const text = frameTraceTable(SNIPPET, ["i", "total"], [["0", "0"]]);
+    expect(text).toContain("step | i | total");
+  });
+
+  it("numbers the rows from 1", () => {
+    const text = frameTraceTable(SNIPPET, ["i"], [["0"], ["1"]]);
+    expect(text).toContain("1 | 0");
+    expect(text).toContain("2 | 1");
+  });
+
+  it("marks blank cells so the tutor can see what they skipped", () => {
+    const text = frameTraceTable(SNIPPET, ["i", "total"], [["0", ""]]);
+    expect(text).toContain("1 | 0 | ?");
+  });
+
+  it("marks whitespace-only cells as unanswered too", () => {
+    expect(frameTraceTable(SNIPPET, ["i"], [["   "]])).toContain("1 | ?");
+  });
+
+  it("fills in a short row rather than losing a column", () => {
+    expect(frameTraceTable(SNIPPET, ["i", "total"], [["0"]])).toContain("1 | 0 | ?");
+  });
+
+  it("survives a missing row", () => {
+    expect(() =>
+      frameTraceTable(SNIPPET, ["i"], [undefined as unknown as string[]])
+    ).not.toThrow();
+  });
+
+  it("includes the snippet being traced", () => {
+    expect(frameTraceTable(SNIPPET, ["i"], [["0"]])).toContain("total += i");
+  });
+
+  it("ends by asking where the trace diverges", () => {
+    expect(frameTraceTable(SNIPPET, ["i"], [["0"]])).toContain("Where does my trace go wrong?");
+  });
+});
+
+describe("frameSubgoalLabels", () => {
+  it("presents the labels as the student's own", () => {
+    const text = frameSubgoalLabels("1. set up a counter\n2. add each item");
+    expect(text).toContain("what I think each step");
+    expect(text).toContain("set up a counter");
+  });
+
+  it("trims surrounding whitespace", () => {
+    expect(frameSubgoalLabels("  labels  ")).toContain("labels");
+    expect(frameSubgoalLabels("  labels  ")).not.toContain("  labels  ");
+  });
+});
+
+describe("questionForMode with the new modes", () => {
+  it("frames subgoal labels", () => {
+    expect(questionForMode("subgoal-label", "step 1 counts")).toContain("step 1 counts");
+  });
+
+  it("returns nothing for empty subgoal labels", () => {
+    expect(questionForMode("subgoal-label", "   ")).toBe("");
   });
 });

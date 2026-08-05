@@ -11,7 +11,9 @@ export type TutorMode =
   | "explain-error"
   | "explain-concept"
   | "predict-output"
-  | "review-exercise";
+  | "review-exercise"
+  | "subgoal-label"
+  | "trace-check";
 
 export const EXPLAIN_FIRST_PROMPT =
   "Before I give you a hint — in your own words, what do you think this code is doing? " +
@@ -68,6 +70,38 @@ export function frameConstructExplanation(selection: string): string {
   return `Please explain what this construct does:\n\n${selection.trim()}`;
 }
 
+/**
+ * Turn a filled-in desk-check grid into a compact text table for the tutor.
+ * `rows[step][variable]` holds whatever the student typed; blanks become "?"
+ * so the model can see which cells they could not work out.
+ */
+export function frameTraceTable(
+  snippet: string,
+  variables: string[],
+  rows: string[][]
+): string {
+  const header = ["step", ...variables].join(" | ");
+  const body = rows
+    .map((row, index) =>
+      [
+        String(index + 1),
+        ...variables.map((_, column) => (row?.[column] ?? "").trim() || "?"),
+      ].join(" | ")
+    )
+    .join("\n");
+  return (
+    `Here is my hand-trace of this code:\n\n${snippet.trim()}\n\n` +
+    `${header}\n${body}\n\n` +
+    `Where does my trace go wrong?`
+  );
+}
+
+export function frameSubgoalLabels(labels: string): string {
+  return (
+    `Here is what I think each step of your example accomplishes:\n\n${labels.trim()}`
+  );
+}
+
 export function formatExceptionQuestion(
   description: string,
   frameName: string,
@@ -98,6 +132,9 @@ export function questionForMode(mode: TutorMode, rawInput: string): string {
   const input = (rawInput || "").trim();
   if (mode === "translate") {
     return input ? frameTranslation(input) : "";
+  }
+  if (mode === "subgoal-label") {
+    return input ? frameSubgoalLabels(input) : "";
   }
   if (!input) {
     return DEFAULT_MODE_QUESTIONS[mode] ?? "";

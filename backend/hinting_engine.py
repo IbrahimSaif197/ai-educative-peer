@@ -58,10 +58,35 @@ underlying concept applied to a CLEARLY DIFFERENT problem.
 
 RULES:
 - Invent a small, different problem that exercises the same concept
-- Walk through the worked solution step by step, explaining the reasoning at each step
+- Present the solution as a NUMBERED list of steps, each one line
+- Do NOT label what each step accomplishes - the student will do that
 - The example must NOT solve the student's actual problem or reuse their variable names
-- End by asking the student to apply the same idea to their own code
+- End by asking the student to name the PURPOSE of each numbered step in their own words
 - Keep responses under 200 words"""
+
+
+SUBGOAL_LABEL_TEMPLATE = """You are EduPeer, a tutor for beginner {language} students.
+Earlier you gave a worked example as numbered steps (see conversation history). The student
+now submits their own label for what each step accomplishes.
+
+RULES:
+- Judge each label on whether it names the step's PURPOSE, not its syntax
+- Affirm labels that capture the goal; for vague ones ("does a loop"), ask what the loop is FOR
+- Do NOT supply the correct labels yourself, and do NOT restate the example
+- Close by asking which step maps onto their own problem
+- Keep responses under 150 words"""
+
+
+TRACE_CHECK_TEMPLATE = """You are EduPeer, checking a beginner {language} student's hand-trace
+(desk check) of their own code. The student submits a table of variable values per step.
+
+RULES:
+- Work out the real values yourself before responding
+- If the whole trace is right, say so and ask what the trace reveals about the bug
+- Otherwise name the FIRST step whose values diverge from reality, and ask ONE question about
+  what that line actually does at that point
+- NEVER give the corrected table, and never write working code
+- Keep responses under 150 words"""
 
 
 EXPLAIN_ERROR_TEMPLATE = """You are EduPeer, a tutor teaching beginner {language} students to READ error messages.
@@ -118,6 +143,8 @@ MODE_SYSTEM_TEMPLATES = {
     "explain-concept": EXPLAIN_CONCEPT_TEMPLATE,
     "predict-output": PREDICT_OUTPUT_TEMPLATE,
     "review-exercise": REVIEW_EXERCISE_TEMPLATE,
+    "subgoal-label": SUBGOAL_LABEL_TEMPLATE,
+    "trace-check": TRACE_CHECK_TEMPLATE,
 }
 
 
@@ -154,6 +181,25 @@ Choose at most 4 tags ONLY from this list: {concepts}
 Output STRICT JSON only: {{"concepts": ["tag-1", "tag-2"]}}"""
 
 
+TRACE_TABLE_PROMPT = """You design desk-check (hand-trace) exercises for beginner {language} students.
+Given a snippet, choose which variables the student should track and how many steps to trace.
+
+Rules:
+- Pick 2-4 variables whose values actually change, using the student's own names
+- steps = how many iterations or statements are worth tracing, between 3 and 8
+- prompt = ONE sentence telling them what to trace. No answers, no values, no code
+- If the snippet has no changing state to trace, output {{"variables": [], "steps": 0, "prompt": ""}}
+
+Output STRICT JSON only: {{"variables": ["i", "total"], "steps": 4, "prompt": "<one sentence>"}}"""
+
+
+# A traced variable name never legitimately needs to be long; anything past
+# this is a model hallucinating prose into the field.
+MAX_TRACE_VARIABLE_CHARS = 40
+MIN_TRACE_STEPS = 3
+MAX_TRACE_STEPS = 8
+
+
 MODEL_NAME = "llama-3.3-70b-versatile"
 
 # How many prior conversation turns are replayed to the model.
@@ -183,18 +229,27 @@ class HintingEngine:
 
     def _build_user_message(
         self, code: str, question: str, hint_level: int, language: str,
-        mode: str = "hint",
+        mode: str = "hint", edit_summary: str = "",
     ) -> str:
         lang = get_language(language)
         code_block = code.strip() if code.strip() else "(no code provided)"
+        # What the student changed since the last hint, so follow-ups like
+        # "I tried that and it still fails" are answered against the actual edit.
+        edits = (
+            f"What the student changed since the last hint:\n{edit_summary.strip()}\n\n"
+            if edit_summary.strip()
+            else ""
+        )
         if mode != "hint":
             return (
                 f"Student's code:\n```{lang['fence']}\n{code_block}\n```\n\n"
+                f"{edits}"
                 f"Student's message: {question}"
             )
         return (
             f"hint_level: {hint_level}\n\n"
             f"Student's code:\n```{lang['fence']}\n{code_block}\n```\n\n"
+            f"{edits}"
             f"Student's question: {question}\n\n"
             "Respond according to the STRICT RULES for the given hint_level."
         )
@@ -330,6 +385,51 @@ class HintingEngine:
             hint = " ".join(hint.split()[:14])
         return hint, concept or "general"
 
+    _TRACE_VAR_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_\[\]\.]*$")
+
+    def design_trace_table(
+        self, snippet: str, language: str = "python"
+    ) -> Tuple[List[str], int, str]:
+        """Pick the variables and step count for a desk-check exercise.
+
+        Returns ([], 0, "") when the snippet has nothing worth tracing or the
+        model's reply cannot be parsed - the caller then falls back to a
+        free-text prediction exercise.
+        """
+        if not snippet.strip():
+            return [], 0, ""
+        lang = get_language(language)
+        system = TRACE_TABLE_PROMPT.format(language=lang["display_name"])
+        user_msg = (
+            f"Snippet to trace:\n```{lang['fence']}\n{snippet.strip()}\n```\n\n"
+            "Respond with JSON only."
+        )
+        data = self._extract_json(self._chat(system, user_msg, 200))
+        if not isinstance(data, dict):
+            return [], 0, ""
+
+        raw_vars = data.get("variables")
+        variables: List[str] = []
+        for name in raw_vars if isinstance(raw_vars, list) else []:
+            text = str(name).strip()
+            if not text or len(text) > MAX_TRACE_VARIABLE_CHARS:
+                continue
+            if not self._TRACE_VAR_RE.match(text) or text in variables:
+                continue
+            variables.append(text)
+        variables = variables[:4]
+
+        try:
+            steps = int(data.get("steps", 0))
+        except (TypeError, ValueError):
+            steps = 0
+
+        prompt = " ".join(str(data.get("prompt", "")).split())[:200]
+        if len(variables) < 2 or steps <= 0 or not prompt:
+            return [], 0, ""
+        steps = max(MIN_TRACE_STEPS, min(MAX_TRACE_STEPS, steps))
+        return variables, steps, prompt
+
     def summarize_session(self, interactions: List[dict]) -> str:
         """A 3-bullet "what you learned" note from this session's interactions."""
         lines = []
@@ -370,6 +470,7 @@ class HintingEngine:
         history: Optional[List[dict]],
         mode: str,
         pacing: str,
+        edit_summary: str = "",
     ) -> Tuple[List[dict], str]:
         level = max(1, min(3, int(hint_level)))
         if mode not in MODE_SYSTEM_TEMPLATES:
@@ -396,7 +497,9 @@ class HintingEngine:
         messages.append(
             {
                 "role": "user",
-                "content": self._build_user_message(code, question, level, language, mode),
+                "content": self._build_user_message(
+                    code, question, level, language, mode, edit_summary
+                ),
             }
         )
         return messages, mode
@@ -422,9 +525,10 @@ class HintingEngine:
         history: Optional[List[dict]] = None,
         mode: str = "hint",
         pacing: str = "",
+        edit_summary: str = "",
     ) -> Tuple[str, List[str]]:
         messages, mode = self._prepare_hint_messages(
-            code, question, hint_level, language, history, mode, pacing
+            code, question, hint_level, language, history, mode, pacing, edit_summary
         )
         raw_text = self._chat_messages(messages, 400)
         return self._finalize_hint(raw_text, code, question, language, mode)
@@ -442,11 +546,12 @@ class HintingEngine:
         history: Optional[List[dict]] = None,
         mode: str = "hint",
         pacing: str = "",
+        edit_summary: str = "",
     ):
         """Yield {"type": "delta", "text"} events followed by one
         {"type": "done", "hint", "concept_tags"} event."""
         messages, mode = self._prepare_hint_messages(
-            code, question, hint_level, language, history, mode, pacing
+            code, question, hint_level, language, history, mode, pacing, edit_summary
         )
         stream = self.client.chat.completions.create(
             model=MODEL_NAME,

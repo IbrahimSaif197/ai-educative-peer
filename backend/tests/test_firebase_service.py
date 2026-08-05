@@ -369,3 +369,84 @@ class TestMergeUser:
         svc = FirebaseService.__new__(FirebaseService)
         svc._client = None
         assert svc.merge_user_sync("a", "b") is False
+
+
+class TestCalibrationCounters:
+    def test_verdict_increments_its_bucket(self):
+        from firebase_service import _update_calibration
+        assert _update_calibration(None, "overconfident") == {
+            "calibrated": 0, "overconfident": 1, "underconfident": 0
+        }
+
+    def test_accumulates_onto_existing_counts(self):
+        from firebase_service import _update_calibration
+        existing = {"calibrated": 4, "overconfident": 1, "underconfident": 2}
+        assert _update_calibration(existing, "calibrated")["calibrated"] == 5
+
+    def test_no_verdict_leaves_counts_untouched(self):
+        from firebase_service import _update_calibration
+        existing = {"calibrated": 4, "overconfident": 1, "underconfident": 2}
+        assert _update_calibration(existing, None) == existing
+
+    def test_unknown_verdict_is_ignored(self):
+        from firebase_service import _update_calibration
+        assert _update_calibration(None, "confused") == {
+            "calibrated": 0, "overconfident": 0, "underconfident": 0
+        }
+
+    def test_does_not_mutate_the_input(self):
+        from firebase_service import _update_calibration
+        existing = {"calibrated": 1, "overconfident": 0, "underconfident": 0}
+        _update_calibration(existing, "calibrated")
+        assert existing["calibrated"] == 1
+
+
+class TestHintLevelAndActivityCounters:
+    def test_level_counted_into_its_bucket(self):
+        from firebase_service import _update_hint_level_counts
+        assert _update_hint_level_counts(None, 2) == {"1": 0, "2": 1, "3": 0}
+
+    def test_out_of_range_level_is_clamped(self):
+        from firebase_service import _update_hint_level_counts
+        assert _update_hint_level_counts(None, 99)["3"] == 1
+        assert _update_hint_level_counts(None, 0)["1"] == 1
+
+    def test_activity_increments_today(self):
+        from datetime import date
+        from firebase_service import _update_activity
+        today = date(2026, 8, 5)
+        assert _update_activity({"2026-08-05": 2}, today)["2026-08-05"] == 3
+
+    def test_activity_creates_todays_entry(self):
+        from datetime import date
+        from firebase_service import _update_activity
+        assert _update_activity(None, date(2026, 8, 5)) == {"2026-08-05": 1}
+
+    def test_activity_trims_old_days(self):
+        from datetime import date
+        from firebase_service import _update_activity
+        old = {"2020-01-01": 9, "2026-08-04": 1}
+        result = _update_activity(old, date(2026, 8, 5), keep_days=30)
+        assert "2020-01-01" not in result
+        assert result["2026-08-04"] == 1
+
+    def test_activity_ignores_corrupt_values(self):
+        from datetime import date
+        from firebase_service import _update_activity
+        result = _update_activity({"2026-08-04": "lots"}, date(2026, 8, 5))
+        assert "2026-08-04" not in result
+        assert result["2026-08-05"] == 1
+
+    def test_merge_counters_sums_both_sides(self):
+        from firebase_service import _merge_counters
+        merged = _merge_counters({"1": 2, "2": 1}, {"1": 3, "3": 4}, ("1", "2", "3"))
+        assert merged == {"1": 5, "2": 1, "3": 4}
+
+    def test_merge_activity_sums_per_day(self):
+        from firebase_service import _merge_activity
+        merged = _merge_activity({"2026-08-04": 1}, {"2026-08-04": 2, "2026-08-05": 1})
+        assert merged == {"2026-08-04": 3, "2026-08-05": 1}
+
+    def test_merge_activity_skips_corrupt_entries(self):
+        from firebase_service import _merge_activity
+        assert _merge_activity({"2026-08-04": None}, {"2026-08-04": 2}) == {"2026-08-04": 2}

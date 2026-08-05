@@ -7,9 +7,11 @@ import { EduPeerSidebarProvider } from "./sidebarProvider";
 import { InlineTutor } from "./inlineTutor";
 import { registerDebugCompanion } from "./debugCompanion";
 import { registerTestWatcher } from "./testWatcher";
+import { isSupportedLanguage } from "./languages";
 import { TutorMode, frameConstructExplanation } from "./pedagogy";
 import { buildProgressHtml } from "./progressPanel";
 import { OfflineQueue } from "./offlineQueue";
+import { StatusBar } from "./statusBar";
 
 const HEALTH_RETRY_MS = 30_000;
 
@@ -26,12 +28,38 @@ export async function activate(context: vscode.ExtensionContext) {
     context.extensionUri, context, api, firebase, auth, queue
   );
 
+  const statusBar = new StatusBar(() =>
+    isSupportedLanguage(vscode.window.activeTextEditor?.document?.languageId ?? "")
+  );
+  context.subscriptions.push(statusBar);
+  context.subscriptions.push(
+    vscode.window.onDidChangeActiveTextEditor(() => statusBar.refresh())
+  );
+  context.subscriptions.push(
+    provider.onDidChangeHintLevel((level) => statusBar.update({ hintLevel: level }))
+  );
+
   api.onAvailabilityChange((up) => {
     provider.postOffline(!up);
+    statusBar.update({ offline: !up });
     if (up) {
       void queue.flush(api);
+      void refreshStatusFromProgress();
     }
   });
+
+  /** Streak and review-due come from the same call the dashboard uses. */
+  const refreshStatusFromProgress = async () => {
+    try {
+      const progress = await api.getProgress();
+      statusBar.update({
+        streakDays: progress.streak_days,
+        reviewDue: progress.review_due,
+      });
+    } catch {
+      /* the status bar is decoration; never surface a failure here */
+    }
+  };
   const healthTimer = setInterval(() => {
     if (!api.isAvailable) {
       void api.health();
@@ -55,9 +83,12 @@ export async function activate(context: vscode.ExtensionContext) {
   // Health check
   const healthy = await api.health();
   if (!healthy) {
+    statusBar.update({ offline: true });
     vscode.window.showWarningMessage(
       `EduPeer backend is not reachable at ${backendUrl}. Start it with: cd backend && uvicorn main:app --reload`
     );
+  } else {
+    void refreshStatusFromProgress();
   }
 
   context.subscriptions.push(
@@ -147,6 +178,46 @@ export async function activate(context: vscode.ExtensionContext) {
       await vscode.commands.executeCommand("workbench.view.extension.edupeer-sidebar");
       provider.startPrediction(snippet, editor!.document.getText());
     })
+  );
+
+  context.subscriptions.push(
+    vscode.commands.registerCommand("edupeer.traceCode", async () => {
+      const editor = vscode.window.activeTextEditor;
+      if (!editor) {
+        vscode.window.showInformationMessage("EduPeer: open a file first.");
+        return;
+      }
+      const snippet =
+        editor.document.getText(editor.selection).trim() || editor.document.getText().trim();
+      if (!snippet) {
+        vscode.window.showInformationMessage("EduPeer: there's nothing here to trace.");
+        return;
+      }
+      await vscode.commands.executeCommand("workbench.view.extension.edupeer-sidebar");
+      await provider.startTrace(snippet, editor.document.getText());
+    })
+  );
+
+  // Invoked from the Quick Fix on an EduPeer diagnostic: pull the flagged
+  // lines into the panel so the student doesn't have to select them by hand.
+  context.subscriptions.push(
+    vscode.commands.registerCommand(
+      "edupeer.discussLines",
+      async (uri: vscode.Uri, startLine: number, endLine: number, question?: string) => {
+        const doc = await vscode.workspace.openTextDocument(uri);
+        const last = Math.max(0, Math.min(doc.lineCount - 1, endLine));
+        const first = Math.max(0, Math.min(last, startLine));
+        const range = new vscode.Range(first, 0, last, doc.lineAt(last).text.length);
+        const snippet = doc.getText(range);
+        await vscode.commands.executeCommand("workbench.view.extension.edupeer-sidebar");
+        await provider.askExternal(
+          question
+            ? `About these lines you flagged — "${question}"\n\n${snippet}`
+            : `What is wrong with these lines?\n\n${snippet}`,
+          doc.getText()
+        );
+      }
+    )
   );
 
   context.subscriptions.push(

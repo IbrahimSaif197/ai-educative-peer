@@ -1,11 +1,12 @@
 import * as vscode from "vscode";
-import { ApiClient, LineFlag } from "./apiClient";
+import { ApiClient, LineFlag, RateLimitError } from "./apiClient";
 import {
   SUPPORTED_LANGUAGES,
   SUPPORTED_LANGUAGE_IDS,
   isSupportedLanguage,
   supportedLanguageList,
 } from "./languages";
+import { localLineHint } from "./localTutor";
 
 import { codeFingerprint as fingerprintCode } from "./pedagogy";
 
@@ -15,6 +16,8 @@ interface FileState {
   flags: LineFlag[];
   scanFingerprint: string;
   lineHints: LineHintCache;
+  /** Rule-based nudges shown while the backend is unavailable. */
+  localHints: LineHintCache;
 }
 
 function fingerprintLine(uri: string, lineNum: number, text: string): string {
@@ -41,6 +44,8 @@ export class InlineTutor {
   private readonly lastFlagCounts = new Map<string, number>();
   /** Code fingerprints we already offered a reflection quiz for. */
   private readonly reflectOffered = new Set<string>();
+  /** Epoch ms until which automatic requests stay quiet after a 429. */
+  private quietUntil = 0;
 
   constructor(
     private readonly context: vscode.ExtensionContext,
@@ -92,6 +97,15 @@ export class InlineTutor {
       vscode.languages.registerHoverProvider(selector, {
         provideHover: (doc, pos) => this.provideHover(doc, pos),
       })
+    );
+
+    // The lightbulb students already reach for should reach the tutor.
+    this.disposables.push(
+      vscode.languages.registerCodeActionsProvider(
+        selector,
+        { provideCodeActions: (doc, range) => this.provideCodeActions(doc, range) },
+        { providedCodeActionKinds: [vscode.CodeActionKind.QuickFix] }
+      )
     );
 
     this.disposables.push(
@@ -186,13 +200,14 @@ export class InlineTutor {
     const key = uri.toString();
     let s = this.fileStates.get(key);
     if (!s) {
-      s = { flags: [], scanFingerprint: "", lineHints: new Map() };
+      s = { flags: [], scanFingerprint: "", lineHints: new Map(), localHints: new Map() };
       this.fileStates.set(key, s);
     }
     return s;
   }
 
   private scheduleLineHint(editor: vscode.TextEditor) {
+    if (Date.now() < this.quietUntil) return;
     if (this.debounceHandle) clearTimeout(this.debounceHandle);
     const debounceMs = vscode.workspace
       .getConfiguration("edupeer")
@@ -238,8 +253,17 @@ export class InlineTutor {
         state.lineHints.set(key, { hint: res.hint, concept: res.concept });
         this.renderActiveLineIfMatches(doc, line);
       }
-    } catch {
-      /* network errors are non-fatal */
+    } catch (err) {
+      // Backend unreachable or throttling: fall back to a local rule so the
+      // gutter still teaches something. Not cached — the real hint should win
+      // as soon as the backend is answering again.
+      if (err instanceof RateLimitError || !this.api.isAvailable) {
+        const local = localLineHint(lineText, doc.languageId);
+        if (local.hint) {
+          state.localHints.set(key, local);
+          this.renderActiveLineIfMatches(doc, line);
+        }
+      }
     }
   }
 
@@ -265,13 +289,18 @@ export class InlineTutor {
     const state = this.stateFor(doc.uri);
     const key = fingerprintLine(doc.uri.toString(), line, lineText);
     const cached = state.lineHints.get(key);
+    const local = state.localHints.get(key);
 
     const flag = state.flags.find((f) => line + 1 >= f.line && line + 1 <= f.end_line);
 
+    // Real hint beats a scan flag beats a local rule — the local rule is the
+    // crudest of the three and only earns the line when nothing else has it.
     const contentText = cached?.hint
       ? `💡 ${cached.hint}`
       : flag
       ? `${flagEmoji(flag)} ${flag.question}`
+      : local?.hint
+      ? `💡 ${local.hint}`
       : "";
 
     if (!contentText) {
@@ -293,6 +322,9 @@ export class InlineTutor {
       .getConfiguration("edupeer")
       .get<boolean>("autoScan", true);
     if (!autoScan) return;
+    // Backing off after a 429 matters here: scans fire on every edit, so
+    // retrying through a closed budget would keep it closed.
+    if (Date.now() < this.quietUntil) return;
     if (this.scanHandle) clearTimeout(this.scanHandle);
     this.scanHandle = setTimeout(() => {
       this.runScan(doc).catch(() => {
@@ -317,8 +349,11 @@ export class InlineTutor {
         this.renderActiveLineDecoration(editor);
       }
       this.maybeOfferReflection(doc, code, state.flags.length);
-    } catch {
-      /* scan failures are non-fatal */
+    } catch (err) {
+      if (err instanceof RateLimitError) {
+        this.quietUntil = Date.now() + err.retryAfterSeconds * 1000;
+      }
+      /* scan failures are otherwise non-fatal */
     }
   }
 
@@ -415,6 +450,58 @@ export class InlineTutor {
     return lenses;
   }
 
+  /**
+   * Quick Fixes on EduPeer's own diagnostics. They never edit the code — the
+   * whole point is that the student writes the fix — so each one just routes
+   * the line into a tutor mode.
+   */
+  private provideCodeActions(
+    doc: vscode.TextDocument,
+    range: vscode.Range | vscode.Selection
+  ): vscode.CodeAction[] {
+    if (!this.isSupported(doc)) return [];
+    const line = range.start.line;
+    const actions: vscode.CodeAction[] = [];
+
+    const nudge = new vscode.CodeAction(
+      "EduPeer: nudge me on this line",
+      vscode.CodeActionKind.QuickFix
+    );
+    nudge.command = {
+      command: "edupeer.nudgeLine",
+      title: "Nudge this line",
+      arguments: [doc.uri, line],
+    };
+    actions.push(nudge);
+
+    const explain = new vscode.CodeAction(
+      "EduPeer: explain this line",
+      vscode.CodeActionKind.QuickFix
+    );
+    explain.command = { command: "edupeer.explainSelection", title: "Explain this line" };
+    actions.push(explain);
+
+    const state = this.stateFor(doc.uri);
+    const flag = state.flags.find((f) => line + 1 >= f.line && line + 1 <= f.end_line);
+    if (flag) {
+      const discuss = new vscode.CodeAction(
+        `EduPeer: talk through "${flag.question}"`,
+        vscode.CodeActionKind.QuickFix
+      );
+      discuss.diagnostics = this.diagnostics
+        .get(doc.uri)
+        ?.filter((d) => d.range.start.line === line);
+      discuss.command = {
+        command: "edupeer.discussLines",
+        title: "Talk it through",
+        arguments: [doc.uri, flag.line - 1, flag.end_line - 1, flag.question],
+      };
+      actions.push(discuss);
+    }
+
+    return actions;
+  }
+
   private provideHover(
     doc: vscode.TextDocument,
     pos: vscode.Position
@@ -425,11 +512,15 @@ export class InlineTutor {
     const flag = state.flags.find((f) => lineNum >= f.line && lineNum <= f.end_line);
     const lineText = doc.lineAt(pos.line).text;
     const key = fingerprintLine(doc.uri.toString(), pos.line, lineText);
-    const cached = state.lineHints.get(key);
+    const cached = state.lineHints.get(key) ?? state.localHints.get(key);
 
     if (!flag && !cached) return undefined;
     const md = new vscode.MarkdownString(undefined, true);
-    md.isTrusted = true;
+    // Model-authored text (scan questions, line hints) is appended below, and
+    // a blanket-trusted MarkdownString renders ANY command: link in it as
+    // clickable. Allow-list only our own two commands so a hostile file that
+    // steers the model into emitting a command link cannot run anything else.
+    md.isTrusted = { enabledCommands: ["edupeer.nudgeLine", "edupeer.explainSelection"] };
     md.appendMarkdown("**EduPeer**\n\n");
     if (cached?.hint) md.appendMarkdown(`💡 ${cached.hint}\n\n`);
     if (flag) md.appendMarkdown(`${flagEmoji(flag)} ${flag.question}\n\n_concept: ${flag.concept}_\n\n`);

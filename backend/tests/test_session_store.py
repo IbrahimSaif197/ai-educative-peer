@@ -302,3 +302,54 @@ class TestFirestoreTimeout:
         # Degrades to safe defaults rather than propagating the timeout.
         assert store.next_hint_level("u1", "fp1") == 1
         assert store.begin_session("u1") is False
+        assert store.current_hint_level("u1", "fp1") == 1
+
+
+class TestInMemoryCurrentHintLevel:
+    def _store(self):
+        from session_store import InMemorySessionStore
+        return InMemorySessionStore()
+
+    def test_first_call_is_level_one(self):
+        assert self._store().current_hint_level("u1", "fp1") == 1
+
+    def test_does_not_advance_the_level(self):
+        store = self._store()
+        store.next_hint_level("u1", "fp1")  # -> 1
+        store.next_hint_level("u1", "fp1")  # -> 2
+        assert store.current_hint_level("u1", "fp1") == 2
+        assert store.current_hint_level("u1", "fp1") == 2
+
+    def test_next_call_still_advances_afterwards(self):
+        store = self._store()
+        store.next_hint_level("u1", "fp1")
+        store.current_hint_level("u1", "fp1")
+        assert store.next_hint_level("u1", "fp1") == 2
+
+    def test_first_current_call_consumes_level_one(self):
+        # Asking without editing still uses up level 1, so the next real
+        # attempt escalates to 2 rather than repeating the opening question.
+        store = self._store()
+        assert store.current_hint_level("u1", "fp1") == 1
+        assert store.next_hint_level("u1", "fp1") == 2
+
+    def test_is_scoped_per_user_and_fingerprint(self):
+        store = self._store()
+        store.next_hint_level("u1", "fp1")
+        store.next_hint_level("u1", "fp1")
+        assert store.current_hint_level("u2", "fp1") == 1
+        assert store.current_hint_level("u1", "fp2") == 1
+
+    def test_reset_clears_it(self):
+        store = self._store()
+        store.next_hint_level("u1", "fp1")
+        store.next_hint_level("u1", "fp1")
+        store.reset("u1")
+        assert store.current_hint_level("u1", "fp1") == 1
+
+    def test_respects_the_entry_bound(self):
+        from session_store import InMemorySessionStore
+        store = InMemorySessionStore(max_entries=5)
+        for i in range(50):
+            store.current_hint_level("u1", f"fp{i}")
+        assert len(store._levels) == 5

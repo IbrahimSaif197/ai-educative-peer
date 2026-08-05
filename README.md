@@ -93,8 +93,14 @@ set to `16`.
 | `edupeer.explainSelection`      | Plain-language explanation of the selected construct.              |
 | `edupeer.predictOutput`         | Predict-the-output exercise on the selected code.                  |
 | `edupeer.reflectQuiz`           | One-question reflection quiz after you fix a bug.                  |
+| `edupeer.traceCode`             | Desk-check exercise: fill in a variable trace, get it marked.      |
 | `edupeer.showProgress`          | Progress dashboard: badges, streak, concepts, session notes.       |
 | `edupeer.setGoal`               | Set (or clear) a free-text learning goal that biases the tutor.    |
+
+A status bar entry shows the current hint depth, your streak and whether a
+review is waiting; click it to open the panel. EduPeer's own diagnostics also
+offer Quick Fix actions ("nudge me on this line", "explain this line"), and a
+`Get started with EduPeer` walkthrough ships in the Welcome page.
 
 ## How hinting works
 
@@ -110,6 +116,28 @@ The tutor also remembers the recent conversation: the sidebar sends the last
 few student/tutor turns with each question, so follow-ups like "I tried that
 and it still fails" are answered in context. Resetting the session clears
 this memory.
+
+### Depth is earned, not spent
+
+Asking again without changing anything does **not** buy a deeper hint. The
+extension tracks the code each hint was given against:
+
+- **You edited something** — the level advances, and a compact diff of what
+  you changed rides along so the tutor answers against your actual attempt.
+- **You changed nothing** — you get the same depth back plus a prompt to say
+  what you tried. Editing the code (or waiting 45 seconds) unlocks the next
+  level.
+
+This targets hint abuse, the well-documented habit of bottoming out a tutor's
+hints to reach the answer without engaging.
+
+### Confidence and calibration
+
+Before asking, you can optionally rate how sure you are (*No idea* / *Some
+idea* / *Pretty sure*). EduPeer compares that against how much help you
+actually needed and reports the match on your dashboard. Novices are
+systematically overconfident, and this is the feedback loop that fixes it.
+Ratings are optional and nothing is recorded when you skip them.
 
 ## Accounts and sign-in
 
@@ -171,6 +199,7 @@ Awarded automatically after each interaction:
 | GET    | `/progress`      | Progress report: badges, streak, concept stats. |
 | GET    | `/review`        | Spaced-review status and micro-exercise.       |
 | POST   | `/goal`          | Set or clear the student's learning goal.      |
+| POST   | `/trace`         | Design a desk-check exercise for a snippet.    |
 
 All endpoints except `GET /health`, `GET /auth/config`, and `GET /auth/login` require `Authorization: Bearer <Firebase ID token>` in the request header.
 
@@ -189,6 +218,14 @@ rest are one-shot teaching moves the sidebar triggers contextually:
   same concept on a *different* problem.
 - **explain-error** — paste a stack trace (auto-detected) or run
   `EduPeer: Explain This Error`; teaches you to *read* the error, not the fix.
+- **subgoal-label** — a worked example arrives as unlabelled numbered steps;
+  you name what each step accomplishes and get judged on the *purpose*, not
+  the syntax. Labelling sub-goals yourself is what makes worked examples
+  transfer to new problems.
+- **trace-check** — `EduPeer: Trace This Code` picks 2–4 variables worth
+  following and gives you a grid to fill in step by step. Submitting it marks
+  the first row where your trace diverges from reality, and asks a question
+  about that line. Students who can't trace code can't write it.
 - **explain-concept** / **predict-output** / **review-exercise** — construct
   explanations, output-prediction exercises, and spaced-review drills.
 
@@ -206,16 +243,35 @@ guards parsing). Per-concept stats feed:
 - **`EduPeer: Show My Progress`** — dashboard with badges, streak, languages,
   struggles/strengths and session notes.
 - **Spaced review** — concepts you struggled with 3–7 days ago surface as a
-  🔁 Review button in the sidebar.
+  Review button in the sidebar.
 - **Session summaries** — resetting a session stores a 3-bullet "what you
   learned" note.
 
-## Streaming and offline behaviour
+The dashboard renders as inline SVG with no chart library and no network: a
+hint-depth distribution, a 14-day activity strip, per-concept mastery bars and
+your confidence calibration. Colours come from VS Code's chart tokens and every
+series is labelled in text, so it reads correctly in any theme.
+
+## Streaming, offline behaviour and quota
 
 The sidebar streams hints over SSE (`/hint/stream`) and falls back to the
 plain `/hint` call if streaming fails. When the backend is unreachable the
 sidebar shows an offline banner, retries `/health` every 30 s, and queues
 reset/goal mutations to sync when it returns.
+
+**Local fallback tutor.** With the backend down, EduPeer still teaches from a
+rule table built into the extension (`src/localTutor.ts`): roughly a dozen
+patterns per language that return a Socratic question rather than nothing.
+It says plainly that it is offline and never advances your hint level.
+
+**Cache and rate limits.** `/scan` and `/line-hint` fire automatically as you
+type, so the backend caches both for 5 minutes keyed on your uid plus a
+fingerprint of the code — an unchanged file costs no LLM call. Per-user token
+buckets cap `/hint` at 30/min, the inline endpoints at 60/min and `/trace` at
+10/min, returning `429` with `Retry-After`. The extension treats a 429 as a
+soft failure: inline features go quiet until the budget refills and the
+sidebar says so rather than showing an error. All of this exists to keep the
+project inside the Groq free tier.
 
 ## Packaging a VSIX
 

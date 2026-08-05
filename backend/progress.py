@@ -4,7 +4,7 @@ Everything here works on the plain dicts stored in the users document so it
 can be tested without Firestore.
 """
 
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from typing import Any, Dict, List, Optional
 
 # A concept is a "struggle" when the student repeatedly needed deep hints and
@@ -16,6 +16,10 @@ STRENGTH_MAX_AVG_LEVEL = 1.3
 
 REVIEW_MIN_DAYS = 3
 REVIEW_MAX_DAYS = 7
+
+# Below this many rated hints the calibration score is noise, so the dashboard
+# says "not enough data" instead of showing a number.
+CALIBRATION_MIN_SAMPLES = 4
 
 
 def _avg_level(entry: Dict[str, Any]) -> float:
@@ -79,6 +83,41 @@ def pacing_summary(concept_stats: Optional[Dict[str, Any]], goal_text: str = "")
     return "Tutor pacing context (never mention this to the student): " + " ".join(parts)
 
 
+def classify_calibration(confidence: int, hint_level: int) -> Optional[str]:
+    """Compare a pre-hint confidence rating (1-3) against the depth of hint
+    the student actually needed.
+
+    Returns "overconfident", "underconfident", "calibrated", or None when no
+    rating was given.
+    """
+    if confidence < 1 or confidence > 3:
+        return None
+    if confidence == 3 and hint_level >= 3:
+        return "overconfident"
+    if confidence == 1 and hint_level <= 1:
+        return "underconfident"
+    return "calibrated"
+
+
+def calibration_summary(data: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    """Shape the stored calibration counters into the /progress payload."""
+    raw = (data or {}).get("calibration")
+    raw = raw if isinstance(raw, dict) else {}
+    calibrated = int(raw.get("calibrated", 0))
+    over = int(raw.get("overconfident", 0))
+    under = int(raw.get("underconfident", 0))
+    samples = calibrated + over + under
+    score = round(calibrated / samples, 2) if samples else 0.0
+    return {
+        "samples": samples,
+        "score": score,
+        "calibrated": calibrated,
+        "overconfident": over,
+        "underconfident": under,
+        "enough_data": samples >= CALIBRATION_MIN_SAMPLES,
+    }
+
+
 def _parse_iso(value: Any) -> Optional[date]:
     if not value or not isinstance(value, str):
         return None
@@ -106,6 +145,40 @@ def review_due_concepts(
     return [tag for _, tag in due[:limit]]
 
 
+ACTIVITY_WINDOW_DAYS = 14
+
+
+def hint_level_counts(data: Optional[Dict[str, Any]]) -> Dict[str, int]:
+    """How many hints landed at each level, for the dashboard distribution."""
+    raw = (data or {}).get("hint_level_counts")
+    raw = raw if isinstance(raw, dict) else {}
+    counts = {}
+    for level in ("1", "2", "3"):
+        try:
+            counts[level] = max(0, int(raw.get(level, 0)))
+        except (TypeError, ValueError):
+            counts[level] = 0
+    return counts
+
+
+def activity_strip(
+    data: Optional[Dict[str, Any]], today: date, days: int = ACTIVITY_WINDOW_DAYS
+) -> List[dict]:
+    """One entry per day for the last `days` days, oldest first."""
+    raw = (data or {}).get("activity")
+    raw = raw if isinstance(raw, dict) else {}
+    strip = []
+    for offset in range(days - 1, -1, -1):
+        day = today - timedelta(days=offset)
+        iso = day.isoformat()
+        try:
+            count = max(0, int(raw.get(iso, 0)))
+        except (TypeError, ValueError):
+            count = 0
+        strip.append({"date": iso, "count": count})
+    return strip
+
+
 def build_progress(data: Optional[Dict[str, Any]], today: date) -> Dict[str, Any]:
     """Shape the users doc into the /progress response."""
     data = data or {}
@@ -125,4 +198,7 @@ def build_progress(data: Optional[Dict[str, Any]], today: date) -> Dict[str, Any
         "concept_strengths": concept_strengths(concept_stats),
         "session_summaries": summaries[-5:],
         "review_due": bool(review_due_concepts(concept_stats, today)),
+        "calibration": calibration_summary(data),
+        "hint_level_counts": hint_level_counts(data),
+        "activity": activity_strip(data, today),
     }

@@ -1,9 +1,14 @@
 from datetime import date
 
 from progress import (
+    CALIBRATION_MIN_SAMPLES,
+    activity_strip,
     build_progress,
+    calibration_summary,
+    classify_calibration,
     concept_strengths,
     concept_struggles,
+    hint_level_counts,
     pacing_summary,
     review_due_concepts,
 )
@@ -122,3 +127,113 @@ class TestBuildProgress:
 
     def test_blank_goal_treated_as_none(self):
         assert build_progress({"goal": {"text": "  "}}, TODAY)["goal"] is None
+
+
+class TestClassifyCalibration:
+    def test_no_rating_returns_none(self):
+        assert classify_calibration(0, 2) is None
+
+    def test_out_of_range_rating_returns_none(self):
+        assert classify_calibration(9, 2) is None
+        assert classify_calibration(-1, 2) is None
+
+    def test_sure_but_needed_pseudocode_is_overconfident(self):
+        assert classify_calibration(3, 3) == "overconfident"
+
+    def test_no_idea_but_solved_at_level_1_is_underconfident(self):
+        assert classify_calibration(1, 1) == "underconfident"
+
+    def test_sure_and_solved_at_level_1_is_calibrated(self):
+        assert classify_calibration(3, 1) == "calibrated"
+
+    def test_no_idea_and_needed_level_3_is_calibrated(self):
+        assert classify_calibration(1, 3) == "calibrated"
+
+    def test_middling_confidence_is_always_calibrated(self):
+        assert [classify_calibration(2, level) for level in (1, 2, 3)] == [
+            "calibrated", "calibrated", "calibrated"
+        ]
+
+
+class TestCalibrationSummary:
+    def test_no_data_is_zeroed_and_not_enough(self):
+        summary = calibration_summary({})
+        assert summary["samples"] == 0
+        assert summary["score"] == 0.0
+        assert summary["enough_data"] is False
+
+    def test_score_is_calibrated_over_total(self):
+        data = {"calibration": {"calibrated": 3, "overconfident": 1, "underconfident": 0}}
+        summary = calibration_summary(data)
+        assert summary["samples"] == 4
+        assert summary["score"] == 0.75
+
+    def test_enough_data_at_the_threshold(self):
+        data = {"calibration": {"calibrated": CALIBRATION_MIN_SAMPLES}}
+        assert calibration_summary(data)["enough_data"] is True
+
+    def test_one_below_threshold_is_not_enough(self):
+        data = {"calibration": {"calibrated": CALIBRATION_MIN_SAMPLES - 1}}
+        assert calibration_summary(data)["enough_data"] is False
+
+    def test_non_dict_calibration_is_ignored(self):
+        assert calibration_summary({"calibration": "corrupt"})["samples"] == 0
+
+    def test_none_data_is_safe(self):
+        assert calibration_summary(None)["samples"] == 0
+
+
+class TestHintLevelCounts:
+    def test_missing_counts_are_zero(self):
+        assert hint_level_counts({}) == {"1": 0, "2": 0, "3": 0}
+
+    def test_reads_stored_counts(self):
+        data = {"hint_level_counts": {"1": 5, "2": 2, "3": 1}}
+        assert hint_level_counts(data) == {"1": 5, "2": 2, "3": 1}
+
+    def test_garbage_values_fall_back_to_zero(self):
+        data = {"hint_level_counts": {"1": "many", "2": None, "3": -4}}
+        assert hint_level_counts(data) == {"1": 0, "2": 0, "3": 0}
+
+
+class TestActivityStrip:
+    def test_length_matches_window(self):
+        assert len(activity_strip({}, TODAY, days=14)) == 14
+
+    def test_oldest_first_ending_today(self):
+        strip = activity_strip({}, TODAY, days=3)
+        assert strip[0]["date"] == "2026-07-02"
+        assert strip[-1]["date"] == TODAY.isoformat()
+
+    def test_counts_are_picked_up_by_date(self):
+        data = {"activity": {"2026-07-04": 3, "2026-07-03": 1}}
+        strip = activity_strip(data, TODAY, days=3)
+        assert [d["count"] for d in strip] == [0, 1, 3]
+
+    def test_days_outside_the_window_are_dropped(self):
+        data = {"activity": {"2026-01-01": 99}}
+        assert all(d["count"] == 0 for d in activity_strip(data, TODAY, days=3))
+
+    def test_garbage_counts_become_zero(self):
+        data = {"activity": {TODAY.isoformat(): "lots"}}
+        assert activity_strip(data, TODAY, days=1)[0]["count"] == 0
+
+
+class TestBuildProgressNewFields:
+    def test_includes_calibration_levels_and_activity(self):
+        data = {
+            "calibration": {"calibrated": 4, "overconfident": 1},
+            "hint_level_counts": {"1": 3, "2": 1, "3": 0},
+            "activity": {TODAY.isoformat(): 2},
+        }
+        report = build_progress(data, TODAY)
+        assert report["calibration"]["samples"] == 5
+        assert report["hint_level_counts"]["1"] == 3
+        assert len(report["activity"]) == 14
+        assert report["activity"][-1]["count"] == 2
+
+    def test_empty_profile_still_produces_the_new_keys(self):
+        report = build_progress({}, TODAY)
+        assert report["calibration"]["samples"] == 0
+        assert report["hint_level_counts"] == {"1": 0, "2": 0, "3": 0}
+        assert len(report["activity"]) == 14

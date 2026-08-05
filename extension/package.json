@@ -72,6 +72,14 @@
         "title": "EduPeer: Predict the Output"
       },
       {
+        "command": "edupeer.traceCode",
+        "title": "EduPeer: Trace This Code"
+      },
+      {
+        "command": "edupeer.discussLines",
+        "title": "EduPeer: Discuss Flagged Lines"
+      },
+      {
         "command": "edupeer.showProgress",
         "title": "EduPeer: Show My Progress"
       },
@@ -119,6 +127,17 @@
           "command": "edupeer.explainError",
           "when": "resourceLangId =~ /^(python|javascript|typescript|java|c|cpp|csharp|go|rust|sql)$/",
           "group": "edupeer"
+        },
+        {
+          "command": "edupeer.traceCode",
+          "when": "resourceLangId =~ /^(python|javascript|typescript|java|c|cpp|csharp|go|rust|sql)$/",
+          "group": "edupeer"
+        }
+      ],
+      "commandPalette": [
+        {
+          "command": "edupeer.discussLines",
+          "when": "false"
         }
       ]
     },
@@ -128,6 +147,47 @@
         "key": "ctrl+alt+h",
         "mac": "cmd+alt+h",
         "when": "editorTextFocus && resourceLangId =~ /^(python|javascript|typescript|java|c|cpp|csharp|go|rust|sql)$/"
+      }
+    ],
+    "walkthroughs": [
+      {
+        "id": "edupeer.gettingStarted",
+        "title": "Get started with EduPeer",
+        "description": "EduPeer asks questions instead of writing your code. Here's how to get the most out of it.",
+        "steps": [
+          {
+            "id": "edupeer.step.openFile",
+            "title": "Open something you're stuck on",
+            "description": "EduPeer reads the file you're editing. Open any Python, JavaScript, TypeScript, Java, C, C++, C#, Go, Rust or SQL file — the demos folder has a buggy sample for each.\n[Open the tutor panel](command:edupeer.activate)",
+            "media": {
+              "markdown": "media/walkthrough/open-file.md"
+            }
+          },
+          {
+            "id": "edupeer.step.ask",
+            "title": "Ask, then say what you tried",
+            "description": "Describe what you expected and what happened. EduPeer replies with a question. Asking again without changing anything keeps you at the same depth — editing the code is what unlocks a deeper hint.\n[Open the tutor panel](command:edupeer.activate)",
+            "media": {
+              "markdown": "media/walkthrough/ask.md"
+            }
+          },
+          {
+            "id": "edupeer.step.inline",
+            "title": "Watch the margins",
+            "description": "EduPeer flags suspicious lines in the Problems panel and offers a nudge beside the line you're editing. Press Ctrl+Alt+H (Cmd+Alt+H on Mac) for a hint on the current line.",
+            "media": {
+              "markdown": "media/walkthrough/inline.md"
+            }
+          },
+          {
+            "id": "edupeer.step.progress",
+            "title": "Check what you're building",
+            "description": "Your dashboard shows which concepts keep needing deep hints, how well your confidence matches reality, and what you've practised.\n[Show my progress](command:edupeer.showProgress)",
+            "media": {
+              "markdown": "media/walkthrough/progress.md"
+            }
+          }
+        ]
       }
     ],
     "configuration": {

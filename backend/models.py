@@ -10,7 +10,12 @@ class ChatTurn(BaseModel):
 TutorMode = Literal[
     "hint", "reflect", "translate", "worked-example",
     "explain-error", "explain-concept", "predict-output", "review-exercise",
+    "subgoal-label", "trace-check",
 ]
+
+# Longest edit summary accepted from a client. Diffs are built client-side, so
+# this is the server's own bound on how much of the prompt they can occupy.
+MAX_EDIT_SUMMARY_CHARS = 2000
 
 
 class HintRequest(BaseModel):
@@ -25,6 +30,24 @@ class HintRequest(BaseModel):
     history: List[ChatTurn] = Field(
         default_factory=list,
         description="Prior conversation turns, oldest first",
+    )
+    escalate: bool = Field(
+        default=True,
+        description=(
+            "When false the hint level is re-used instead of advanced. The "
+            "client sends this after an ask with no intervening code edit."
+        ),
+    )
+    edit_summary: str = Field(
+        default="",
+        max_length=MAX_EDIT_SUMMARY_CHARS,
+        description="Compact diff of what the student changed since the last hint",
+    )
+    confidence: int = Field(
+        default=0,
+        ge=0,
+        le=3,
+        description="Self-rated confidence before the hint; 0 means not given",
     )
 
 
@@ -87,3 +110,17 @@ class MigrateRequest(BaseModel):
 class GoalRequest(BaseModel):
     text: str = Field(default="", description="Free-text learning goal; empty clears it")
     language: str = Field(default="python", description="Language context for concept mapping")
+
+
+class TraceRequest(BaseModel):
+    code: str = Field(default="", description="Full file content, for context")
+    selection: str = Field(default="", description="The snippet to trace; empty means the whole file")
+    language: str = Field(default="python", description="VS Code languageId of the code")
+
+
+class TraceResponse(BaseModel):
+    """A desk-check exercise: which variables to track over how many steps."""
+
+    variables: List[str] = Field(default_factory=list, description="2-4 variable names")
+    steps: int = Field(default=0, ge=0, le=8, description="Rows the student fills in; 0 means unavailable")
+    prompt: str = Field(default="", description="One sentence telling the student what to trace")

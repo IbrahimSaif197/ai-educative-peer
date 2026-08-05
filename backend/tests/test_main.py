@@ -214,7 +214,7 @@ class TestHintStream:
         import main as app_main
         app_main._profile_cache.clear()
 
-        def fake_stream(code, question, level, language, history, mode, pacing):
+        def fake_stream(code, question, level, language, history, mode, pacing, edit_summary=""):
             yield {"type": "delta", "text": "Look at "}
             yield {"type": "delta", "text": "your loop."}
             yield {"type": "done", "hint": "Look at your loop. What do you think should happen next?",
@@ -463,3 +463,271 @@ class TestEventLoopNotBlocked:
         assert res.status_code == 200
         assert seen["next_hint_level"] != loop_thread_id
         assert seen["begin_session"] != loop_thread_id
+
+
+# ---------------------------------------------------------------------------
+# escalate / edit_summary / confidence
+# ---------------------------------------------------------------------------
+
+class TestEscalationControl:
+    def test_escalate_defaults_to_true_for_old_clients(self, client):
+        client.post("/hint", json=VALID_HINT_PAYLOAD)
+        res = client.post("/hint", json=VALID_HINT_PAYLOAD)
+        assert res.json()["hint_level"] == 2
+
+    def test_non_escalating_ask_reuses_the_level(self, client):
+        client.post("/hint", json=VALID_HINT_PAYLOAD)
+        payload = {**VALID_HINT_PAYLOAD, "escalate": False}
+        assert client.post("/hint", json=payload).json()["hint_level"] == 1
+        assert client.post("/hint", json=payload).json()["hint_level"] == 1
+
+    def test_escalation_resumes_after_a_non_escalating_ask(self, client):
+        client.post("/hint", json=VALID_HINT_PAYLOAD)
+        client.post("/hint", json={**VALID_HINT_PAYLOAD, "escalate": False})
+        assert client.post("/hint", json=VALID_HINT_PAYLOAD).json()["hint_level"] == 2
+
+    def test_first_ever_ask_without_escalation_is_level_1(self, client):
+        payload = {**VALID_HINT_PAYLOAD, "escalate": False}
+        assert client.post("/hint", json=payload).json()["hint_level"] == 1
+
+    def test_escalate_ignored_outside_hint_mode(self, client):
+        payload = {**VALID_HINT_PAYLOAD, "mode": "reflect", "hint_level": 2, "escalate": False}
+        assert client.post("/hint", json=payload).json()["hint_level"] == 2
+
+    def test_stream_honours_escalate_false(self, client, monkeypatch):
+        import main as app_main
+        app_main._profile_cache.clear()
+
+        def fake_stream(*args, **kwargs):
+            yield {"type": "done", "hint": "h", "concept_tags": []}
+
+        monkeypatch.setattr(app_main.engine, "stream_hint", fake_stream)
+        client.post("/hint/stream", json=VALID_HINT_PAYLOAD)
+        res = client.post("/hint/stream", json={**VALID_HINT_PAYLOAD, "escalate": False})
+        assert 'data: {"type": "meta", "hint_level": 1}' in res.text
+
+
+class TestEditSummaryAndConfidence:
+    def test_edit_summary_forwarded_to_the_engine(self, client, _patch_groq_client):
+        payload = {**VALID_HINT_PAYLOAD, "edit_summary": "12 - old line\n12 + new line"}
+        assert client.post("/hint", json=payload).status_code == 200
+        messages = _patch_groq_client.chat.completions.create.call_args.kwargs["messages"]
+        assert "12 + new line" in messages[-1]["content"]
+
+    def test_oversized_edit_summary_rejected(self, client):
+        from models import MAX_EDIT_SUMMARY_CHARS
+        payload = {**VALID_HINT_PAYLOAD, "edit_summary": "x" * (MAX_EDIT_SUMMARY_CHARS + 1)}
+        assert client.post("/hint", json=payload).status_code == 422
+
+    def test_confidence_accepted_in_range(self, client):
+        for value in (0, 1, 2, 3):
+            payload = {**VALID_HINT_PAYLOAD, "confidence": value}
+            assert client.post("/hint", json=payload).status_code == 200
+
+    def test_confidence_out_of_range_rejected(self, client):
+        assert client.post("/hint", json={**VALID_HINT_PAYLOAD, "confidence": 7}).status_code == 422
+        assert client.post("/hint", json={**VALID_HINT_PAYLOAD, "confidence": -1}).status_code == 422
+
+    def test_confidence_reaches_the_logger(self, client, monkeypatch):
+        import main as app_main
+        seen = {}
+        monkeypatch.setattr(
+            app_main.firebase,
+            "fire_and_forget",
+            lambda **kwargs: seen.update(kwargs),
+        )
+        client.post("/hint", json={**VALID_HINT_PAYLOAD, "confidence": 3})
+        assert seen["confidence"] == 3
+
+
+# ---------------------------------------------------------------------------
+# /trace
+# ---------------------------------------------------------------------------
+
+class TestTraceEndpoint:
+    def _stub(self, monkeypatch, result):
+        import main as app_main
+        monkeypatch.setattr(
+            app_main.engine, "design_trace_table", lambda snippet, language: result
+        )
+
+    def test_returns_the_designed_table(self, client, monkeypatch):
+        self._stub(monkeypatch, (["i", "total"], 4, "Trace the loop."))
+        res = client.post("/trace", json={"code": "for i in range(4): pass", "language": "python"})
+        assert res.status_code == 200
+        assert res.json() == {"variables": ["i", "total"], "steps": 4, "prompt": "Trace the loop."}
+
+    def test_empty_body_returns_empty_exercise(self, client):
+        res = client.post("/trace", json={"code": "", "selection": ""})
+        assert res.status_code == 200
+        assert res.json()["steps"] == 0
+
+    def test_selection_wins_over_full_file(self, client, monkeypatch):
+        import main as app_main
+        seen = {}
+
+        def fake(snippet, language):
+            seen["snippet"] = snippet
+            return ["i", "j"], 3, "Trace."
+
+        monkeypatch.setattr(app_main.engine, "design_trace_table", fake)
+        client.post("/trace", json={"code": "whole file", "selection": "just this bit"})
+        assert seen["snippet"] == "just this bit"
+
+    def test_falls_back_to_full_file_without_a_selection(self, client, monkeypatch):
+        import main as app_main
+        seen = {}
+
+        def fake(snippet, language):
+            seen["snippet"] = snippet
+            return ["i", "j"], 3, "Trace."
+
+        monkeypatch.setattr(app_main.engine, "design_trace_table", fake)
+        client.post("/trace", json={"code": "whole file", "selection": "   "})
+        assert seen["snippet"] == "whole file"
+
+    def test_llm_failure_returns_502(self, client, monkeypatch):
+        import main as app_main
+
+        def boom(snippet, language):
+            raise RuntimeError("groq is down")
+
+        monkeypatch.setattr(app_main.engine, "design_trace_table", boom)
+        res = client.post("/trace", json={"code": "x = 1"})
+        assert res.status_code == 502
+
+    def test_unknown_language_is_normalised(self, client, monkeypatch):
+        import main as app_main
+        seen = {}
+
+        def fake(snippet, language):
+            seen["language"] = language
+            return ["i", "j"], 3, "Trace."
+
+        monkeypatch.setattr(app_main.engine, "design_trace_table", fake)
+        client.post("/trace", json={"code": "x = 1", "language": "brainfuck"})
+        assert seen["language"] == "python"
+
+    def test_trace_check_mode_accepted_by_hint(self, client):
+        payload = {**VALID_HINT_PAYLOAD, "mode": "trace-check"}
+        assert client.post("/hint", json=payload).status_code == 200
+
+    def test_subgoal_label_mode_accepted_by_hint(self, client):
+        payload = {**VALID_HINT_PAYLOAD, "mode": "subgoal-label"}
+        assert client.post("/hint", json=payload).status_code == 200
+
+
+# ---------------------------------------------------------------------------
+# caching and rate limiting
+# ---------------------------------------------------------------------------
+
+class TestResponseCaching:
+    def test_identical_scan_is_served_from_cache(self, client, monkeypatch):
+        import main as app_main
+        calls = []
+
+        def fake_scan(code, language):
+            calls.append(code)
+            return [{"line": 1, "end_line": 1, "question": "Why?", "concept": "loops",
+                     "severity": "info", "kind": "bug"}]
+
+        monkeypatch.setattr(app_main.engine, "scan_code", fake_scan)
+        body = {"code": "x = 1\n", "language": "python"}
+        first = client.post("/scan", json=body)
+        second = client.post("/scan", json=body)
+        assert first.json() == second.json()
+        assert len(calls) == 1
+
+    def test_changed_code_bypasses_the_cache(self, client, monkeypatch):
+        import main as app_main
+        calls = []
+        monkeypatch.setattr(
+            app_main.engine, "scan_code", lambda code, language: calls.append(code) or []
+        )
+        client.post("/scan", json={"code": "x = 1\n", "language": "python"})
+        client.post("/scan", json={"code": "x = 2\n", "language": "python"})
+        assert len(calls) == 2
+
+    def test_different_language_is_a_different_cache_entry(self, client, monkeypatch):
+        import main as app_main
+        calls = []
+        monkeypatch.setattr(
+            app_main.engine, "scan_code", lambda code, language: calls.append(language) or []
+        )
+        client.post("/scan", json={"code": "x = 1\n", "language": "python"})
+        client.post("/scan", json={"code": "x = 1\n", "language": "javascript"})
+        assert calls == ["python", "javascript"]
+
+    def test_line_hint_is_cached_per_line(self, client, monkeypatch):
+        import main as app_main
+        calls = []
+
+        def fake_line_hint(code, line, language):
+            calls.append(line)
+            return "Check the index", "indexing"
+
+        monkeypatch.setattr(app_main.engine, "generate_line_hint", fake_line_hint)
+        body = {"code": "a = 1\nb = 2\n", "line": 1, "language": "python"}
+        client.post("/line-hint", json=body)
+        client.post("/line-hint", json=body)
+        client.post("/line-hint", json={**body, "line": 2})
+        assert calls == [1, 2]
+
+    def test_cached_scan_is_not_shared_between_users(self, client, monkeypatch):
+        import main as app_main
+        import auth
+        calls = []
+        monkeypatch.setattr(
+            app_main.engine, "scan_code", lambda code, language: calls.append(code) or []
+        )
+        body = {"code": "x = 1\n", "language": "python"}
+        client.post("/scan", json=body)
+        app_main.app.dependency_overrides[auth.get_current_uid] = lambda: "someone-else"
+        client.post("/scan", json=body)
+        assert len(calls) == 2
+
+
+class TestRateLimiting:
+    def test_exceeding_the_hint_budget_returns_429(self, client):
+        import main as app_main
+        app_main.limiters.clear()
+        statuses = [
+            client.post("/hint", json=VALID_HINT_PAYLOAD).status_code for _ in range(31)
+        ]
+        assert statuses[:30] == [200] * 30
+        assert statuses[30] == 429
+
+    def test_429_carries_a_retry_after_header(self, client):
+        import main as app_main
+        app_main.limiters.clear()
+        for _ in range(30):
+            client.post("/hint", json=VALID_HINT_PAYLOAD)
+        res = client.post("/hint", json=VALID_HINT_PAYLOAD)
+        assert res.status_code == 429
+        assert int(res.headers["Retry-After"]) >= 1
+
+    def test_inline_budget_is_separate_from_hint_budget(self, client, monkeypatch):
+        import main as app_main
+        app_main.limiters.clear()
+        monkeypatch.setattr(app_main.engine, "scan_code", lambda code, language: [])
+        for _ in range(30):
+            client.post("/hint", json=VALID_HINT_PAYLOAD)
+        # /hint is now exhausted; /scan must still work.
+        assert client.post("/scan", json={"code": "x=1", "language": "python"}).status_code == 200
+
+    def test_budgets_are_per_user(self, client):
+        import main as app_main
+        import auth
+        app_main.limiters.clear()
+        for _ in range(30):
+            client.post("/hint", json=VALID_HINT_PAYLOAD)
+        assert client.post("/hint", json=VALID_HINT_PAYLOAD).status_code == 429
+        app_main.app.dependency_overrides[auth.get_current_uid] = lambda: "fresh-user"
+        assert client.post("/hint", json=VALID_HINT_PAYLOAD).status_code == 200
+
+    def test_health_is_never_rate_limited(self, client):
+        import main as app_main
+        app_main.limiters.clear()
+        for _ in range(30):
+            client.post("/hint", json=VALID_HINT_PAYLOAD)
+        assert client.get("/health").status_code == 200
