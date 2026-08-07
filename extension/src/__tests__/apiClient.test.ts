@@ -1,4 +1,4 @@
-import { ApiClient, RateLimitError, parseSseChunk } from "../apiClient";
+import { ApiClient, AuthError, RateLimitError, parseSseChunk } from "../apiClient";
 
 const BASE = "http://localhost:8000";
 
@@ -167,6 +167,51 @@ describe("availability tracking", () => {
     const api = new ApiClient(BASE, makeTokens());
     await api.health();
     expect(api.isAvailable).toBe(false);
+  });
+
+  /**
+   * A broken sign-in chain used to be reported as an unreachable backend, which
+   * sent students off to restart a server that was answering fine.
+   */
+  it("blames auth, not the backend, when the sign-in chain fails", async () => {
+    const fetchMock = jest.fn();
+    (global as any).fetch = fetchMock;
+    const api = new ApiClient(BASE, {
+      getIdToken: async () => {
+        throw new AuthError("anonymous sign-in failed (400)", 400);
+      },
+    });
+    const seenAvailability: boolean[] = [];
+    const seenAuth: boolean[] = [];
+    api.onAvailabilityChange((up) => seenAvailability.push(up));
+    api.onAuthHealthChange((ok) => seenAuth.push(ok));
+
+    await expect(api.getProgress()).rejects.toThrow(AuthError);
+
+    expect(api.isAvailable).toBe(true);
+    expect(api.isAuthHealthy).toBe(false);
+    expect(seenAvailability).toEqual([]);
+    expect(seenAuth).toEqual([false]);
+    // The request never left the machine, so nothing proves the backend is down.
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("clears the auth failure once a request succeeds", async () => {
+    let broken = true;
+    const api = new ApiClient(BASE, {
+      getIdToken: async () => {
+        if (broken) throw new AuthError("auth config failed (500)", 500);
+        return "token";
+      },
+    });
+    (global as any).fetch = jest.fn();
+    await expect(api.getProgress()).rejects.toThrow(AuthError);
+    expect(api.isAuthHealthy).toBe(false);
+
+    broken = false;
+    mockFetch(200, { streak_days: 0, review_due: false });
+    await api.getProgress();
+    expect(api.isAuthHealthy).toBe(true);
   });
 });
 

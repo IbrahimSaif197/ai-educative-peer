@@ -13,6 +13,8 @@ export interface StatusSnapshot {
   streakDays: number;
   reviewDue: boolean;
   offline: boolean;
+  /** Sign-in is failing even though the backend is answering. */
+  authFailed?: boolean;
 }
 
 /** Pure: the text and tooltip for a snapshot, so it can be unit-tested. */
@@ -20,6 +22,8 @@ export function renderStatus(snapshot: StatusSnapshot): { text: string; tooltip:
   const parts: string[] = ["$(mortar-board) EduPeer"];
   if (snapshot.offline) {
     parts.push("offline");
+  } else if (snapshot.authFailed) {
+    parts.push("sign-in error");
   } else if (snapshot.hintLevel >= 1) {
     parts.push(`hint ${Math.min(3, snapshot.hintLevel)}/3`);
   }
@@ -39,7 +43,11 @@ export function renderStatus(snapshot: StatusSnapshot): { text: string; tooltip:
       : "No streak yet — practise today to start one",
   ];
   if (snapshot.reviewDue) tooltipLines.push("A spaced review is ready");
-  if (snapshot.offline) tooltipLines.push("Backend unreachable — hints are local rules for now");
+  if (snapshot.offline) {
+    tooltipLines.push("Backend unreachable — hints are local rules for now");
+  } else if (snapshot.authFailed) {
+    tooltipLines.push("Sign-in unavailable — the backend is up but Firebase auth is failing");
+  }
   tooltipLines.push("Click to open the tutor panel");
 
   return { text: parts.join(" "), tooltip: tooltipLines.join("\n") };
@@ -73,9 +81,10 @@ export class StatusBar {
     const { text, tooltip } = renderStatus(this.snapshot);
     this.item.text = text;
     this.item.tooltip = tooltip;
-    this.item.backgroundColor = this.snapshot.offline
-      ? new vscode.ThemeColor("statusBarItem.warningBackground")
-      : undefined;
+    this.item.backgroundColor =
+      this.snapshot.offline || this.snapshot.authFailed
+        ? new vscode.ThemeColor("statusBarItem.warningBackground")
+        : undefined;
     this.item.show();
   }
 

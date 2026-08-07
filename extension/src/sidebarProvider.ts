@@ -1,6 +1,6 @@
 import * as crypto from "crypto";
 import * as vscode from "vscode";
-import { ApiClient, ChatTurn, RateLimitError } from "./apiClient";
+import { ApiClient, AuthError, ChatTurn, RateLimitError } from "./apiClient";
 import { AttemptTracker, nudgeForUnchangedCode } from "./attemptTracker";
 import { AuthManager } from "./authManager";
 import { FirebaseClient } from "./firebaseClient";
@@ -79,6 +79,15 @@ export class EduPeerSidebarProvider implements vscode.WebviewViewProvider {
     this.post({ type: "offline", value: offline });
   }
 
+  /**
+   * Show or hide the sign-in banner. Separate from the offline banner because
+   * "the server is down" and "the server is fine but auth is broken" send the
+   * student to two different places.
+   */
+  public postAuthTrouble(failed: boolean) {
+    this.post({ type: "authTrouble", value: failed });
+  }
+
   public resolveWebviewView(webviewView: vscode.WebviewView): void {
     this.view = webviewView;
     webviewView.webview.options = {
@@ -98,6 +107,7 @@ export class EduPeerSidebarProvider implements vscode.WebviewViewProvider {
           await this.sendBadges();
           this.postAuthState();
           this.postOffline(!this.api.isAvailable);
+          this.postAuthTrouble(this.api.isAuthHealthy === false);
           void this.checkReviewDue();
           return;
         case "persistChat":
@@ -509,7 +519,10 @@ export class EduPeerSidebarProvider implements vscode.WebviewViewProvider {
       });
       return;
     }
-    if (!this.api.isAvailable) {
+    // A broken sign-in means no request can carry a token, so the local tutor
+    // is the only thing left to offer — same as being offline, even though the
+    // banner above says something different about why.
+    if (!this.api.isAvailable || err instanceof AuthError) {
       this.post({
         type: "hint",
         hint: offlineTutorReply(code, this.lastLanguageId, this.offlineReplyCount++),
@@ -576,6 +589,11 @@ export class EduPeerSidebarProvider implements vscode.WebviewViewProvider {
   <div id="offlineBanner" class="banner banner--warn" hidden>
     <span class="banner__dot" aria-hidden="true"></span>
     <span>Backend unreachable — retrying. Nudges are local for now.</span>
+  </div>
+
+  <div id="authBanner" class="banner banner--warn" hidden>
+    <span class="banner__dot" aria-hidden="true"></span>
+    <span>Can't sign in — the tutor server is up, but Firebase auth is refusing. Nudges are local for now.</span>
   </div>
 
   <header class="topbar">

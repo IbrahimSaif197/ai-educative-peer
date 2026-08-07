@@ -445,6 +445,14 @@ describe("panel chrome", () => {
     expect((el("offlineBanner") as HTMLElement).hidden).toBe(true);
   });
 
+  it("toggles the sign-in banner without claiming the backend is down", () => {
+    post({ type: "authTrouble", value: true });
+    expect((el("authBanner") as HTMLElement).hidden).toBe(false);
+    expect((el("offlineBanner") as HTMLElement).hidden).toBe(true);
+    post({ type: "authTrouble", value: false });
+    expect((el("authBanner") as HTMLElement).hidden).toBe(true);
+  });
+
   it("shows the thinking indicator and disables Ask while loading", () => {
     post({ type: "loading", value: true });
     expect((el("loading") as HTMLElement).hidden).toBe(false);

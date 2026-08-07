@@ -49,7 +49,18 @@ function makeContext() {
  */
 function stubFetch(impl?: (url: string) => any) {
   const fn = jest.fn(async (url: string) => {
-    if (impl) return impl(String(url));
+    const target = String(url);
+    // A configured backend always returns a web API key here. Answering without
+    // one is a misconfiguration the client now refuses outright, so tests that
+    // are not about auth get a valid key rather than an empty one.
+    if (target.endsWith("/auth/config")) {
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({ apiKey: "test-web-key", authDomain: "t.firebaseapp.com" }),
+      };
+    }
+    if (impl) return impl(target);
     throw new Error("ECONNREFUSED");
   });
   (global as any).fetch = fn;

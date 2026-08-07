@@ -1,5 +1,7 @@
 import * as vscode from "vscode";
 
+import { AuthError } from "./apiClient";
+
 export interface AuthSession {
   uid: string;
   refreshToken: string;
@@ -259,9 +261,18 @@ export class AuthManager {
     if (!this.apiKey) {
       const res = await fetch(`${this.baseUrl}/auth/config`);
       if (!res.ok) {
-        throw new Error(`auth config failed (${res.status})`);
+        throw new AuthError(`auth config failed (${res.status})`, res.status);
       }
-      this.apiKey = ((await res.json()) as { apiKey: string }).apiKey;
+      const key = ((await res.json()) as { apiKey?: string }).apiKey;
+      // /auth/config answers 200 with an empty key when the backend is missing
+      // FIREBASE_WEB_API_KEY, which used to surface three layers later as an
+      // opaque 403 from Google. Name the actual problem here instead.
+      if (!key) {
+        throw new AuthError(
+          "The EduPeer backend has no Firebase web API key configured (set FIREBASE_WEB_API_KEY in .env and restart it)."
+        );
+      }
+      this.apiKey = key;
     }
     return this.apiKey;
   }
@@ -277,7 +288,9 @@ export class AuthManager {
       }
     );
     if (!res.ok) {
-      throw new Error(`anonymous sign-in failed (${res.status})`);
+      // 400 usually means the key is wrong; ADMIN_ONLY_OPERATION means the
+      // Anonymous provider is switched off in the Firebase console.
+      throw new AuthError(`anonymous sign-in failed (${res.status})`, res.status);
     }
     const data = (await res.json()) as any;
     this.session = { uid: data.localId, refreshToken: data.refreshToken, isAnonymous: true };
@@ -297,11 +310,7 @@ export class AuthManager {
       body: `grant_type=refresh_token&refresh_token=${encodeURIComponent(refreshToken)}`,
     });
     if (!res.ok) {
-      const err = new Error(`Session expired — sign in again (${res.status})`) as Error & {
-        status?: number;
-      };
-      err.status = res.status;
-      throw err;
+      throw new AuthError(`Session expired — sign in again (${res.status})`, res.status);
     }
     const data = (await res.json()) as any;
     return {

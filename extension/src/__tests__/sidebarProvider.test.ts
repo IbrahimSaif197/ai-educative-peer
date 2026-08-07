@@ -1,6 +1,6 @@
 import * as vscode from "vscode";
 import { EduPeerSidebarProvider } from "../sidebarProvider";
-import { RateLimitError } from "../apiClient";
+import { AuthError, RateLimitError } from "../apiClient";
 
 const mock = vscode as any;
 
@@ -20,6 +20,7 @@ interface Harness {
 function makeApi(overrides: Record<string, any> = {}) {
   return {
     isAvailable: true,
+    isAuthHealthy: true,
     streamHint: jest.fn(async (_req: any, _onEvent: any) => ({
       hint: "What does len(n) return when n is empty?",
       hint_level: 1,
@@ -453,6 +454,24 @@ describe("failure handling", () => {
     const reply = latest(h.posted, "hint");
     expect(reply.mode).toBe("offline");
     expect(reply.hint).toContain("offline");
+  });
+
+  it("answers locally when sign-in is broken but the backend is up", async () => {
+    const h = await build({
+      isAvailable: true,
+      isAuthHealthy: false,
+      streamHint: jest.fn(async () => {
+        throw new AuthError("anonymous sign-in failed (400)", 400);
+      }),
+      getHint: jest.fn(async () => {
+        throw new AuthError("anonymous sign-in failed (400)", 400);
+      }),
+    });
+    await askPastTheGate(h);
+    const reply = latest(h.posted, "hint");
+    expect(reply.mode).toBe("offline");
+    // The raw Firebase status code is not a useful thing to show a student.
+    expect(latest(h.posted, "error")).toBeUndefined();
   });
 
   it("shows a real error when the backend is up but failing", async () => {

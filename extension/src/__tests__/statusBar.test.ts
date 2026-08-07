@@ -57,4 +57,17 @@ describe("renderStatus", () => {
   it("says why hints are local when offline", () => {
     expect(renderStatus({ ...base, offline: true }).tooltip).toContain("local rules");
   });
+
+  it("distinguishes a sign-in failure from an unreachable backend", () => {
+    const status = renderStatus({ ...base, authFailed: true });
+    expect(status.text).toContain("sign-in");
+    expect(status.text).not.toContain("offline");
+    expect(status.tooltip).toContain("Sign-in unavailable");
+  });
+
+  it("prefers offline over sign-in when the backend is down too", () => {
+    const status = renderStatus({ ...base, offline: true, authFailed: true });
+    expect(status.text).toContain("offline");
+    expect(status.text).not.toContain("sign-in");
+  });
 });

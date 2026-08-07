@@ -48,6 +48,19 @@ export async function activate(context: vscode.ExtensionContext) {
     }
   });
 
+  let warnedAuth = false;
+  api.onAuthHealthChange((ok) => {
+    provider.postAuthTrouble(!ok);
+    statusBar.update({ authFailed: !ok });
+    if (ok || warnedAuth) return;
+    warnedAuth = true;
+    // Worth a toast once: unlike an unreachable backend, this never clears on
+    // its own — someone has to fix the Firebase config.
+    vscode.window.showWarningMessage(
+      "EduPeer can't sign in. The backend is reachable but Firebase auth is failing — check FIREBASE_WEB_API_KEY on the backend and that the Anonymous provider is enabled."
+    );
+  });
+
   /** Streak and review-due come from the same call the dashboard uses. */
   const refreshStatusFromProgress = async () => {
     try {

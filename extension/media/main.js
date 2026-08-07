@@ -20,6 +20,7 @@
   const authBtn = el("authBtn");
   const reviewBtn = el("reviewBtn");
   const offlineBannerEl = el("offlineBanner");
+  const authBannerEl = el("authBanner");
   const stepperEl = el("stepper");
   const confidenceEl = el("confidence");
 
@@ -603,6 +604,10 @@
 
       case "offline":
         offlineBannerEl.hidden = !msg.value;
+        break;
+
+      case "authTrouble":
+        authBannerEl.hidden = !msg.value;
         break;
 
       case "badges":

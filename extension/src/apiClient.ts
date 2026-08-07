@@ -28,6 +28,23 @@ export interface HintRequest {
   confidence?: number;
 }
 
+/**
+ * Thrown when the sign-in chain fails: the backend has no Firebase web API key
+ * configured, the anonymous bootstrap is refused, or a refresh token no longer
+ * exchanges.
+ *
+ * Kept distinct from a network failure because the two need opposite fixes. The
+ * requests that carry a token never reach the wire when this is thrown, so
+ * treating it as proof the backend is down told students to restart a server
+ * that was answering /health perfectly well.
+ */
+export class AuthError extends Error {
+  constructor(message: string, readonly status?: number) {
+    super(message);
+    this.name = "AuthError";
+  }
+}
+
 /** Thrown when the backend asks us to slow down, so callers can stay quiet. */
 export class RateLimitError extends Error {
   constructor(readonly retryAfterSeconds: number) {
@@ -201,6 +218,8 @@ function timeoutSignal(ms: number): AbortSignal {
 export class ApiClient {
   private available = true;
   private readonly availabilityListeners: Array<(up: boolean) => void> = [];
+  private authHealthy = true;
+  private readonly authListeners: Array<(ok: boolean) => void> = [];
 
   constructor(private baseUrl: string, private readonly tokens: TokenProvider) {}
 
@@ -212,8 +231,29 @@ export class ApiClient {
     return this.available;
   }
 
+  /** False once the sign-in chain has failed and not yet recovered. */
+  get isAuthHealthy(): boolean {
+    return this.authHealthy;
+  }
+
   onAvailabilityChange(listener: (up: boolean) => void): void {
     this.availabilityListeners.push(listener);
+  }
+
+  onAuthHealthChange(listener: (ok: boolean) => void): void {
+    this.authListeners.push(listener);
+  }
+
+  private setAuthHealthy(ok: boolean): void {
+    if (this.authHealthy === ok) return;
+    this.authHealthy = ok;
+    for (const listener of this.authListeners) {
+      try {
+        listener(ok);
+      } catch {
+        /* listeners must not break the client */
+      }
+    }
   }
 
   private setAvailable(up: boolean): void {
@@ -264,8 +304,16 @@ export class ApiClient {
         res = await attempt(true);
       }
       this.setAvailable(true);
+      this.setAuthHealthy(true);
       return res;
     } catch (err) {
+      if (err instanceof AuthError) {
+        // Sign-in is broken, which says nothing about the backend: this threw
+        // before the request was ever sent. Leave availability alone so the
+        // student is not told to go restart a healthy server.
+        this.setAuthHealthy(false);
+        throw err;
+      }
       if ((err as { name?: string })?.name === "AbortError") {
         // A timeout is not proof the backend is down, but from the student's
         // side it is indistinguishable, and the offline tutor is a better
