@@ -40,7 +40,7 @@ from firebase_service import FirebaseService
 from languages import normalize_language
 from progress import build_progress, pacing_summary, review_due_concepts
 from ratelimit import RateLimiterRegistry
-from session_store import build_session_store, code_fingerprint
+from session_store import build_session_store, code_fingerprint, raw_code_hash
 
 
 app = FastAPI(title="EduPeer Backend", version="1.0.0")
@@ -68,11 +68,16 @@ SCAN_CACHE = TtlCache(ttl_seconds=300.0, max_entries=1000)
 LINE_HINT_CACHE = TtlCache(ttl_seconds=300.0, max_entries=2000)
 
 # Per-user budgets protecting the Groq free tier: (requests, per seconds).
+# Every endpoint that can reach the LLM has a bucket — /reset, /goal and
+# /review each summarise or generate through Groq, so leaving them ungated
+# would have let one user drain the shared free tier from three side doors.
 limiters = RateLimiterRegistry(
     {
         "hint": (30, 60.0),
         "inline": (60, 60.0),
         "trace": (10, 60.0),
+        "session": (10, 60.0),
+        "review": (6, 60.0),
     }
 )
 
@@ -102,7 +107,12 @@ async def _cached_profile(uid: str) -> dict:
     hit = _profile_cache.get(uid)
     if hit and now - hit[0] < PROFILE_TTL_SECONDS:
         return hit[1]
-    data = await asyncio.to_thread(firebase.get_user_profile_sync, uid)
+    data = await asyncio.to_thread(firebase.try_get_user_profile_sync, uid)
+    if data is None:
+        # A failed read is not an empty profile. Caching it would blank the
+        # student's pacing and review state for the whole TTL, so serve the
+        # last good value (even if stale) and re-read on the next request.
+        return hit[1] if hit else {}
     _profile_cache[uid] = (now, data)
     if len(_profile_cache) > 5000:
         _profile_cache.clear()
@@ -161,18 +171,44 @@ async def migrate(req: MigrateRequest, uid: str = Depends(get_current_uid)):
     return {"status": "ok", "merged": merged}
 
 
+def _ladder_key(req: HintRequest) -> str:
+    """What the hint ladder is keyed on: the problem, not the bytes.
+
+    Keying on a hash of the code made editing the file reset the ladder to
+    level 1 — the exact opposite of the promise the extension makes ("editing
+    the code unlocks a deeper hint"), because any edit produced an unseen key.
+    The client sends the document URI as `problem_key`, which stays stable
+    across edits; `escalate` alone then decides whether the level advances.
+    Older clients that send no key keep the previous code-fingerprint
+    behaviour.
+    """
+    return req.problem_key.strip() or code_fingerprint(req.code)
+
+
 async def _resolve_hint_level(req: HintRequest, uid: str) -> int:
-    """The level this request should answer at.
+    """The level this request should answer at, WITHOUT spending it.
 
     Only 'hint' mode is progressive, and it only advances when the client says
     the student actually changed something (`escalate`). Asking the same
     question again on untouched code re-uses the level instead of walking the
     student to a free pseudocode answer.
+
+    Nothing is persisted here. `_commit_hint_level` runs only once a hint has
+    actually been produced, so a failed LLM call never costs the student a
+    level.
     """
     if req.mode != "hint":
         return req.hint_level
-    advance = store.next_hint_level if req.escalate else store.current_hint_level
-    return await asyncio.to_thread(advance, uid, code_fingerprint(req.code))
+    return await asyncio.to_thread(
+        store.peek_hint_level, uid, _ladder_key(req), req.escalate
+    )
+
+
+def _commit_hint_level(req: HintRequest, uid: str, level: int) -> None:
+    """Spend the level, now that the student has the hint in hand."""
+    if req.mode != "hint":
+        return
+    store.commit_hint_level(uid, _ladder_key(req), level)
 
 
 async def _pacing_for(req: HintRequest, uid: str) -> str:
@@ -203,8 +239,11 @@ async def hint(req: HintRequest, uid: str = Depends(rate_limited("hint"))) -> Hi
             req.edit_summary,
         )
     except Exception as e:
+        # The level was only peeked, never committed, so the student can retry
+        # at the same depth.
         raise HTTPException(status_code=502, detail=f"LLM error: {e}")
 
+    await asyncio.to_thread(_commit_hint_level, req, uid, level)
     is_new_session = await asyncio.to_thread(store.begin_session, uid)
 
     firebase.fire_and_forget(
@@ -216,6 +255,7 @@ async def hint(req: HintRequest, uid: str = Depends(rate_limited("hint"))) -> Hi
         new_session=is_new_session,
         language=language,
         confidence=req.confidence,
+        mode=req.mode,
     )
 
     return HintResponse(hint=hint_text, hint_level=level, concept_tags=concept_tags)
@@ -251,22 +291,25 @@ async def hint_stream(req: HintRequest, uid: str = Depends(rate_limited("hint"))
             return
         if done is not None:
             # This generator runs on a worker thread (no event loop), so log
-            # synchronously here instead of via fire_and_forget.
+            # synchronously here instead of via fire_and_forget. Reaching this
+            # point is what spends the level: a stream that errored out above
+            # returned early and committed nothing.
+            _commit_hint_level(req, uid, level)
             is_new_session = store.begin_session(uid)
             firebase._log_interaction_sync(
                 uid, req.code, req.question, level, done["concept_tags"], language,
-                req.confidence,
+                req.confidence, req.mode,
             )
             firebase._update_user_and_award_badges_sync(
                 uid, level, done["concept_tags"], is_new_session, language,
-                req.confidence,
+                req.confidence, req.mode,
             )
 
     return StreamingResponse(event_source(), media_type="text/event-stream")
 
 
 @app.post("/reset")
-async def reset_session(uid: str = Depends(get_current_uid)):
+async def reset_session(uid: str = Depends(rate_limited("session"))):
     summary = ""
     interactions = await asyncio.to_thread(firebase.get_recent_interactions_sync, uid, 10)
     if interactions:
@@ -292,7 +335,7 @@ async def get_progress(uid: str = Depends(get_current_uid)):
 async def get_review(
     language: str = "python",
     exercise: bool = True,
-    uid: str = Depends(get_current_uid),
+    uid: str = Depends(rate_limited("review")),
 ):
     data = await _cached_profile(uid)
     concepts = review_due_concepts(data.get("concept_stats"), _utc_today())
@@ -314,7 +357,7 @@ async def get_review(
 
 
 @app.post("/goal")
-async def set_goal(req: GoalRequest, uid: str = Depends(get_current_uid)):
+async def set_goal(req: GoalRequest, uid: str = Depends(rate_limited("session"))):
     text = req.text.strip()
     concepts: List[str] = []
     if text:
@@ -340,8 +383,11 @@ async def scan(req: ScanRequest, uid: str = Depends(rate_limited("inline"))) -> 
         return ScanResponse(flags=[])
     language = normalize_language(req.language)
     # uid is part of the key so one student's cached scan is never served to
-    # another, even though the code fingerprint alone would collide.
-    key = (uid, language, code_fingerprint(req.code))
+    # another, even though the code hash alone would collide. The hash is the
+    # exact one, not `code_fingerprint`: the cached flags carry absolute line
+    # numbers, and a whitespace-insensitive key would serve them against a
+    # file whose lines have shifted.
+    key = (uid, language, raw_code_hash(req.code))
     cached = SCAN_CACHE.get(key)
     if cached is not None:
         return ScanResponse(flags=[LineFlag(**f) for f in cached])
@@ -360,7 +406,9 @@ async def line_hint(
     if not req.code.strip():
         return LineHintResponse(hint="", concept="general")
     language = normalize_language(req.language)
-    key = (uid, language, req.line, code_fingerprint(req.code))
+    # Exact hash, for the same reason as /scan: the entry is keyed to a line
+    # number, so whitespace that shifts lines must miss the cache.
+    key = (uid, language, req.line, raw_code_hash(req.code))
     cached = LINE_HINT_CACHE.get(key)
     if cached is not None:
         return LineHintResponse(hint=cached[0], concept=cached[1])

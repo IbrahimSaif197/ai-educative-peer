@@ -92,20 +92,34 @@ def _update_concept_stats(
     concept_tags: List[str],
     hint_level: int,
     today: date,
+    count_level: bool = True,
 ) -> Dict[str, Any]:
-    """Fold one interaction into the per-concept stats map (copy, not in place)."""
+    """Fold one interaction into the per-concept stats map (copy, not in place).
+
+    `count_level=False` records that the concept came up without letting the
+    turn's hint level into the average. Only progressive `hint`-mode turns have
+    a level that means anything; every other mode is sent at level 1, so
+    counting them would report a struggling student as a strong one.
+    """
     result = {k: dict(v) for k, v in (stats or {}).items() if isinstance(v, dict)}
     today_iso = today.isoformat()
     for tag in concept_tags:
         entry = result.setdefault(
             tag,
-            {"encounters": 0, "level_sum": 0, "max_level": 0,
+            {"encounters": 0, "rated_encounters": 0, "level_sum": 0, "max_level": 0,
              "last_seen": today_iso, "last_struggled": None},
         )
         entry["encounters"] = int(entry.get("encounters", 0)) + 1
+        entry["last_seen"] = today_iso
+        if not count_level:
+            continue
+        # Documents written before rated_encounters existed have every
+        # encounter rated, so seed it from the encounter count minus this one.
+        entry["rated_encounters"] = int(
+            entry.get("rated_encounters", int(entry.get("encounters", 1)) - 1)
+        ) + 1
         entry["level_sum"] = int(entry.get("level_sum", 0)) + int(hint_level)
         entry["max_level"] = max(int(entry.get("max_level", 0)), int(hint_level))
-        entry["last_seen"] = today_iso
         if hint_level >= 2:
             entry["last_struggled"] = today_iso
     return result
@@ -234,6 +248,7 @@ class FirebaseService:
         concept_tags: List[str],
         language: str = "python",
         confidence: int = 0,
+        mode: str = "hint",
     ) -> None:
         if not self.enabled:
             return
@@ -247,6 +262,7 @@ class FirebaseService:
                 "concept_tags": concept_tags,
                 "language": language,
                 "confidence": int(confidence or 0),
+                "mode": mode,
             }
             self._client.collection("interactions").add(doc)
         except Exception as e:
@@ -260,10 +276,17 @@ class FirebaseService:
         new_session: bool,
         language: str = "python",
         confidence: int = 0,
+        mode: str = "hint",
     ) -> List[str]:
         if not self.enabled:
             return []
         try:
+            # Only the progressive `hint` mode has a hint level that means
+            # anything. Every other mode is sent at level 1, so letting them
+            # into the level-derived counters would hand out Hint Minimiser
+            # badges for asking to have an error explained.
+            is_hint = mode == "hint"
+
             user_ref = self._client.collection("users").document(user_id)
             snap = user_ref.get()
             data: Dict[str, Any] = snap.to_dict() if snap.exists else {}
@@ -275,12 +298,13 @@ class FirebaseService:
                 sessions += 1
             concept_tags_seen = list(set(list(data.get("concept_tags_seen", [])) + concept_tags))
             solved_at_level_1 = int(data.get("solved_at_level_1", 0))
-            if hint_level_used == 1:
+            if is_hint and hint_level_used == 1:
                 solved_at_level_1 += 1
 
             today = _today()
             concept_stats = _update_concept_stats(
-                data.get("concept_stats"), concept_tags, hint_level_used, today
+                data.get("concept_stats"), concept_tags, hint_level_used, today,
+                count_level=is_hint,
             )
             languages_used = sorted(set(list(data.get("languages_used", [])) + [language]))
             last_active_date, streak_days = _update_streak(
@@ -289,10 +313,12 @@ class FirebaseService:
 
             calibration = _update_calibration(
                 data.get("calibration"),
-                classify_calibration(int(confidence or 0), hint_level_used),
+                classify_calibration(int(confidence or 0), hint_level_used) if is_hint else None,
             )
-            level_counts = _update_hint_level_counts(
-                data.get("hint_level_counts"), hint_level_used
+            level_counts = (
+                _update_hint_level_counts(data.get("hint_level_counts"), hint_level_used)
+                if is_hint
+                else {key: int((data.get("hint_level_counts") or {}).get(key, 0)) for key in ("1", "2", "3")}
             )
             activity = _update_activity(data.get("activity"), today)
 
@@ -334,6 +360,7 @@ class FirebaseService:
         new_session: bool,
         language: str = "python",
         confidence: int = 0,
+        mode: str = "hint",
     ) -> None:
         loop = asyncio.get_running_loop()
         loop.run_in_executor(
@@ -346,6 +373,7 @@ class FirebaseService:
             concept_tags,
             language,
             confidence,
+            mode,
         )
         loop.run_in_executor(
             None,
@@ -356,6 +384,7 @@ class FirebaseService:
             new_session,
             language,
             confidence,
+            mode,
         )
 
     def fire_and_forget(
@@ -368,6 +397,7 @@ class FirebaseService:
         new_session: bool,
         language: str = "python",
         confidence: int = 0,
+        mode: str = "hint",
     ) -> None:
         try:
             task = asyncio.create_task(
@@ -380,6 +410,7 @@ class FirebaseService:
                     new_session,
                     language,
                     confidence,
+                    mode,
                 )
             )
             self._pending_tasks.add(task)
@@ -389,6 +420,16 @@ class FirebaseService:
 
     def get_user_profile_sync(self, user_id: str) -> Dict[str, Any]:
         """The full users doc, or {} when unavailable."""
+        data = self.try_get_user_profile_sync(user_id)
+        return {} if data is None else data
+
+    def try_get_user_profile_sync(self, user_id: str) -> Optional[Dict[str, Any]]:
+        """The full users doc; {} for a genuinely new user, None on failure.
+
+        Callers that cache the result need to tell those two apart: caching a
+        transient Firestore error as an empty profile would pin the student to
+        a blank slate for the whole TTL, long after Firestore recovered.
+        """
         if not self.enabled:
             return {}
         try:
@@ -396,7 +437,7 @@ class FirebaseService:
             return snap.to_dict() or {} if snap.exists else {}
         except Exception as e:
             print(f"[firebase] read profile failed: {e}")
-            return {}
+            return None
 
     def set_goal_sync(self, user_id: str, text: str, concepts: List[str]) -> None:
         if not self.enabled:

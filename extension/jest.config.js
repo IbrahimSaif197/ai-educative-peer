@@ -4,6 +4,9 @@ module.exports = {
   testEnvironment: "node",
   roots: ["<rootDir>/src"],
   testMatch: ["**/__tests__/**/*.test.ts"],
+  // media/*.js is loaded through `new Function` in webviewMain.test.ts, so
+  // istanbul cannot instrument it; only the TypeScript sources are measured.
+  collectCoverageFrom: ["src/**/*.ts", "!src/__tests__/**", "!src/__mocks__/**"],
   moduleNameMapper: {
     "^vscode$": "<rootDir>/src/__mocks__/vscode.ts",
   },

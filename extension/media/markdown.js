@@ -22,8 +22,12 @@
     // rather than losing the outer bold to the inner italic.
     { re: /\*\*(.+?)\*\*/, tag: "strong", recurse: true },
     { re: /__(.+?)__/, tag: "strong", recurse: true },
-    { re: /(?<![\w*])\*([^*\n]+)\*(?![\w*])/, tag: "em", recurse: true },
-    { re: /(?<![\w_])_([^_\n]+)_(?![\w_])/, tag: "em", recurse: true },
+    // Both delimiters must hug their content: CommonMark's left/right-flanking
+    // rule. Without it "area = w * h * d" reads as emphasis and the asterisks
+    // vanish from the student's screen — which matters when the tutor is
+    // talking about multiplication or C pointers.
+    { re: /(?<![\w*])\*([^*\s\n](?:[^*\n]*[^*\s\n])?)\*(?![\w*])/, tag: "em", recurse: true },
+    { re: /(?<![\w_])_([^_\s\n](?:[^_\n]*[^_\s\n])?)_(?![\w_])/, tag: "em", recurse: true },
     // Links render as their text: the panel has no safe way to open a URL the
     // model invented, and a bare label reads fine.
     { re: /\[([^\]\n]+)\]\([^)\n]*\)/, tag: null, recurse: true },

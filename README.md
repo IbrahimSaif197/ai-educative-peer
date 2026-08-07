@@ -26,6 +26,12 @@ edupeer/
 pip install -r backend/requirements.txt
 ```
 
+To run the test suite as well, install the dev extras instead:
+
+```bash
+pip install -r backend/requirements-dev.txt
+```
+
 ### 2. Install Node dependencies
 
 ```bash
@@ -46,7 +52,9 @@ Then edit `.env` and fill in:
 - `FIREBASE_CLIENT_EMAIL` — the `client_email` from the same service-account JSON
 - `FIREBASE_WEB_API_KEY` — the web-app API key from Firebase Console > Project settings > Your apps
 - `FIREBASE_AUTH_DOMAIN` — your Firebase project's auth domain (e.g., `your-project.firebaseapp.com`)
-- `BACKEND_URL` — defaults to `http://localhost:8000`
+
+The extension gets the backend address from the `edupeer.backendUrl` VS Code
+setting (default `http://localhost:8000`), not from the environment.
 
 ### 4. Run the backend
 
@@ -58,9 +66,12 @@ The API is now at `http://localhost:8000`. Health check: `GET /health`.
 
 ### 5. Run the extension
 
-1. Open the `edupeer/extension` folder in VS Code.
-2. Press `F5` to launch an Extension Development Host.
-3. In the new window open any supported file (`.py`, `.js`, `.java`, `.c`, `.cpp`, `.cs`) — the `demos/` folder has a buggy sample for each language.
+1. Open the repository root (`ai-educative-peer`) in VS Code — the shipped
+   `.vscode/launch.json` resolves `${workspaceFolder}/extension`, so opening
+   the `extension/` folder directly will not find it.
+2. Press `F5` to launch an Extension Development Host. The `npm: compile`
+   pre-launch task builds `extension/out/` first.
+3. In the new window open any supported file (`.py`, `.js`, `.ts`, `.java`, `.c`, `.cpp`, `.cs`, `.go`, `.rs`, `.sql`) — the `demos/` folder has a buggy sample for each language.
 4. Click the **EduPeer** icon in the Activity Bar, or run `EduPeer: Open Tutor Panel` from the command palette.
 
 ### Adjusting the inline hint (CodeLens) font size
@@ -96,6 +107,13 @@ set to `16`.
 | `edupeer.traceCode`             | Desk-check exercise: fill in a variable trace, get it marked.      |
 | `edupeer.showProgress`          | Progress dashboard: badges, streak, concepts, session notes.       |
 | `edupeer.setGoal`               | Set (or clear) a free-text learning goal that biases the tutor.    |
+| `edupeer.nudgeLine`             | Hint on the line under the cursor (`Ctrl+Alt+H` / `Cmd+Alt+H`).    |
+| `edupeer.scanFile`              | Scan the open file and flag suspicious lines in the Problems panel.|
+
+`Ctrl+Alt+H` (`Cmd+Alt+H` on macOS) is the fastest path to a hint; the same
+command is on the editor right-click menu. One further command,
+`edupeer.discussLines`, is deliberately hidden from the command palette — it is
+reachable only from the Quick Fix on an EduPeer diagnostic.
 
 A status bar entry shows the current hint depth, your streak and whether a
 review is waiting; click it to open the panel. EduPeer's own diagnostics also
@@ -104,7 +122,10 @@ offer Quick Fix actions ("nudge me on this line", "explain this line"), and a
 
 ## How hinting works
 
-Each call to `POST /hint` advances the hint level (1 → 2 → 3) for the same user + code fingerprint within a session. Reset the session to start over at level 1.
+Each call to `POST /hint` advances the hint level (1 → 2 → 3) for the same user
+and problem within a session. The ladder is keyed on the file you are working
+in, not on a hash of its contents, so editing your code deepens the hint
+instead of restarting it. Reset the session to start over at level 1.
 
 - **Level 1** — one guiding question.
 - **Level 2** — points out the specific line/concept and briefly explains it.
@@ -150,6 +171,13 @@ follows you to any machine you sign in on. Tokens are stored in VS Code's
 SecretStorage; all backend endpoints except `/health`, `/auth/config`, and
 `/auth/login` verify a Firebase ID token.
 
+The sign-in callback is bound to a one-time 128-bit nonce that VS Code puts on
+the login URL and the page hands back, so no other page open in the browser can
+POST its own tokens to the loopback port and hijack the session. Anonymous
+progress is merged only into the account it was captured for, which matters on
+a shared machine: migration deletes the source record, so replaying a failed
+merge into whoever signs in next would hand one student's work to another.
+
 ### One-time Firebase Console setup
 
 1. **Authentication → Sign-in method:** enable Email/Password, Google,
@@ -176,7 +204,9 @@ Awarded automatically after each interaction:
 
 - **First Question** — 1 total interaction.
 - **Persistent Learner / Marathon Learner / Scholar** — 5 / 15 / 50 sessions.
+  A session ends when you press Reset or go 30 minutes without asking anything.
 - **Hint Minimiser I/II/III** — solved at hint level 1 three / ten / twenty-five times.
+  Only progressive `hint`-mode asks count; explanations, quizzes and traces do not.
 - **Concept Explorer** — 5+ unique concept tags touched.
 - **3-Day Streak / Week Streak / Month Streak** — consecutive days of practice.
 - **<Language> Learner** — first interaction in each supported language.
@@ -208,8 +238,10 @@ All endpoints except `GET /health`, `GET /auth/config`, and `GET /auth/login` re
 `POST /hint` takes a `mode` field. Only `hint` advances the 1→2→3 level; the
 rest are one-shot teaching moves the sidebar triggers contextually:
 
-- **hint** — the progressive Socratic flow (with an optional, skippable
-  "explain the code first" step the first time you ask about a file).
+- **hint** — the progressive Socratic flow, with an optional, skippable
+  "explain the code first" step. The step is keyed on the exact state of your
+  code, so it returns whenever you have edited since the last time you
+  answered it.
 - **reflect** — after you fix a bug (or when a rescan comes back clean), one
   short quiz question about *why* the fix works.
 - **translate** — after a level-3 pseudocode hint, submit your code
@@ -267,8 +299,10 @@ It says plainly that it is offline and never advances your hint level.
 **Cache and rate limits.** `/scan` and `/line-hint` fire automatically as you
 type, so the backend caches both for 5 minutes keyed on your uid plus a
 fingerprint of the code — an unchanged file costs no LLM call. Per-user token
-buckets cap `/hint` at 30/min, the inline endpoints at 60/min and `/trace` at
-10/min, returning `429` with `Retry-After`. The extension treats a 429 as a
+buckets cap `/hint` at 30/min, the inline endpoints at 60/min, `/trace` at
+10/min, `/reset` and `/goal` at a shared 10/min and `/review` at 6/min,
+returning `429` with `Retry-After`. Every endpoint that can reach the LLM has
+a bucket. The extension treats a 429 as a
 soft failure: inline features go quiet until the budget refills and the
 sidebar says so rather than showing an error. All of this exists to keep the
 project inside the Groq free tier.

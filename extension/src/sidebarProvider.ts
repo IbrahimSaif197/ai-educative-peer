@@ -12,6 +12,7 @@ import {
   codeFingerprint,
   frameExplainedQuestion,
   framePrediction,
+  frameReviewAnswer,
   frameTraceTable,
   looksLikeErrorText,
   questionForMode,
@@ -42,9 +43,24 @@ export class EduPeerSidebarProvider implements vscode.WebviewViewProvider {
   private pendingPredict?: { snippet: string; code: string };
   /** The desk-check exercise awaiting the student's filled-in grid. */
   private pendingTrace?: { snippet: string; code: string; variables: string[] };
+  /** The spaced-review exercise awaiting the student's written answer. */
+  private pendingReview?: string;
   private readonly attempts = new AttemptTracker();
   /** Rotates the generic offline prompt so it doesn't repeat verbatim. */
   private offlineReplyCount = 0;
+  /**
+   * Bumped by every reset. A response that comes back carrying an older
+   * generation belongs to a conversation the student has already cleared, so
+   * it is dropped instead of re-seeding the history they just wiped.
+   */
+  private sessionGeneration = 0;
+  /**
+   * Identifies the ask currently streaming. Ctrl+Enter and the mode buttons
+   * can start a second ask while the first is mid-stream; without an id the
+   * webview appends both streams' deltas into one bubble.
+   */
+  private askSeq = 0;
+  private askInFlight = false;
   /** Current hint level, mirrored to the status bar. */
   private readonly levelEmitter = new vscode.EventEmitter<number>();
   readonly onDidChangeHintLevel = this.levelEmitter.event;
@@ -113,6 +129,9 @@ export class EduPeerSidebarProvider implements vscode.WebviewViewProvider {
         case "traceAnswer":
           await this.handleTraceAnswer(msg.rows as string[][]);
           return;
+        case "reviewAnswer":
+          await this.handleReviewAnswer(msg.answer as string);
+          return;
         case "reset":
           await this.resetSession();
           return;
@@ -128,20 +147,40 @@ export class EduPeerSidebarProvider implements vscode.WebviewViewProvider {
       }
     });
 
-    vscode.window.onDidChangeActiveTextEditor(() => this.sendActiveCode());
-    vscode.workspace.onDidChangeTextDocument((e) => {
-      if (
-        vscode.window.activeTextEditor &&
-        e.document === vscode.window.activeTextEditor.document
-      ) {
-        this.sendActiveCode();
+    // VS Code re-resolves the view whenever its host is recreated (closing and
+    // reopening the sidebar does it). Without disposing on that boundary, each
+    // recreation stacked another set of listeners on events that fire per
+    // keystroke, and every one of them posted the whole document.
+    const subs: vscode.Disposable[] = [
+      vscode.window.onDidChangeActiveTextEditor(() => this.sendActiveCode()),
+      vscode.workspace.onDidChangeTextDocument((e) => {
+        if (
+          vscode.window.activeTextEditor &&
+          e.document === vscode.window.activeTextEditor.document
+        ) {
+          this.sendActiveCode();
+        }
+      }),
+      this.auth.onDidChange(() => {
+        this.postAuthState();
+        void this.sendBadges();
+      }),
+    ];
+
+    webviewView.onDidDispose(() => {
+      for (const d of subs) {
+        d.dispose();
+      }
+      subs.length = 0;
+      if (this.view === webviewView) {
+        this.view = undefined;
       }
     });
+  }
 
-    this.auth.onDidChange(() => {
-      this.postAuthState();
-      void this.sendBadges();
-    });
+  /** Releases the level emitter; called from the extension's deactivate path. */
+  public dispose(): void {
+    this.levelEmitter.dispose();
   }
 
   public reveal() {
@@ -157,11 +196,14 @@ export class EduPeerSidebarProvider implements vscode.WebviewViewProvider {
   }
 
   public async resetSession() {
+    // Anything already in flight now belongs to a cleared conversation.
+    this.sessionGeneration++;
     this.history = [];
     this.seenFingerprints.clear();
     this.pendingAsk = undefined;
     this.pendingPredict = undefined;
     this.pendingTrace = undefined;
+    this.pendingReview = undefined;
     this.attempts.clear();
     this.levelEmitter.fire(0);
     await this.context.globalState.update(CHAT_STATE_KEY, []);
@@ -198,6 +240,9 @@ export class EduPeerSidebarProvider implements vscode.WebviewViewProvider {
         return;
       }
       this.history.push({ role: "tutor", content: res.exercise });
+      // Remembered so the student's answer is marked against the exercise,
+      // not against whatever file is open in the editor.
+      this.pendingReview = res.exercise;
       this.post({
         type: "hint",
         hint: res.exercise,
@@ -253,6 +298,21 @@ export class EduPeerSidebarProvider implements vscode.WebviewViewProvider {
       frameTraceTable(pending.snippet, pending.variables, filled),
       pending.code,
       "trace-check",
+      { echoUser: false }
+    );
+  }
+
+  private async handleReviewAnswer(answer: string) {
+    const exercise = this.pendingReview;
+    this.pendingReview = undefined;
+    if (!exercise || !(answer || "").trim()) return;
+    this.post({ type: "userMessage", text: answer });
+    await this.handleAsk(
+      frameReviewAnswer(exercise, answer),
+      // The exercise is the subject, not the open file: reviews are about a
+      // concept from days ago, and the editor is usually on something else.
+      exercise,
+      "review-exercise",
       { echoUser: false }
     );
   }
@@ -335,6 +395,20 @@ export class EduPeerSidebarProvider implements vscode.WebviewViewProvider {
     if (!question || !question.trim()) {
       return;
     }
+    if (this.askInFlight) {
+      // Two overlapping asks interleave their stream deltas into a single
+      // bubble and each advance the ladder, so the second one is refused.
+      this.post({
+        type: "hint",
+        hint:
+          "One question at a time — EduPeer is still working on the last one.\n\n" +
+          "While you wait, jot down what you expect to happen and why.",
+        hint_level: 0,
+        concept_tags: [],
+        mode: "attempt-gate",
+      });
+      return;
+    }
     if (opts.echoUser !== false) {
       this.post({ type: "userMessage", text: question });
     }
@@ -354,12 +428,18 @@ export class EduPeerSidebarProvider implements vscode.WebviewViewProvider {
       });
     }
 
+    const seq = ++this.askSeq;
+    const generation = this.sessionGeneration;
+    this.askInFlight = true;
     this.post({ type: "loading", value: true });
     try {
       const request = {
         code: code ?? "",
         question,
         hint_level: 1,
+        // The ladder is keyed on the problem, not the bytes, so editing the
+        // code deepens the hint instead of restarting at level 1.
+        problem_key: this.lastDocumentKey,
         language: this.lastLanguageId,
         mode,
         history: this.history.slice(-MAX_HISTORY_TURNS),
@@ -369,17 +449,22 @@ export class EduPeerSidebarProvider implements vscode.WebviewViewProvider {
       };
       let res;
       try {
-        this.post({ type: "streamStart" });
+        this.post({ type: "streamStart", seq });
         res = await this.api.streamHint(request, (event) => {
-          if (event.type === "delta") {
-            this.post({ type: "streamDelta", text: event.text });
+          if (event.type === "delta" && generation === this.sessionGeneration) {
+            this.post({ type: "streamDelta", seq, text: event.text });
           }
         });
       } catch (err) {
-        this.post({ type: "streamAbort" });
+        this.post({ type: "streamAbort", seq });
         if (err instanceof RateLimitError) throw err;
         // Older backend or interrupted stream: fall back to the plain call.
         res = await this.api.getHint(request);
+      }
+      if (generation !== this.sessionGeneration) {
+        // The student reset while this was in flight. Dropping it here keeps
+        // the cleared history cleared and the hint depth at 0.
+        return;
       }
       if (mode === "hint") {
         this.attempts.record(this.lastDocumentKey, code ?? "");
@@ -389,6 +474,7 @@ export class EduPeerSidebarProvider implements vscode.WebviewViewProvider {
       this.history.push({ role: "tutor", content: res.hint });
       this.post({
         type: "hint",
+        seq,
         hint: res.hint,
         hint_level: res.hint_level,
         concept_tags: res.concept_tags,
@@ -396,8 +482,11 @@ export class EduPeerSidebarProvider implements vscode.WebviewViewProvider {
       });
       await this.sendBadges();
     } catch (err: any) {
-      this.postFailure(err, code ?? "");
+      if (generation === this.sessionGeneration) {
+        this.postFailure(err, code ?? "");
+      }
     } finally {
+      this.askInFlight = false;
       this.post({ type: "loading", value: false });
     }
   }

@@ -264,7 +264,10 @@ class TestProgressEndpoints:
     def test_progress_returns_shape_for_new_user(self, client, monkeypatch):
         import main as app_main
         app_main._profile_cache.clear()
-        monkeypatch.setattr(app_main.firebase, "get_user_profile_sync", lambda uid: {})
+        # try_get_user_profile_sync is the single read; get_user_profile_sync
+        # delegates to it, so patching here covers both the cached and the
+        # uncached path.
+        monkeypatch.setattr(app_main.firebase, "try_get_user_profile_sync", lambda uid: {})
         res = client.get("/progress")
         assert res.status_code == 200
         data = res.json()
@@ -285,7 +288,7 @@ class TestProgressEndpoints:
         struggled = (app_main._utc_today() - timedelta(days=4)).isoformat()
         monkeypatch.setattr(
             app_main.firebase,
-            "get_user_profile_sync",
+            "try_get_user_profile_sync",
             lambda uid: {"concept_stats": {"loops": {
                 "encounters": 3, "level_sum": 7, "max_level": 3,
                 "last_seen": struggled, "last_struggled": struggled}}},
@@ -440,9 +443,13 @@ class TestEventLoopNotBlocked:
         seen = {}
 
         class _RecordingStore(InMemorySessionStore):
-            def next_hint_level(self, user_id, fingerprint):
-                seen["next_hint_level"] = threading.get_ident()
-                return super().next_hint_level(user_id, fingerprint)
+            def peek_hint_level(self, user_id, fingerprint, escalate=True):
+                seen["peek_hint_level"] = threading.get_ident()
+                return super().peek_hint_level(user_id, fingerprint, escalate)
+
+            def commit_hint_level(self, user_id, fingerprint, level):
+                seen["commit_hint_level"] = threading.get_ident()
+                return super().commit_hint_level(user_id, fingerprint, level)
 
             def begin_session(self, user_id):
                 seen["begin_session"] = threading.get_ident()
@@ -461,7 +468,8 @@ class TestEventLoopNotBlocked:
             app_main.app.dependency_overrides.clear()
 
         assert res.status_code == 200
-        assert seen["next_hint_level"] != loop_thread_id
+        assert seen["peek_hint_level"] != loop_thread_id
+        assert seen["commit_hint_level"] != loop_thread_id
         assert seen["begin_session"] != loop_thread_id
 
 
@@ -505,6 +513,96 @@ class TestEscalationControl:
         client.post("/hint/stream", json=VALID_HINT_PAYLOAD)
         res = client.post("/hint/stream", json={**VALID_HINT_PAYLOAD, "escalate": False})
         assert 'data: {"type": "meta", "hint_level": 1}' in res.text
+
+
+class TestFailedHintDoesNotSpendALevel:
+    """A hint the student never saw must not cost them a rung of the ladder."""
+
+    def _break_engine(self, monkeypatch):
+        import main as app_main
+
+        def boom(*args, **kwargs):
+            raise RuntimeError("groq is down")
+
+        monkeypatch.setattr(app_main.engine, "generate_hint", boom)
+
+    def test_llm_failure_leaves_the_level_untouched(self, client, monkeypatch):
+        self._break_engine(monkeypatch)
+        assert client.post("/hint", json=VALID_HINT_PAYLOAD).status_code == 502
+        monkeypatch.undo()
+        # The next successful ask is still the student's first hint.
+        assert client.post("/hint", json=VALID_HINT_PAYLOAD).json()["hint_level"] == 1
+
+    def test_repeated_failures_do_not_walk_down_the_ladder(self, client, monkeypatch):
+        self._break_engine(monkeypatch)
+        for _ in range(3):
+            assert client.post("/hint", json=VALID_HINT_PAYLOAD).status_code == 502
+        monkeypatch.undo()
+        assert client.post("/hint", json=VALID_HINT_PAYLOAD).json()["hint_level"] == 1
+
+    def test_failure_after_a_success_keeps_the_earned_level(self, client, monkeypatch):
+        assert client.post("/hint", json=VALID_HINT_PAYLOAD).json()["hint_level"] == 1
+        self._break_engine(monkeypatch)
+        assert client.post("/hint", json=VALID_HINT_PAYLOAD).status_code == 502
+        monkeypatch.undo()
+        # Level 1 was spent and stays spent; the retry is level 2, not 3.
+        assert client.post("/hint", json=VALID_HINT_PAYLOAD).json()["hint_level"] == 2
+
+    def test_successful_hint_still_spends_the_level(self, client):
+        assert client.post("/hint", json=VALID_HINT_PAYLOAD).json()["hint_level"] == 1
+        assert client.post("/hint", json=VALID_HINT_PAYLOAD).json()["hint_level"] == 2
+        assert client.post("/hint", json=VALID_HINT_PAYLOAD).json()["hint_level"] == 3
+
+    def test_non_hint_mode_failure_touches_nothing(self, client, monkeypatch):
+        self._break_engine(monkeypatch)
+        payload = {**VALID_HINT_PAYLOAD, "mode": "reflect"}
+        assert client.post("/hint", json=payload).status_code == 502
+        monkeypatch.undo()
+        assert client.post("/hint", json=VALID_HINT_PAYLOAD).json()["hint_level"] == 1
+
+    def test_stream_failure_leaves_the_level_untouched(self, client, monkeypatch):
+        import main as app_main
+        app_main._profile_cache.clear()
+
+        def failing_stream(*args, **kwargs):
+            yield {"type": "delta", "text": "partial"}
+            raise RuntimeError("groq died mid-stream")
+
+        monkeypatch.setattr(app_main.engine, "stream_hint", failing_stream)
+        res = client.post("/hint/stream", json=VALID_HINT_PAYLOAD)
+        assert res.status_code == 200
+        assert '"type": "error"' in res.text
+        monkeypatch.undo()
+        assert client.post("/hint", json=VALID_HINT_PAYLOAD).json()["hint_level"] == 1
+
+    def test_stream_success_spends_the_level(self, client, monkeypatch):
+        import main as app_main
+        app_main._profile_cache.clear()
+
+        def fake_stream(*args, **kwargs):
+            yield {"type": "done", "hint": "h", "concept_tags": []}
+
+        monkeypatch.setattr(app_main.engine, "stream_hint", fake_stream)
+        client.post("/hint/stream", json=VALID_HINT_PAYLOAD)
+        monkeypatch.undo()
+        assert client.post("/hint", json=VALID_HINT_PAYLOAD).json()["hint_level"] == 2
+
+    def test_a_failed_stream_then_a_hint_fallback_spends_only_one_level(
+        self, client, monkeypatch
+    ):
+        # This is the exact path the extension takes: stream fails, it retries
+        # /hint with the same body. Together they must cost one level, not two.
+        import main as app_main
+        app_main._profile_cache.clear()
+
+        def failing_stream(*args, **kwargs):
+            raise RuntimeError("stream unavailable")
+            yield  # pragma: no cover - generator marker
+
+        monkeypatch.setattr(app_main.engine, "stream_hint", failing_stream)
+        client.post("/hint/stream", json=VALID_HINT_PAYLOAD)
+        monkeypatch.undo()
+        assert client.post("/hint", json=VALID_HINT_PAYLOAD).json()["hint_level"] == 1
 
 
 class TestEditSummaryAndConfidence:

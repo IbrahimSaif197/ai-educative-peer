@@ -17,11 +17,33 @@ TutorMode = Literal[
 # this is the server's own bound on how much of the prompt they can occupy.
 MAX_EDIT_SUMMARY_CHARS = 2000
 
+# Everything a client can push into a prompt is bounded, so one request cannot
+# spend an unbounded share of the Groq budget. A 40k file is far past anything
+# a novice is debugging; a 4k question is a very long paste of a stack trace.
+MAX_CODE_CHARS = 40000
+MAX_QUESTION_CHARS = 4000
+MAX_GOAL_CHARS = 500
+MAX_PROBLEM_KEY_CHARS = 512
+
 
 class HintRequest(BaseModel):
-    code: str = Field(default="", description="The student's current code")
-    question: str = Field(..., description="The student's question or described error")
+    code: str = Field(default="", max_length=MAX_CODE_CHARS, description="The student's current code")
+    question: str = Field(
+        ...,
+        max_length=MAX_QUESTION_CHARS,
+        description="The student's question or described error",
+    )
     hint_level: int = Field(default=1, ge=1, le=3)
+    problem_key: str = Field(
+        default="",
+        max_length=MAX_PROBLEM_KEY_CHARS,
+        description=(
+            "Stable identifier for the problem being worked on (the client "
+            "sends the document URI). The hint ladder is keyed on this, so "
+            "editing the code advances the level instead of restarting it. "
+            "Empty falls back to a fingerprint of the code."
+        ),
+    )
     language: str = Field(default="python", description="VS Code languageId of the code")
     mode: TutorMode = Field(
         default="hint",
@@ -72,7 +94,7 @@ class UserBadges(BaseModel):
 
 
 class ScanRequest(BaseModel):
-    code: str = Field(default="", description="Full file content")
+    code: str = Field(default="", max_length=MAX_CODE_CHARS, description="Full file content")
     language: str = Field(default="python", description="VS Code languageId of the code")
 
 
@@ -92,7 +114,7 @@ class ScanResponse(BaseModel):
 
 
 class LineHintRequest(BaseModel):
-    code: str = Field(default="", description="Full file content")
+    code: str = Field(default="", max_length=MAX_CODE_CHARS, description="Full file content")
     line: int = Field(..., ge=1, description="1-based line the user is editing")
     language: str = Field(default="python", description="VS Code languageId of the code")
 
@@ -108,13 +130,21 @@ class MigrateRequest(BaseModel):
 
 
 class GoalRequest(BaseModel):
-    text: str = Field(default="", description="Free-text learning goal; empty clears it")
+    text: str = Field(
+        default="",
+        max_length=MAX_GOAL_CHARS,
+        description="Free-text learning goal; empty clears it",
+    )
     language: str = Field(default="python", description="Language context for concept mapping")
 
 
 class TraceRequest(BaseModel):
-    code: str = Field(default="", description="Full file content, for context")
-    selection: str = Field(default="", description="The snippet to trace; empty means the whole file")
+    code: str = Field(default="", max_length=MAX_CODE_CHARS, description="Full file content, for context")
+    selection: str = Field(
+        default="",
+        max_length=MAX_CODE_CHARS,
+        description="The snippet to trace; empty means the whole file",
+    )
     language: str = Field(default="python", description="VS Code languageId of the code")
 
 

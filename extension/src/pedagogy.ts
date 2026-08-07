@@ -71,6 +71,23 @@ export function frameConstructExplanation(selection: string): string {
 }
 
 /**
+ * A student's answer to a spaced-review exercise, marked against the exercise
+ * rather than whatever file happens to be open.
+ *
+ * The review prompt asks them to "write the code themselves and predict its
+ * behaviour", so without this their answer was submitted as a brand-new
+ * Socratic question about an unrelated file — a dead end at the exact moment
+ * retrieval practice was supposed to happen.
+ */
+export function frameReviewAnswer(exercise: string, answer: string): string {
+  return (
+    `Here is the review exercise you set me:\n\n${exercise.trim()}\n\n` +
+    `My answer:\n\n${answer.trim()}\n\n` +
+    `Where does my answer fall short?`
+  );
+}
+
+/**
  * Turn a filled-in desk-check grid into a compact text table for the tutor.
  * `rows[step][variable]` holds whatever the student typed; blanks become "?"
  * so the model can see which cells they could not work out.

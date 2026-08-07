@@ -360,6 +360,13 @@ body {
   overflow-wrap: anywhere;
 }
 
+/* Streamed text is raw, not yet markdown-rendered, so it needs its own
+   whitespace handling — without it a level-3 pseudocode hint collapses into a
+   run-on line and then visibly reflows when the final render lands. */
+.turn__body--streaming {
+  white-space: pre-wrap;
+}
+
 .turn--student .turn__body {
   background: var(--vscode-button-background, var(--surface-sunken));
   color: var(--vscode-button-foreground, var(--ink));

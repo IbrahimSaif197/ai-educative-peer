@@ -50,8 +50,15 @@
   // What the next composer submission means.
   let composerMode = "hint";
   let expectReflectAnswer = false;
+  // Set when the student starts a review, so an unsolicited review-exercise
+  // bubble (e.g. restored from history) does not hijack the composer.
+  let expectReviewAnswer = false;
   let confidence = 0;
   let streamingTurn = null;
+  // True while an ask is in flight. Only the send button was disabled before,
+  // so Ctrl+Enter and the mode buttons could start a second stream whose
+  // deltas landed in the first one's bubble.
+  let isLoading = false;
   // Rendered turns, mirrored to the extension so they survive a reload.
   let turns = [];
 
@@ -339,6 +346,7 @@
   }
 
   function send() {
+    if (isLoading) return;
     const text = inputEl.value.trim();
 
     if (composerMode === "explain") {
@@ -352,6 +360,13 @@
       if (!text) return;
       setComposerMode("hint");
       vscode.postMessage({ type: "predictAnswer", prediction: text });
+      inputEl.value = "";
+      return;
+    }
+    if (composerMode === "review") {
+      if (!text) return;
+      setComposerMode("hint");
+      vscode.postMessage({ type: "reviewAnswer", answer: text });
       inputEl.value = "";
       return;
     }
@@ -380,17 +395,23 @@
   });
 
   quizBtn.addEventListener("click", () => {
+    if (isLoading) return;
     expectReflectAnswer = true;
     vscode.postMessage({ type: "askHint", question: "", code: currentCode, mode: "reflect" });
   });
 
-  resetBtn.addEventListener("click", () => vscode.postMessage({ type: "reset" }));
+  resetBtn.addEventListener("click", () => {
+    if (isLoading) return;
+    vscode.postMessage({ type: "reset" });
+  });
   refreshBtn.addEventListener("click", () => vscode.postMessage({ type: "refreshCode" }));
   authBtn.addEventListener("click", () =>
     vscode.postMessage({ type: signedIn ? "signOut" : "signIn" })
   );
   reviewBtn.addEventListener("click", () => {
+    if (isLoading) return;
     reviewBtn.hidden = true;
+    expectReviewAnswer = true;
     vscode.postMessage({ type: "startReview" });
   });
 
@@ -449,6 +470,14 @@
       expectReflectAnswer = false;
       setComposerMode("reflect", "Type your answer to the quiz question…");
     }
+
+    // A review exercise asks the student to write code and predict its
+    // behaviour. Without a composer mode for the answer, whatever they typed
+    // was submitted as a fresh Socratic question about the open file.
+    if (mode === "review-exercise" && expectReviewAnswer) {
+      expectReviewAnswer = false;
+      setComposerMode("review", "Write your code and what you expect it to do…");
+    }
   }
 
   window.addEventListener("message", (event) => {
@@ -485,8 +514,12 @@
         dropEmptyState();
         const wrap = document.createElement("div");
         wrap.className = "turn turn--tutor";
+        // The chat is an aria-live log, so an unmuted streaming bubble makes a
+        // screen reader re-announce the whole partial hint on every token. The
+        // finished turn that replaces it is announced once, which is right.
+        wrap.setAttribute("aria-hidden", "true");
         const body = document.createElement("div");
-        body.className = "turn__body";
+        body.className = "turn__body turn__body--streaming";
         const text = document.createElement("span");
         const caret = document.createElement("span");
         caret.className = "caret";
@@ -494,20 +527,30 @@
         body.appendChild(caret);
         wrap.appendChild(body);
         chatEl.appendChild(wrap);
-        streamingTurn = { wrap, text };
+        streamingTurn = { wrap, text, seq: msg.seq };
         scrollToEnd();
         break;
       }
 
       case "streamDelta":
-        if (streamingTurn) {
+        // A delta from a superseded ask must not paint into the current
+        // bubble; the extension refuses overlapping asks, but a late delta
+        // from an aborted one can still arrive.
+        if (streamingTurn && msg.seq === streamingTurn.seq) {
+          // Only follow the stream if the student is already at the bottom —
+          // yanking the view back while they are reading an earlier hint is
+          // the thing that makes streaming panels unusable.
+          const atBottom =
+            chatEl.scrollHeight - chatEl.scrollTop - chatEl.clientHeight < 40;
           streamingTurn.text.textContent += msg.text || "";
-          scrollToEnd();
+          if (atBottom) scrollToEnd();
         }
         break;
 
       case "streamAbort":
-        removeStreamingTurn();
+        if (!streamingTurn || msg.seq === streamingTurn.seq) {
+          removeStreamingTurn();
+        }
         break;
 
       case "hint":
@@ -550,8 +593,12 @@
         break;
 
       case "loading":
-        loadingEl.hidden = !msg.value;
-        sendBtn.disabled = !!msg.value;
+        isLoading = !!msg.value;
+        loadingEl.hidden = !isLoading;
+        sendBtn.disabled = isLoading;
+        quizBtn.disabled = isLoading;
+        resetBtn.disabled = isLoading;
+        reviewBtn.disabled = isLoading;
         break;
 
       case "offline":

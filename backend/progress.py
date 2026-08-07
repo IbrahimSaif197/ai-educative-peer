@@ -22,11 +22,27 @@ REVIEW_MAX_DAYS = 7
 CALIBRATION_MIN_SAMPLES = 4
 
 
+def _rated_encounters(entry: Dict[str, Any]) -> int:
+    """How many of this concept's encounters carried a meaningful hint level.
+
+    Only `hint`-mode turns are rated. Documents written before the distinction
+    existed have no `rated_encounters` key; for those, every encounter counted
+    towards the average, so fall back to `encounters`.
+    """
+    raw = entry.get("rated_encounters")
+    if raw is None:
+        return int(entry.get("encounters", 0))
+    try:
+        return max(0, int(raw))
+    except (TypeError, ValueError):
+        return 0
+
+
 def _avg_level(entry: Dict[str, Any]) -> float:
-    encounters = int(entry.get("encounters", 0))
-    if encounters <= 0:
+    rated = _rated_encounters(entry)
+    if rated <= 0:
         return 0.0
-    return int(entry.get("level_sum", 0)) / encounters
+    return int(entry.get("level_sum", 0)) / rated
 
 
 def concept_struggles(concept_stats: Optional[Dict[str, Any]], limit: int = 5) -> List[dict]:
@@ -35,11 +51,9 @@ def concept_struggles(concept_stats: Optional[Dict[str, Any]], limit: int = 5) -
         if not isinstance(entry, dict):
             continue
         avg = _avg_level(entry)
-        if int(entry.get("encounters", 0)) >= STRUGGLE_MIN_ENCOUNTERS and avg >= STRUGGLE_MIN_AVG_LEVEL:
-            items.append(
-                {"concept": tag, "encounters": int(entry.get("encounters", 0)),
-                 "avg_level": round(avg, 2)}
-            )
+        rated = _rated_encounters(entry)
+        if rated >= STRUGGLE_MIN_ENCOUNTERS and avg >= STRUGGLE_MIN_AVG_LEVEL:
+            items.append({"concept": tag, "encounters": rated, "avg_level": round(avg, 2)})
     items.sort(key=lambda x: (-x["avg_level"], -x["encounters"]))
     return items[:limit]
 
@@ -50,11 +64,11 @@ def concept_strengths(concept_stats: Optional[Dict[str, Any]], limit: int = 5) -
         if not isinstance(entry, dict):
             continue
         avg = _avg_level(entry)
-        if int(entry.get("encounters", 0)) >= STRENGTH_MIN_ENCOUNTERS and avg <= STRENGTH_MAX_AVG_LEVEL:
-            items.append(
-                {"concept": tag, "encounters": int(entry.get("encounters", 0)),
-                 "avg_level": round(avg, 2)}
-            )
+        rated = _rated_encounters(entry)
+        # `rated >= STRENGTH_MIN_ENCOUNTERS` also keeps a concept that has only
+        # ever been seen in non-hint modes (avg 0.0) out of the strengths list.
+        if rated >= STRENGTH_MIN_ENCOUNTERS and avg <= STRENGTH_MAX_AVG_LEVEL:
+            items.append({"concept": tag, "encounters": rated, "avg_level": round(avg, 2)})
     items.sort(key=lambda x: (x["avg_level"], -x["encounters"]))
     return items[:limit]
 

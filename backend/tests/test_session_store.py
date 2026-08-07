@@ -305,6 +305,164 @@ class TestFirestoreTimeout:
         assert store.current_hint_level("u1", "fp1") == 1
 
 
+class TestResolveLevel:
+    def test_escalating_from_nothing_is_level_one(self):
+        from session_store import resolve_level
+        assert resolve_level(0, escalate=True) == 1
+
+    def test_escalating_advances_by_one(self):
+        from session_store import resolve_level
+        assert resolve_level(1, escalate=True) == 2
+
+    def test_escalating_stops_at_three(self):
+        from session_store import resolve_level
+        assert resolve_level(3, escalate=True) == 3
+
+    def test_not_escalating_reuses_the_level(self):
+        from session_store import resolve_level
+        assert resolve_level(2, escalate=False) == 2
+
+    def test_not_escalating_from_nothing_floors_at_one(self):
+        from session_store import resolve_level
+        assert resolve_level(0, escalate=False) == 1
+
+    def test_a_corrupt_high_level_is_clamped(self):
+        from session_store import resolve_level
+        assert resolve_level(99, escalate=False) == 3
+
+
+class TestPeekAndCommit:
+    """Peek must be read-only; only commit spends a level."""
+
+    def _store(self):
+        from session_store import InMemorySessionStore
+        return InMemorySessionStore()
+
+    def test_peek_does_not_persist_anything(self):
+        store = self._store()
+        assert store.peek_hint_level("u1", "fp1") == 1
+        assert store.peek_hint_level("u1", "fp1") == 1
+        assert store.peek_hint_level("u1", "fp1") == 1
+
+    def test_commit_makes_the_next_peek_advance(self):
+        store = self._store()
+        level = store.peek_hint_level("u1", "fp1")
+        store.commit_hint_level("u1", "fp1", level)
+        assert store.peek_hint_level("u1", "fp1") == 2
+
+    def test_peek_without_escalating_reuses_the_committed_level(self):
+        store = self._store()
+        store.commit_hint_level("u1", "fp1", 2)
+        assert store.peek_hint_level("u1", "fp1", escalate=False) == 2
+
+    def test_commit_clamps_out_of_range_levels(self):
+        store = self._store()
+        store.commit_hint_level("u1", "fp1", 99)
+        assert store.peek_hint_level("u1", "fp1", escalate=False) == 3
+        store.commit_hint_level("u1", "fp2", 0)
+        assert store.peek_hint_level("u1", "fp2", escalate=False) == 1
+
+    def test_peek_is_scoped_per_user_and_fingerprint(self):
+        store = self._store()
+        store.commit_hint_level("u1", "fp1", 3)
+        assert store.peek_hint_level("u2", "fp1") == 1
+        assert store.peek_hint_level("u1", "fp2") == 1
+
+    def test_commit_respects_the_entry_bound(self):
+        from session_store import InMemorySessionStore
+        store = InMemorySessionStore(max_entries=5)
+        for i in range(50):
+            store.commit_hint_level("u1", f"fp{i}", 1)
+        assert len(store._levels) == 5
+
+    def test_next_hint_level_is_peek_plus_commit(self):
+        store = self._store()
+        assert store.next_hint_level("u1", "fp1") == 1
+        assert store.peek_hint_level("u1", "fp1", escalate=False) == 1
+
+    def test_reset_clears_committed_levels(self):
+        store = self._store()
+        store.commit_hint_level("u1", "fp1", 3)
+        store.reset("u1")
+        assert store.peek_hint_level("u1", "fp1") == 1
+
+
+class TestFirestorePeekAndCommit:
+    def _store_with(self, stored_level):
+        from session_store import FirestoreSessionStore
+
+        writes = []
+
+        class _Snap:
+            exists = stored_level is not None
+
+            def to_dict(self):
+                return {"hint_level": stored_level}
+
+        class _Ref:
+            def get(self, **kwargs):
+                return _Snap()
+
+            def set(self, data, **kwargs):
+                writes.append(data)
+
+        class _Collection:
+            def document(self, _doc_id):
+                return _Ref()
+
+        class _Client:
+            def collection(self, _name):
+                return _Collection()
+
+        return FirestoreSessionStore(_Client()), writes
+
+    def test_peek_writes_nothing(self):
+        store, writes = self._store_with(1)
+        assert store.peek_hint_level("u1", "fp1") == 2
+        assert writes == []
+
+    def test_peek_on_a_missing_document_is_level_one(self):
+        store, writes = self._store_with(None)
+        assert store.peek_hint_level("u1", "fp1") == 1
+        assert writes == []
+
+    def test_peek_without_escalating_writes_nothing(self):
+        store, writes = self._store_with(None)
+        assert store.peek_hint_level("u1", "fp1", escalate=False) == 1
+        assert writes == []
+
+    def test_commit_writes_the_level(self):
+        store, writes = self._store_with(1)
+        store.commit_hint_level("u1", "fp1", 2)
+        assert writes[0]["hint_level"] == 2
+        assert writes[0]["user_id"] == "u1"
+        assert writes[0]["fingerprint"] == "fp1"
+
+    def test_commit_clamps_before_writing(self):
+        store, writes = self._store_with(1)
+        store.commit_hint_level("u1", "fp1", 99)
+        assert writes[0]["hint_level"] == 3
+
+    def test_peek_degrades_to_one_on_error(self):
+        from session_store import FirestoreSessionStore
+
+        class _Boom:
+            def collection(self, _name):
+                raise TimeoutError("deadline exceeded")
+
+        assert FirestoreSessionStore(_Boom()).peek_hint_level("u1", "fp1") == 1
+
+    def test_commit_swallows_errors(self):
+        from session_store import FirestoreSessionStore
+
+        class _Boom:
+            def collection(self, _name):
+                raise TimeoutError("deadline exceeded")
+
+        # Must not raise into the request path.
+        FirestoreSessionStore(_Boom()).commit_hint_level("u1", "fp1", 2)
+
+
 class TestInMemoryCurrentHintLevel:
     def _store(self):
         from session_store import InMemorySessionStore

@@ -120,7 +120,11 @@ describe("applySignIn and migration", () => {
     expect(secrets.map.has("edupeer.pendingMigration")).toBe(true);
   });
 
-  it("accumulates pending migrations across sign-in cycles instead of clobbering", async () => {
+  /**
+   * Drives the "sign in, migration fails, sign out, sign in again" cycle and
+   * reports what the second sign-in actually migrated.
+   */
+  async function signInCycle(secondUid: string) {
     jest.spyOn(console, "error").mockImplementation(() => {});
     let signUpCount = 0;
     let migrateStatus = 500;
@@ -166,13 +170,31 @@ describe("applySignIn and migration", () => {
     expect(secrets.map.has("edupeer.pendingMigration")).toBe(true);
     await auth.signOut();             // fresh anonymous X1 (anon-refresh-1)
     migrateStatus = 200;
-    await auth.applySignIn({ idToken: "real-id-2", refreshToken: "real-refresh-2", uid: "real-2" });
+    await auth.applySignIn({
+      idToken: "real-id-2",
+      refreshToken: "real-refresh-2",
+      uid: secondUid,
+    });
 
-    // Both X0's and X1's progress migrated: old ID tokens from BOTH refresh tokens.
-    const oldTokens = okMigrateBodies.map((b) => b.old_id_token);
+    return { secrets, oldTokens: okMigrateBodies.map((b) => b.old_id_token) };
+  }
+
+  it("accumulates pending migrations across sign-in cycles for the same account", async () => {
+    // payload.uid signs in, migration fails, signs out, signs back in: both
+    // anonymous accounts they created are theirs and must both be merged.
+    const { secrets, oldTokens } = await signInCycle(payload.uid);
     expect(oldTokens).toContain("refreshed-0");
     expect(oldTokens).toContain("refreshed-1");
     expect(secrets.map.has("edupeer.pendingMigration")).toBe(false);
+  });
+
+  it("does not replay a failed migration into a different account", async () => {
+    // Shared machine: student A signs in, their migration fails, they sign
+    // out, student B signs in. Merging is destructive on the backend (it
+    // deletes the source document), so B must not inherit A's queue.
+    const { oldTokens } = await signInCycle("someone-else");
+    expect(oldTokens).not.toContain("refreshed-0");
+    expect(oldTokens).toContain("refreshed-1");
   });
 });
 

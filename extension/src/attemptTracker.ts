@@ -95,6 +95,23 @@ export function summarizeEdit(
   return shown.join("\n").slice(0, MAX_EDIT_SUMMARY_CHARS);
 }
 
+/**
+ * "Same code?" the way the backend asks it (see `code_fingerprint` in
+ * backend/session_store.py): trailing whitespace per line stripped, then the
+ * whole thing trimmed.
+ *
+ * Comparing raw strings let a single blank line count as an attempt, which is
+ * exactly the hint-abuse path this module exists to close — and it also sent
+ * the tutor an `edit_summary` describing an edit the student never made.
+ */
+export function normalizeCode(code: string): string {
+  return code
+    .split("\n")
+    .map((line) => line.replace(/\s+$/, ""))
+    .join("\n")
+    .trim();
+}
+
 interface Attempt {
   code: string;
   at: number;
@@ -114,7 +131,7 @@ export class AttemptTracker {
     if (!previous) {
       return { signal: "first", escalate: true, editSummary: "", cooldownRemainingMs: 0 };
     }
-    if (previous.code !== code) {
+    if (normalizeCode(previous.code) !== normalizeCode(code)) {
       return {
         signal: "changed",
         escalate: true,

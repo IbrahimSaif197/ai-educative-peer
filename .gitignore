@@ -29,7 +29,14 @@ out/
 *.js.map
 
 # IDE
-.vscode/
+# launch.json and tasks.json are how the README's "press F5" step works, so
+# they are part of the project, not personal settings. Everything else under
+# .vscode/ stays ignored.
+.vscode/*
+!.vscode/settings.json
+!.vscode/launch.json
+!.vscode/tasks.json
+!.vscode/extensions.json
 .idea/
 
 # OS
@@ -40,3 +47,6 @@ Thumbs.db
 firebase-debug.log
 serviceAccountKey.json
 *.json.key
+
+# Coverage reports
+coverage/

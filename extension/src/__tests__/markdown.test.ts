@@ -143,6 +143,38 @@ describe("emphasis", () => {
     expect(html("2 * 3 = 6")).toBe("<p>2 * 3 = 6</p>");
   });
 
+  // A delimiter next to whitespace can neither open nor close emphasis
+  // (CommonMark's flanking rule). Without it these asterisks were swallowed
+  // and an arbitrary span was italicised — right when the tutor is explaining
+  // multiplication or C pointers.
+  it("leaves paired multiplication asterisks alone", () => {
+    expect(html("2 * 3 * 4 = 24")).toBe("<p>2 * 3 * 4 = 24</p>");
+  });
+
+  it("leaves an arithmetic sentence intact", () => {
+    expect(html("area = w * h, and volume = w * h * d")).toBe(
+      "<p>area = w * h, and volume = w * h * d</p>"
+    );
+  });
+
+  it("leaves paired standalone underscores alone", () => {
+    expect(html("a _ b _ c")).toBe("<p>a _ b _ c</p>");
+  });
+
+  it("does not open emphasis on a trailing asterisk", () => {
+    expect(html("the value is * and then * again")).toBe(
+      "<p>the value is * and then * again</p>"
+    );
+  });
+
+  it("still renders emphasis that hugs its content", () => {
+    expect(html("a *b c* d")).toBe("<p>a <em>b c</em> d</p>");
+  });
+
+  it("renders single-character emphasis", () => {
+    expect(html("the *n* here")).toBe("<p>the <em>n</em> here</p>");
+  });
+
   it("nests emphasis inside bold", () => {
     expect(html("**very *very* bold**")).toBe(
       "<p><strong>very <em>very</em> bold</strong></p>"

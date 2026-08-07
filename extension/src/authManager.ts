@@ -36,6 +36,17 @@ const EXPIRY_MARGIN_MS = 60_000;
 interface PendingMigration {
   oldRefreshTokens: string[];
   legacyUserId?: string;
+  /**
+   * The uid these anonymous accounts were captured for.
+   *
+   * Migration is destructive on the backend — it merges the source document
+   * into the target and deletes the source. Without this, a migration that
+   * failed for user A stayed queued and replayed into whichever account
+   * signed in next on the same machine, handing A's progress to B and
+   * deleting A's record. The queue is only replayed for the uid it was
+   * captured against.
+   */
+  capturedForUid?: string;
 }
 
 export class AuthManager {
@@ -91,12 +102,19 @@ export class AuthManager {
     // Start from any existing record (e.g. from a previously failed migration)
     // so earlier anonymous accounts are never silently clobbered.
     const existing = await this.secrets.get(PENDING_MIGRATION_KEY);
-    const pending: PendingMigration = existing
+    let pending: PendingMigration = existing
       ? (JSON.parse(existing) as PendingMigration)
       : { oldRefreshTokens: [] };
     if (!Array.isArray(pending.oldRefreshTokens)) {
       pending.oldRefreshTokens = [];
     }
+    // A record captured for a different account belongs to whoever was signed
+    // in before; replaying it here would merge their progress into this
+    // account and delete theirs. Start clean instead.
+    if (pending.capturedForUid !== undefined && pending.capturedForUid !== payload.uid) {
+      pending = { oldRefreshTokens: [] };
+    }
+    pending.capturedForUid = payload.uid;
     if (this.session?.isAnonymous) {
       pending.oldRefreshTokens.push(this.session.refreshToken);
     }
@@ -130,6 +148,13 @@ export class AuthManager {
       return;
     }
     const pending = JSON.parse(raw) as PendingMigration;
+    if (pending.capturedForUid !== undefined && pending.capturedForUid !== this.session.uid) {
+      // Queued for someone else. Merging is irreversible on the backend, so
+      // drop it rather than replay it into the account that happens to be
+      // signed in now.
+      await this.secrets.delete(PENDING_MIGRATION_KEY);
+      return;
+    }
     const tokens = Array.isArray(pending.oldRefreshTokens) ? pending.oldRefreshTokens : [];
     const remaining: string[] = [];
     let legacyUserId = pending.legacyUserId;
@@ -194,7 +219,11 @@ export class AuthManager {
     }
 
     if (remaining.length > 0 || legacyUserId !== undefined) {
-      const updated: PendingMigration = { oldRefreshTokens: remaining, legacyUserId };
+      const updated: PendingMigration = {
+        oldRefreshTokens: remaining,
+        legacyUserId,
+        capturedForUid: pending.capturedForUid ?? this.session.uid,
+      };
       await this.secrets.store(PENDING_MIGRATION_KEY, JSON.stringify(updated));
       // Non-fatal: whatever is left stays and is retried on next activation.
       console.error("[edupeer] migration deferred: retrying remaining items on next activation");

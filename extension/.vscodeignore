@@ -8,3 +8,5 @@ tsconfig.json
 jest.config.js
 **/*.test.ts
 .gitignore
+
+coverage/

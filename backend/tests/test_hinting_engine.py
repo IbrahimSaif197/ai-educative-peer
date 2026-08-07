@@ -157,7 +157,7 @@ class TestMultiLanguage:
         engine.generate_hint("x = 1", "help", 1)
         messages = self._sent_messages(engine)
         assert "Python students" in messages[0]["content"]
-        assert "```python" in messages[-1]["content"]
+        assert "language: Python" in messages[-1]["content"]
 
     def test_java_prompt_uses_java(self):
         engine = self._engine("ok. What do you think should happen next?")
@@ -165,7 +165,7 @@ class TestMultiLanguage:
         messages = self._sent_messages(engine)
         assert "Java students" in messages[0]["content"]
         assert "never real Java syntax" in messages[0]["content"]
-        assert "```java" in messages[-1]["content"]
+        assert "language: Java" in messages[-1]["content"]
 
     def test_alias_language_normalized(self):
         engine = self._engine("ok. What do you think should happen next?")
@@ -175,9 +175,11 @@ class TestMultiLanguage:
 
     def test_language_specific_concept_tags(self):
         engine = self._engine(
-            "Think about your pointers here. What do you think should happen next?"
+            "Think about it. What do you think should happen next?"
         )
-        _, tags = engine.generate_hint("int *p;", "why segfault?", 1, language="c")
+        _, tags = engine.generate_hint(
+            "int *p;", "why segfault? my pointers are wrong", 1, language="c"
+        )
         assert "pointers" in tags
         assert "segfault" in tags
 
@@ -186,7 +188,7 @@ class TestMultiLanguage:
         engine.scan_code("int main() { return 0; }", language="cpp")
         messages = self._sent_messages(engine)
         assert "C++ code" in messages[0]["content"]
-        assert "```cpp" in messages[1]["content"]
+        assert "1: int main() { return 0; }" in messages[1]["content"]
 
     def test_line_hint_prompt_uses_language(self):
         engine = self._engine('{"hint":"check the type","concept":"variables"}')

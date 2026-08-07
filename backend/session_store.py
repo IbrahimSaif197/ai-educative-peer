@@ -1,4 +1,5 @@
 import hashlib
+import time
 from collections import OrderedDict
 from typing import Dict, Tuple
 
@@ -10,24 +11,69 @@ def code_fingerprint(code: str) -> str:
     return hashlib.sha1(normalized.encode("utf-8")).hexdigest()
 
 
+def raw_code_hash(code: str) -> str:
+    """An exact hash of the code, byte for byte.
+
+    `code_fingerprint` deliberately ignores whitespace, which is right for the
+    hint ladder ("is this the same problem?") and wrong for anything that
+    caches absolute line numbers: adding a blank line at the top shifts every
+    line without changing the fingerprint. Caches keyed on line numbers use
+    this instead.
+    """
+    return hashlib.sha1(code.encode("utf-8")).hexdigest()
+
+
+# A student who has walked away and come back is starting a new session, even
+# though they never pressed Reset. Without this, `sessions` freezes at 1 after
+# the first hint and the Persistent/Marathon/Scholar badges are unreachable.
+SESSION_IDLE_SECONDS = 1800.0
+
+
+def resolve_level(current: int, escalate: bool) -> int:
+    """The level an ask should answer at, given the level already spent.
+
+    Escalating advances by one and stops at 3. Not escalating re-uses the
+    level, with a floor of 1 so a first-ever non-escalating ask still gets a
+    level-1 hint.
+    """
+    if escalate:
+        return min(3, current + 1)
+    return max(1, min(3, current))
+
+
 class InMemorySessionStore:
     """In-memory session store. Used when Firestore is not configured and in
     tests. Bounded so a long-running process cannot leak unboundedly."""
 
-    def __init__(self, max_entries: int = 10000):
+    def __init__(self, max_entries: int = 10000, idle_seconds: float = SESSION_IDLE_SECONDS):
         self._levels: "OrderedDict[Tuple[str, str], int]" = OrderedDict()
-        self._active: Dict[str, bool] = {}
+        # uid -> monotonic time of the last activity in the open session.
+        self._active: Dict[str, float] = {}
         self._max_entries = max_entries
+        self._idle_seconds = idle_seconds
 
-    def next_hint_level(self, user_id: str, fingerprint: str) -> int:
+    def peek_hint_level(self, user_id: str, fingerprint: str, escalate: bool = True) -> int:
+        """What the next ask should answer at, WITHOUT spending the level.
+
+        Callers commit only once the hint has actually been produced, so a
+        failed LLM call cannot walk a student down the hint ladder.
+        """
+        return resolve_level(self._levels.get((user_id, fingerprint), 0), escalate)
+
+    def commit_hint_level(self, user_id: str, fingerprint: str, level: int) -> None:
+        """Record that `level` was actually delivered for this code."""
         key = (user_id, fingerprint)
-        current = self._levels.get(key, 0)
-        new_level = min(3, current + 1)
-        self._levels[key] = new_level
+        self._levels[key] = max(1, min(3, int(level)))
         self._levels.move_to_end(key)
         while len(self._levels) > self._max_entries:
             self._levels.popitem(last=False)
-        return new_level
+
+    def next_hint_level(self, user_id: str, fingerprint: str) -> int:
+        """Peek and commit in one step. Kept for callers that have already
+        produced their hint."""
+        level = self.peek_hint_level(user_id, fingerprint, escalate=True)
+        self.commit_hint_level(user_id, fingerprint, level)
+        return level
 
     def current_hint_level(self, user_id: str, fingerprint: str) -> int:
         """The level for this code without advancing it.
@@ -35,19 +81,21 @@ class InMemorySessionStore:
         Used when the student asks again without editing anything: they get
         the same depth of hint back rather than a free escalation.
         """
-        key = (user_id, fingerprint)
-        level = max(1, self._levels.get(key, 0))
-        self._levels[key] = level
-        self._levels.move_to_end(key)
-        while len(self._levels) > self._max_entries:
-            self._levels.popitem(last=False)
+        level = self.peek_hint_level(user_id, fingerprint, escalate=False)
+        self.commit_hint_level(user_id, fingerprint, level)
         return level
 
     def begin_session(self, user_id: str) -> bool:
-        if self._active.get(user_id, False):
-            return False
-        self._active[user_id] = True
-        return True
+        """True when this ask opens a new session.
+
+        A session stays open while the student keeps working and lapses after
+        `idle_seconds` of silence, so a student who returns tomorrow is counted
+        again without having to press Reset.
+        """
+        now = time.monotonic()
+        last = self._active.get(user_id)
+        self._active[user_id] = now
+        return last is None or (now - last) >= self._idle_seconds
 
     def reset(self, user_id: str) -> None:
         keys = [k for k in self._levels if k[0] == user_id]
@@ -69,71 +117,88 @@ class FirestoreSessionStore:
     # defaults instead of hanging the request indefinitely.
     TIMEOUT = 5.0
 
-    def __init__(self, client):
+    def __init__(self, client, idle_seconds: float = SESSION_IDLE_SECONDS):
         self._client = client
+        self._idle_seconds = idle_seconds
 
     def _doc_id(self, user_id: str, fingerprint: str) -> str:
         return f"{user_id}__{fingerprint}"
 
-    def next_hint_level(self, user_id: str, fingerprint: str) -> int:
+    def peek_hint_level(self, user_id: str, fingerprint: str, escalate: bool = True) -> int:
+        """What the next ask should answer at, WITHOUT spending the level.
+
+        Read-only: nothing is written, so a failed LLM call leaves the ladder
+        exactly where it was.
+        """
         try:
             ref = self._client.collection(self.SESSIONS).document(
                 self._doc_id(user_id, fingerprint)
             )
             snap = ref.get(timeout=self.TIMEOUT)
             current = int(snap.to_dict().get("hint_level", 0)) if snap.exists else 0
-            new_level = min(3, current + 1)
+            return resolve_level(current, escalate)
+        except Exception as e:
+            print(f"[session] peek_hint_level failed: {e}")
+            return 1
+
+    def commit_hint_level(self, user_id: str, fingerprint: str, level: int) -> None:
+        """Record that `level` was actually delivered for this code."""
+        try:
+            ref = self._client.collection(self.SESSIONS).document(
+                self._doc_id(user_id, fingerprint)
+            )
             ref.set(
                 {
                     "user_id": user_id,
                     "fingerprint": fingerprint,
-                    "hint_level": new_level,
+                    "hint_level": max(1, min(3, int(level))),
                     "updated_at": firestore.SERVER_TIMESTAMP,
                 },
                 timeout=self.TIMEOUT,
             )
-            return new_level
         except Exception as e:
-            print(f"[session] next_hint_level failed: {e}")
-            return 1
+            print(f"[session] commit_hint_level failed: {e}")
+
+    def next_hint_level(self, user_id: str, fingerprint: str) -> int:
+        """Peek and commit in one step."""
+        level = self.peek_hint_level(user_id, fingerprint, escalate=True)
+        self.commit_hint_level(user_id, fingerprint, level)
+        return level
 
     def current_hint_level(self, user_id: str, fingerprint: str) -> int:
         """The level for this code without advancing it (see the in-memory twin)."""
-        try:
-            ref = self._client.collection(self.SESSIONS).document(
-                self._doc_id(user_id, fingerprint)
-            )
-            snap = ref.get(timeout=self.TIMEOUT)
-            current = int(snap.to_dict().get("hint_level", 0)) if snap.exists else 0
-            if current >= 1:
-                return min(3, current)
-            ref.set(
-                {
-                    "user_id": user_id,
-                    "fingerprint": fingerprint,
-                    "hint_level": 1,
-                    "updated_at": firestore.SERVER_TIMESTAMP,
-                },
-                timeout=self.TIMEOUT,
-            )
-            return 1
-        except Exception as e:
-            print(f"[session] current_hint_level failed: {e}")
-            return 1
+        level = self.peek_hint_level(user_id, fingerprint, escalate=False)
+        self.commit_hint_level(user_id, fingerprint, level)
+        return level
 
     def begin_session(self, user_id: str) -> bool:
+        """True when this ask opens a new session (see the in-memory twin).
+
+        `last_active_at` is written as plain epoch seconds rather than
+        SERVER_TIMESTAMP so the idle comparison never has to reason about the
+        sentinel value or a timezone-aware Firestore type on read-back.
+        """
         try:
+            now = time.time()
             ref = self._client.collection(self.META).document(user_id)
             snap = ref.get(timeout=self.TIMEOUT)
-            active = bool(snap.to_dict().get("active", False)) if snap.exists else False
-            if active:
-                return False
+            data = snap.to_dict() if snap.exists else None
+            active = bool(data.get("active", False)) if data else False
+            try:
+                last = float(data.get("last_active_at", 0.0)) if data else 0.0
+            except (TypeError, ValueError):
+                last = 0.0
+            is_new = (not active) or last <= 0.0 or (now - last) >= self._idle_seconds
             ref.set(
-                {"active": True, "updated_at": firestore.SERVER_TIMESTAMP},
+                {
+                    "active": True,
+                    "last_active_at": now,
+                    "updated_at": firestore.SERVER_TIMESTAMP,
+                },
                 merge=True,
                 timeout=self.TIMEOUT,
             )
-            return True
+            return is_new
         except Exception as e:
             print(f"[session] begin_session failed: {e}")
             return False
@@ -151,7 +216,7 @@ class FirestoreSessionStore:
             if count:
                 batch.commit(timeout=self.TIMEOUT)
             self._client.collection(self.META).document(user_id).set(
-                {"active": False}, merge=True, timeout=self.TIMEOUT
+                {"active": False, "last_active_at": 0.0}, merge=True, timeout=self.TIMEOUT
             )
         except Exception as e:
             print(f"[session] reset failed: {e}")

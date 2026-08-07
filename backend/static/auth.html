@@ -40,7 +40,7 @@
   </div>
   <div class="card hidden" id="invalid">
     <h1>Sign-in link is invalid</h1>
-    <p class="error">This link is missing a valid port and can't continue. Close this tab and retry sign-in from VS Code.</p>
+    <p class="error">This link is missing a valid port or security token and can't continue. Close this tab and retry sign-in from VS Code.</p>
   </div>
 
   <script>
@@ -50,7 +50,9 @@
     };
     firebase.initializeApp(config);
     const auth = firebase.auth();
-    const port = new URLSearchParams(location.search).get("port");
+    const params = new URLSearchParams(location.search);
+    const port = params.get("port");
+    const state = params.get("state");
     const errorEl = document.getElementById("error");
     let createMode = false;
 
@@ -62,6 +64,9 @@
         uid: user.uid,
         email: user.email || "",
         displayName: user.displayName || "",
+        // Proves this delivery came from the tab VS Code opened. The
+        // extension rejects any callback whose state does not match.
+        state,
       });
       // text/plain avoids a CORS preflight to the extension's one-shot server.
       await fetch(`http://127.0.0.1:${port}/callback`, {
@@ -112,8 +117,10 @@
     // `port` is interpolated straight into the callback URL below, so an
     // unvalidated value (e.g. "@evil.com") could redirect the signed-in
     // tokens to an attacker-controlled host. Refuse to proceed unless it's
-    // a plain 1-5 digit port number.
-    if (!port || !/^\d{1,5}$/.test(port)) {
+    // a plain 1-5 digit port number. `state` is the extension's one-time
+    // nonce; without it the callback would be rejected anyway, so fail here
+    // with a readable message rather than after the user has signed in.
+    if (!port || !/^\d{1,5}$/.test(port) || !state || !/^[a-f0-9]{32}$/.test(state)) {
       document.getElementById("signin").classList.add("hidden");
       document.getElementById("invalid").classList.remove("hidden");
     } else {

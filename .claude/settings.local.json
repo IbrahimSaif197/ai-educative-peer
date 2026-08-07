@@ -77,7 +77,11 @@
       "Bash(C:/Users/natsu/.claude/plugins/cache/claude-plugins-official/superpowers/6.1.0/skills/subagent-driven-development/scripts/review-package 178ac0b *)",
       "Bash(node *)",
       "Bash(C:/Users/natsu/.claude/plugins/cache/claude-plugins-official/superpowers/6.1.0/skills/subagent-driven-development/scripts/review-package c16b727 *)",
-      "Bash(C:/Users/natsu/.claude/plugins/cache/claude-plugins-official/superpowers/6.1.0/skills/subagent-driven-development/scripts/review-package a3c0643 *)"
+      "Bash(C:/Users/natsu/.claude/plugins/cache/claude-plugins-official/superpowers/6.1.0/skills/subagent-driven-development/scripts/review-package a3c0643 *)",
+      "Bash(find /c/Users/natsu/Obsidian/second-brain -not -path '*/.git*' | head -30; echo \"--- references ---\"; ls ~/.claude/skills/obsidian-second-brain/references/ ~/.claude/skills/obsidian-second-brain/references/bases/)",
+      "Read(//c/Users/natsu/Obsidian/second-brain/**)",
+      "Read(//c/Users/natsu/.claude/skills/obsidian-second-brain/references/**)",
+      "Bash(git config *)"
     ],
     "additionalDirectories": [
       "\\tmp"

@@ -14,7 +14,10 @@ type LineHintCache = Map<string, { hint: string; concept: string }>;
 
 interface FileState {
   flags: LineFlag[];
+  /** Content of the last scan that actually succeeded. */
   scanFingerprint: string;
+  /** Content of a scan currently in flight; de-dupes without claiming success. */
+  inFlightFingerprint: string;
   lineHints: LineHintCache;
   /** Rule-based nudges shown while the backend is unavailable. */
   localHints: LineHintCache;
@@ -177,6 +180,18 @@ export class InlineTutor {
       })
     );
 
+    // Per-file caches would otherwise grow for the whole session: one entry
+    // per document ever opened, and one line-hint entry per distinct line text
+    // ever visited inside it.
+    this.disposables.push(
+      vscode.workspace.onDidCloseTextDocument((doc) => {
+        const key = doc.uri.toString();
+        this.fileStates.delete(key);
+        this.lastFlagCounts.delete(key);
+        this.diagnostics.delete(doc.uri);
+      })
+    );
+
     const editor = vscode.window.activeTextEditor;
     if (editor && this.isSupported(editor.document)) {
       this.scheduleScan(editor.document);
@@ -200,7 +215,13 @@ export class InlineTutor {
     const key = uri.toString();
     let s = this.fileStates.get(key);
     if (!s) {
-      s = { flags: [], scanFingerprint: "", lineHints: new Map(), localHints: new Map() };
+      s = {
+        flags: [],
+        scanFingerprint: "",
+        inFlightFingerprint: "",
+        lineHints: new Map(),
+        localHints: new Map(),
+      };
       this.fileStates.set(key, s);
     }
     return s;
@@ -275,6 +296,15 @@ export class InlineTutor {
   }
 
   private renderActiveLineDecoration(editor: vscode.TextEditor) {
+    // Decorations are per-editor, so a split view keeps showing the hint that
+    // was pinned to a line the student has since rewritten in the other group.
+    // The gutter-flag path already loops over visible editors; this one has to
+    // as well, or the stale ghost survives until that group regains focus.
+    for (const other of vscode.window.visibleTextEditors) {
+      if (other !== editor) {
+        other.setDecorations(this.ghostDecoration, []);
+      }
+    }
     const doc = editor.document;
     if (!this.isSupported(doc)) {
       editor.setDecorations(this.ghostDecoration, []);
@@ -338,9 +368,15 @@ export class InlineTutor {
     const fp = fingerprintCode(code);
     const state = this.stateFor(doc.uri);
     if (!opts.force && state.scanFingerprint === fp) return;
-    state.scanFingerprint = fp;
+    // `inFlightFingerprint` de-dupes concurrent requests without claiming the
+    // scan succeeded. Committing `scanFingerprint` up front meant a failed
+    // scan permanently suppressed auto-scan for that content — including
+    // after a 429, defeating the back-off window right next to it.
+    if (!opts.force && state.inFlightFingerprint === fp) return;
+    state.inFlightFingerprint = fp;
     try {
       const res = await this.api.scanCode(code, doc.languageId);
+      state.scanFingerprint = fp;
       state.flags = res.flags || [];
       this.applyFlagsToDoc(doc, state.flags);
       this.emitter.fire();
@@ -354,6 +390,10 @@ export class InlineTutor {
         this.quietUntil = Date.now() + err.retryAfterSeconds * 1000;
       }
       /* scan failures are otherwise non-fatal */
+    } finally {
+      if (state.inFlightFingerprint === fp) {
+        state.inFlightFingerprint = "";
+      }
     }
   }
 

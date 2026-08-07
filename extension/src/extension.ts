@@ -80,16 +80,34 @@ export async function activate(context: vscode.ExtensionContext) {
   // Retry any migration that failed on a previous run.
   void auth.runPendingMigration();
 
-  // Health check
-  const healthy = await api.health();
-  if (!healthy) {
-    statusBar.update({ offline: true });
+  // Health check. Not awaited: activation runs on startup in every window, so
+  // blocking here would delay registering the commands below behind a network
+  // round trip in windows that have nothing to do with EduPeer.
+  let warnedOffline = false;
+  const warnIfRelevant = () => {
+    // The status bar already hides itself when no tutored file is open
+    // (statusBar.ts). The toast used to ignore that and interrupt every VS
+    // Code window on startup, including ones with no code in them.
+    if (warnedOffline || api.isAvailable) return;
+    if (!isSupportedLanguage(vscode.window.activeTextEditor?.document?.languageId ?? "")) {
+      return;
+    }
+    warnedOffline = true;
     vscode.window.showWarningMessage(
       `EduPeer backend is not reachable at ${backendUrl}. Start it with: cd backend && uvicorn main:app --reload`
     );
-  } else {
-    void refreshStatusFromProgress();
-  }
+  };
+  context.subscriptions.push(
+    vscode.window.onDidChangeActiveTextEditor(() => warnIfRelevant())
+  );
+  void api.health().then((healthy) => {
+    if (!healthy) {
+      statusBar.update({ offline: true });
+      warnIfRelevant();
+    } else {
+      void refreshStatusFromProgress();
+    }
+  });
 
   context.subscriptions.push(
     vscode.commands.registerCommand("edupeer.activate", async () => {
