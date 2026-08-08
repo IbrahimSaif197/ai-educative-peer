@@ -608,11 +608,18 @@ export function findEnclosingBlock(
   const header = findHeader(lines, cursorLine, language.lensRegex);
   if (header === null) return null;
 
-  return clamp(
+  const span =
     style === "indent"
       ? { start: header, end: indentBlockEnd(lines, header) }
-      : { start: header, end: braceBlockEnd(lines, header) }
-  );
+      : { start: header, end: braceBlockEnd(lines, header) };
+
+  // A header above the cursor whose block already closed is not enclosing it:
+  // `area(2);` after `function area(r) { … }` is top-level code, not the body.
+  // This check must precede `clamp`, or a cursor deep inside a runaway block
+  // would fall outside the truncated span and wrongly report no block at all.
+  if (cursorLine < span.start || cursorLine > span.end) return null;
+
+  return clamp(span);
 }
 
 /**
