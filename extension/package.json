@@ -4,12 +4,33 @@
   "description": "A Socratic AI tutor for novice programmers (Python, JavaScript, TypeScript, Java, C, C++, C#, Go, Rust, SQL).",
   "version": "1.0.0",
   "publisher": "edupeer",
+  "license": "GPL-3.0-or-later",
+  "icon": "media/icon.png",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/IbrahimSaif197/ai-educative-peer.git"
+  },
+  "homepage": "https://github.com/IbrahimSaif197/ai-educative-peer#readme",
+  "bugs": {
+    "url": "https://github.com/IbrahimSaif197/ai-educative-peer/issues"
+  },
+  "galleryBanner": {
+    "color": "#0d1b2e",
+    "theme": "dark"
+  },
   "engines": {
     "vscode": "^1.85.0"
   },
   "categories": [
     "Education",
     "Other"
+  ],
+  "keywords": [
+    "education",
+    "tutor",
+    "socratic",
+    "learning",
+    "beginner"
   ],
   "activationEvents": [
     "onStartupFinished"
@@ -195,8 +216,8 @@
       "properties": {
         "edupeer.backendUrl": {
           "type": "string",
-          "default": "http://localhost:8000",
-          "description": "URL of the EduPeer FastAPI backend."
+          "default": "https://edupeer-backend.onrender.com",
+          "description": "URL of the EduPeer FastAPI backend. Point this at http://localhost:8000 to run against a backend on your own machine."
         },
         "edupeer.inlineHints": {
           "type": "boolean",

@@ -15,9 +15,13 @@ import { StatusBar } from "./statusBar";
 
 const HEALTH_RETRY_MS = 30_000;
 
+// Only used if the setting is missing entirely; package.json declares the same
+// value as the contributed default. Keep the two in step.
+const DEFAULT_BACKEND_URL = "https://edupeer-backend.onrender.com";
+
 export async function activate(context: vscode.ExtensionContext) {
   const config = vscode.workspace.getConfiguration("edupeer");
-  const backendUrl = config.get<string>("backendUrl", "http://localhost:8000");
+  const backendUrl = config.get<string>("backendUrl", DEFAULT_BACKEND_URL);
 
   const auth = new AuthManager(context.secrets, context.globalState, backendUrl);
   await auth.initialize();
@@ -309,7 +313,7 @@ export async function activate(context: vscode.ExtensionContext) {
     vscode.commands.registerCommand("edupeer.signIn", async () => {
       try {
         const payload = await signInViaBrowser(
-          vscode.workspace.getConfiguration("edupeer").get<string>("backendUrl", "http://localhost:8000")
+          vscode.workspace.getConfiguration("edupeer").get<string>("backendUrl", DEFAULT_BACKEND_URL)
         );
         await auth.applySignIn(payload);
         vscode.window.showInformationMessage(
@@ -333,7 +337,7 @@ export async function activate(context: vscode.ExtensionContext) {
       if (e.affectsConfiguration("edupeer.backendUrl")) {
         const url = vscode.workspace
           .getConfiguration("edupeer")
-          .get<string>("backendUrl", "http://localhost:8000");
+          .get<string>("backendUrl", DEFAULT_BACKEND_URL);
         api.setBaseUrl(url);
         auth.setBaseUrl(url);
       }

@@ -64,6 +64,9 @@ cd backend && uvicorn main:app --reload
 
 The API is now at `http://localhost:8000`. Health check: `GET /health`.
 
+Note that `edupeer.backendUrl` now defaults to the hosted backend, so for local
+development set it back to `http://localhost:8000` in your VS Code settings.
+
 ### 5. Run the extension
 
 1. Open the repository root (`ai-educative-peer`) in VS Code — the shipped
@@ -316,3 +319,58 @@ cd extension && npm run package
 This bundles the extension with esbuild and produces `edupeer-<version>.vsix`
 (installable via "Extensions: Install from VSIX..."). No publisher account or
 hosted services required.
+
+## Deploying the backend to Render
+
+`render.yaml` in the repository root is a Render blueprint for the backend.
+
+1. On [render.com](https://render.com), **New > Blueprint** and connect this
+   repository. Render reads `render.yaml` and proposes an `edupeer-backend`
+   web service.
+2. It then prompts for the six values marked `sync: false`. Paste the same
+   values as your local `.env`. `FIREBASE_PRIVATE_KEY` goes in as a single line
+   with the literal `\n` escapes intact — `firebase_service.py` un-escapes them.
+3. Apply. First build takes a few minutes (`grpcio` compiles from source if a
+   wheel is missing, which is why `PYTHON_VERSION` is pinned to 3.12.6).
+4. Confirm `https://<service>.onrender.com/health` returns
+   `{"status":"ok","service":"edupeer-backend"}`.
+5. If Render assigned a hostname other than `edupeer-backend.onrender.com`,
+   update the `edupeer.backendUrl` default in `extension/package.json` and
+   `DEFAULT_BACKEND_URL` in `extension/src/extension.ts` to match.
+
+Add the deployed origin to the Firebase Console under **Authentication >
+Settings > Authorized domains**, otherwise the browser sign-in flow served from
+`/auth/login` will be rejected.
+
+### Keeping the service awake
+
+Render's free plan stops the service after ~15 minutes idle and takes roughly
+50 seconds to wake. The extension abandons a request after 20 seconds
+(`REQUEST_TIMEOUT_MS` in `extension/src/apiClient.ts`), so the first student to
+ask a question after an idle period gets a timeout and the offline fallback
+tutor instead of the real one.
+
+Two ways round it, before putting the backend in front of testers:
+
+- Upgrade to the Starter plan (currently $7/month), which does not sleep.
+- Keep the free plan and ping `/health` every 10 minutes from an external cron
+  (GitHub Actions, cron-job.org). One always-on service fits inside the free
+  monthly instance-hour allowance, but nothing else will.
+
+## Publishing the extension to the Marketplace
+
+Prerequisites: a Microsoft account, an Azure DevOps organisation, and a
+personal access token scoped to **Marketplace > Manage** across all accessible
+organisations. Create the publisher at
+[marketplace.visualstudio.com/manage](https://marketplace.visualstudio.com/manage);
+its ID must match `"publisher"` in `extension/package.json`.
+
+```bash
+cd extension
+npx vsce login <publisher>
+npm run package     # sanity-check the .vsix first
+npx vsce publish
+```
+
+Add `--pre-release` to publish into the pre-release channel while the extension
+is still under test.

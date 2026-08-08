@@ -1,0 +1,40 @@
+# Render blueprint for the EduPeer backend.
+#
+# Deploy: render.com > New > Blueprint > connect this repo. Render reads this
+# file, creates the service, then prompts for the six secrets marked
+# `sync: false` (nothing secret is stored here).
+#
+# The free plan spins the service down after ~15 minutes idle and takes ~50s to
+# wake. The extension gives up on a request after 20s (REQUEST_TIMEOUT_MS in
+# extension/src/apiClient.ts), so the first call after a sleep will fail for a
+# tester. See "Keeping the service awake" in README.md.
+services:
+  - type: web
+    name: edupeer-backend
+    runtime: python
+    plan: free
+    region: oregon
+    rootDir: backend
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn main:app --host 0.0.0.0 --port $PORT
+    healthCheckPath: /health
+    autoDeploy: true
+    envVars:
+      # Render defaults to the newest Python; firebase-admin 6.5.0 pulls grpcio,
+      # which does not always have wheels there. Pin to a version with wheels.
+      - key: PYTHON_VERSION
+        value: "3.12.6"
+      - key: GROQ_API_KEY
+        sync: false
+      - key: FIREBASE_PROJECT_ID
+        sync: false
+      # Paste as a single line, keeping the literal \n escapes and the quotes —
+      # firebase_service.py:217 un-escapes them.
+      - key: FIREBASE_PRIVATE_KEY
+        sync: false
+      - key: FIREBASE_CLIENT_EMAIL
+        sync: false
+      - key: FIREBASE_WEB_API_KEY
+        sync: false
+      - key: FIREBASE_AUTH_DOMAIN
+        sync: false
