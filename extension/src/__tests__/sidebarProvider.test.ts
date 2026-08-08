@@ -337,12 +337,21 @@ describe("the attempt gate", () => {
     // edit means mutating the tracked editor and forcing a resolve — the way
     // a real edit plus the debounced document-change listener would in
     // production — not just sending a different `code` alongside the ask.
+    // Same path as `build()`'s document — this is simulating an edit to the
+    // same open file, and `lastDocumentKey` (what the attempt tracker keys
+    // on) is uri-based, so a different path would make this look like an
+    // unrelated, never-seen-before problem instead of an edit to this one.
+    // But resolveFocus memoises on uri+version+cursor (see focusScope.ts),
+    // and the mock always stamps version 1, so reusing the exact same cursor
+    // too would hand back `build()`'s already-cached, pre-edit scope instead
+    // of resolving the edited text. Line 1 is still inside `average`'s body,
+    // so the resolved block is unchanged — only the cache key is.
     const edited = mock.__makeDocument(
       CODE.replace("sum(n)", "total(n)"),
       "python",
       "/tmp/demo.py"
     );
-    mock.window.activeTextEditor = mock.__makeEditor(edited);
+    mock.window.activeTextEditor = mock.__makeEditor(edited, 1);
     await h.send({ type: "refreshCode" });
     // Editing produces a new fingerprint, which re-arms the explain-first
     // gate, so the ask has to be let through a second time.
@@ -886,6 +895,7 @@ describe("the webview document", () => {
 
 describe("EduPeerSidebarProvider — focus scoping", () => {
   const vscode = require("vscode");
+  beforeEach(() => vscode.__reset());
 
   const SOURCE = [
     "import math",
@@ -933,5 +943,39 @@ describe("EduPeerSidebarProvider — focus scoping", () => {
       end_line: 5,
       label: "calculate_average",
     });
+  });
+
+  it("forgets the problem key when there is no active editor", async () => {
+    const { provider } = await setupProvider(SOURCE, 4);
+    await provider["sendFocus"]();
+    expect(provider["lastDocumentKey"]).toContain("#");
+
+    vscode.window.activeTextEditor = undefined;
+    await provider["sendFocus"]();
+
+    expect(provider["lastDocumentKey"]).toBe("");
+  });
+
+  it("lets a move to a different function in the same document through the suppression guard", async () => {
+    const TWO_FUNCTIONS = [
+      "def first():",
+      "    return 1",
+      "",
+      "",
+      "def second():",
+      "    return 2",
+    ].join("\n");
+    const { provider, posted, doc } = await setupProvider(TWO_FUNCTIONS, 1);
+
+    await provider["sendFocus"]();
+    const first = latest(posted, "focus");
+
+    // Same document, same version — only the cursor moves.
+    vscode.window.activeTextEditor = vscode.__makeEditor(doc, 5);
+    await provider["sendFocus"]();
+    const second = latest(posted, "focus");
+
+    expect(second.startLine).not.toBe(first.startLine);
+    expect(second.breadcrumb).not.toBe(first.breadcrumb);
   });
 });

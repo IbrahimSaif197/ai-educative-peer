@@ -585,6 +585,7 @@ export class EduPeerSidebarProvider implements vscode.WebviewViewProvider {
       this.lastFocusCode = "";
       this.lastFullCode = "";
       this.lastFocusSignature = "";
+      this.lastDocumentKey = "";
       this.post({ type: "focus", focusCode: "", fileName: "", language: "", totalLines: 0 });
       return;
     }
