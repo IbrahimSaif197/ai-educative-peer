@@ -37,6 +37,11 @@
   <div class="card hidden" id="done">
     <h1>You're signed in ✔</h1>
     <p>Return to VS Code — EduPeer is ready.</p>
+    <div id="handoff" class="hidden">
+      <div class="divider">Nothing happened in VS Code?</div>
+      <button id="fallback">Send it again</button>
+      <div class="error" id="fallbackError"></div>
+    </div>
   </div>
   <div class="card hidden" id="invalid">
     <h1>Sign-in link is invalid</h1>
@@ -55,10 +60,55 @@
     const state = params.get("state");
     const errorEl = document.getElementById("error");
     let createMode = false;
+    let lastPayload = null;
+
+    // Both of these are interpolated into a URL this page navigates to while
+    // holding the user's tokens, so they get the same distrust as `port`. A
+    // link with scheme=https&ext=evil.com would otherwise hand the session
+    // straight to an attacker. Editors that fork VS Code use their own scheme,
+    // hence a list rather than a single value; anything unrecognised falls
+    // back to the loopback POST instead of being trusted.
+    const EDITOR_SCHEMES = [
+      "vscode", "vscode-insiders", "vscode-exploration", "vscodium",
+      "code-oss", "cursor", "windsurf", "positron", "trae",
+    ];
+    const rawScheme = params.get("scheme");
+    const rawExt = params.get("ext");
+    const deepLink =
+      rawScheme && rawExt &&
+      EDITOR_SCHEMES.indexOf(rawScheme) !== -1 &&
+      /^[a-z0-9][a-z0-9-]*\.[a-z0-9][a-z0-9-]*$/i.test(rawExt)
+        ? `${rawScheme}://${rawExt}/callback`
+        : null;
+
+    function base64url(text) {
+      const bytes = new TextEncoder().encode(text);
+      let binary = "";
+      for (let i = 0; i < bytes.length; i++) binary += String.fromCharCode(bytes[i]);
+      return btoa(binary).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+    }
+
+    // The original delivery path. Browsers now treat a public page reaching
+    // 127.0.0.1 as a local network request and prompt the user for it, so this
+    // is the fallback rather than the default.
+    function postToLoopback(payload) {
+      // text/plain avoids a CORS preflight to the extension's one-shot server.
+      return fetch(`http://127.0.0.1:${port}/callback`, {
+        method: "POST",
+        headers: { "Content-Type": "text/plain" },
+        body: payload,
+      });
+    }
+
+    function showDone(offerRetry) {
+      document.getElementById("signin").classList.add("hidden");
+      document.getElementById("done").classList.remove("hidden");
+      if (offerRetry) document.getElementById("handoff").classList.remove("hidden");
+    }
 
     async function deliver(user) {
       const idToken = await user.getIdToken();
-      const payload = JSON.stringify({
+      lastPayload = JSON.stringify({
         idToken,
         refreshToken: user.refreshToken,
         uid: user.uid,
@@ -68,14 +118,18 @@
         // extension rejects any callback whose state does not match.
         state,
       });
-      // text/plain avoids a CORS preflight to the extension's one-shot server.
-      await fetch(`http://127.0.0.1:${port}/callback`, {
-        method: "POST",
-        headers: { "Content-Type": "text/plain" },
-        body: payload,
-      });
-      document.getElementById("signin").classList.add("hidden");
-      document.getElementById("done").classList.remove("hidden");
+
+      if (deepLink) {
+        // Handing off through the editor's registered URI scheme keeps the
+        // browser out of it entirely. There is no way to observe whether the
+        // editor picked it up, so the retry button below is the escape hatch.
+        window.location.href = `${deepLink}?payload=${base64url(lastPayload)}`;
+        showDone(true);
+        return;
+      }
+
+      await postToLoopback(lastPayload);
+      showDone(false);
     }
 
     function run(promise) {
@@ -86,6 +140,18 @@
     }
 
     function initSignIn() {
+      document.getElementById("fallback").addEventListener("click", async () => {
+        const fallbackError = document.getElementById("fallbackError");
+        fallbackError.textContent = "";
+        try {
+          await postToLoopback(lastPayload);
+          fallbackError.textContent = "Sent. Switch back to VS Code.";
+        } catch (e) {
+          fallbackError.textContent =
+            "Could not reach VS Code. If your browser asked for permission to " +
+            "reach this device, allow it and press this again.";
+        }
+      });
       document.getElementById("modeToggle").addEventListener("click", () => {
         createMode = !createMode;
         document.getElementById("emailSubmit").textContent = createMode ? "Create account" : "Sign in";

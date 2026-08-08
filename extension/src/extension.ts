@@ -1,7 +1,7 @@
 import * as vscode from "vscode";
 import { ApiClient } from "./apiClient";
 import { AuthManager } from "./authManager";
-import { signInViaBrowser } from "./signInFlow";
+import { deliverUriCallback, signInViaBrowser } from "./signInFlow";
 import { FirebaseClient } from "./firebaseClient";
 import { EduPeerSidebarProvider } from "./sidebarProvider";
 import { InlineTutor } from "./inlineTutor";
@@ -309,11 +309,25 @@ export async function activate(context: vscode.ExtensionContext) {
     })
   );
 
+  // The sign-in page hands tokens back through this rather than POSTing to a
+  // loopback server. Chrome and Edge now gate a public page's access to
+  // 127.0.0.1 behind a permission prompt that reads like an attack, and a
+  // student who declines it cannot sign in at all.
+  context.subscriptions.push(
+    vscode.window.registerUriHandler({
+      handleUri(uri: vscode.Uri) {
+        if (uri.path === "/callback") deliverUriCallback(uri.query);
+      },
+    })
+  );
+
   context.subscriptions.push(
     vscode.commands.registerCommand("edupeer.signIn", async () => {
       try {
         const payload = await signInViaBrowser(
-          vscode.workspace.getConfiguration("edupeer").get<string>("backendUrl", DEFAULT_BACKEND_URL)
+          vscode.workspace.getConfiguration("edupeer").get<string>("backendUrl", DEFAULT_BACKEND_URL),
+          undefined,
+          { uriScheme: vscode.env.uriScheme, extensionId: context.extension?.id }
         );
         await auth.applySignIn(payload);
         vscode.window.showInformationMessage(

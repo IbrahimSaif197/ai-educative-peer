@@ -8,6 +8,56 @@ const DEFAULT_TIMEOUT_MS = 5 * 60 * 1000;
 /** Hex length of the sign-in state nonce; mirrored by the regex in auth.html. */
 const STATE_BYTES = 16;
 
+export interface BrowserSignInOptions {
+  /** `vscode.env.uriScheme` — "vscode", "vscode-insiders", a fork's scheme. */
+  uriScheme?: string;
+  /** The extension id, which is the authority of the callback URI. */
+  extensionId?: string;
+}
+
+interface PendingSignIn {
+  state: string;
+  settle: (session: SignInPayload) => void;
+}
+
+/**
+ * The attempt a `vscode://` callback will be matched against.
+ *
+ * Only the newest attempt is reachable this way. An older one keeps its
+ * loopback server, so starting a second sign-in degrades the first to the
+ * fallback path rather than stranding it.
+ */
+let pendingSignIn: PendingSignIn | null = null;
+
+/**
+ * Completes the waiting sign-in from a `vscode://` URI's query string.
+ *
+ * Returns false — rather than throwing — for anything unrecognised, because
+ * the URI handler is a public entry point that any application on the machine
+ * can invoke. A stray or forged link must be a no-op, not an error the user
+ * sees, and never a way to install someone else's session: the state nonce is
+ * checked exactly as it is on the loopback path.
+ */
+export function deliverUriCallback(query: string): boolean {
+  const waiting = pendingSignIn;
+  if (!waiting) return false;
+
+  const encoded = new URLSearchParams(query).get("payload");
+  if (!encoded) return false;
+
+  let payload: SignInPayload & { state: string };
+  try {
+    payload = parseCallbackPayload(Buffer.from(encoded, "base64url").toString("utf8"));
+  } catch {
+    return false;
+  }
+  if (!stateMatches(waiting.state, payload.state)) return false;
+
+  const { state: _state, ...session } = payload;
+  waiting.settle(session);
+  return true;
+}
+
 export function newSignInState(): string {
   return crypto.randomBytes(STATE_BYTES).toString("hex");
 }
@@ -53,10 +103,20 @@ export function parseCallbackPayload(body: string): SignInPayload & { state: str
  */
 export function signInViaBrowser(
   baseUrl: string,
-  timeoutMs = DEFAULT_TIMEOUT_MS
+  timeoutMs = DEFAULT_TIMEOUT_MS,
+  opts: BrowserSignInOptions = {}
 ): Promise<SignInPayload> {
   return new Promise((resolve, reject) => {
     const state = newSignInState();
+    let settled = false;
+
+    /** Both delivery paths race; the first to arrive wins and stops the rest. */
+    function settle(session: SignInPayload): void {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      resolve(session);
+    }
 
     const server = http.createServer((req, res) => {
       if (req.method !== "POST" || req.url !== "/callback") {
@@ -91,8 +151,7 @@ export function signInViaBrowser(
           }
           const { state: _state, ...session } = payload;
           res.end("ok");
-          cleanup();
-          resolve(session);
+          settle(session);
         } catch {
           res.statusCode = 400;
           res.end("bad payload");
@@ -101,6 +160,8 @@ export function signInViaBrowser(
     });
 
     const timer = setTimeout(() => {
+      if (settled) return;
+      settled = true;
       cleanup();
       reject(new Error("Sign-in timed out — no response from the browser."));
     }, timeoutMs);
@@ -108,9 +169,16 @@ export function signInViaBrowser(
     function cleanup() {
       clearTimeout(timer);
       server.close();
+      // Only clear the slot if it is still ours: a later attempt may have
+      // taken it, and dropping theirs would break their deep link.
+      if (pendingSignIn?.state === state) pendingSignIn = null;
     }
 
+    pendingSignIn = { state, settle };
+
     server.on("error", (err) => {
+      if (settled) return;
+      settled = true;
       cleanup();
       reject(err);
     });
@@ -119,9 +187,15 @@ export function signInViaBrowser(
       const address = server.address();
       const port = typeof address === "object" && address ? address.port : 0;
       const base = baseUrl.replace(/\/$/, "");
-      void vscode.env.openExternal(
-        vscode.Uri.parse(`${base}/auth/login?port=${port}&state=${state}`)
-      );
+      const params = new URLSearchParams({ port: String(port), state });
+      // Sent only when both are known, because the page treats their presence
+      // as "hand back through VS Code's URI handler instead of the loopback
+      // POST" — which is what avoids the browser's local-network prompt.
+      if (opts.uriScheme && opts.extensionId) {
+        params.set("scheme", opts.uriScheme);
+        params.set("ext", opts.extensionId);
+      }
+      void vscode.env.openExternal(vscode.Uri.parse(`${base}/auth/login?${params}`));
     });
   });
 }

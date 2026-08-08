@@ -174,9 +174,24 @@ follows you to any machine you sign in on. Tokens are stored in VS Code's
 SecretStorage; all backend endpoints except `/health`, `/auth/config`, and
 `/auth/login` verify a Firebase ID token.
 
-The sign-in callback is bound to a one-time 128-bit nonce that VS Code puts on
-the login URL and the page hands back, so no other page open in the browser can
-POST its own tokens to the loopback port and hijack the session. Anonymous
+The signed-in session is handed back through VS Code's registered URI scheme
+(`vscode://edupeer.edupeer/callback`). It used to be a POST to a one-shot
+loopback server, but Chrome and Edge now class a public page reaching
+`127.0.0.1` as a local network request and put it behind a permission prompt
+that reads like an attack; anyone who declined it could not sign in at all.
+The loopback server still runs as a fallback, and the page offers a manual
+"send it again" button that uses it, for editors whose URI scheme is not
+recognised.
+
+Because the scheme and extension id arrive as query parameters, the page
+accepts them only from a list of known editor schemes and a strict
+`publisher.name` pattern. Without that check, a crafted login link carrying
+`scheme=https&ext=evil.com` would redirect a freshly signed-in session to an
+attacker.
+
+Both paths are bound to a one-time 128-bit nonce that VS Code puts on the login
+URL and the page hands back, so no other page open in the browser can deliver
+its own tokens and hijack the session. Anonymous
 progress is merged only into the account it was captured for, which matters on
 a shared machine: migration deletes the source record, so replaying a failed
 merge into whoever signs in next would hand one student's work to another.

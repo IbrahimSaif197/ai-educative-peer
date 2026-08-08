@@ -92,6 +92,25 @@ describe("activate", () => {
     }
   });
 
+  it("registers a uri handler for the sign-in callback", async () => {
+    await activate(makeContext());
+    // Without this the sign-in page can only hand tokens back by POSTing to
+    // loopback, which browsers now put behind a permission prompt.
+    expect(mock.__state.uriHandler).toBeDefined();
+  });
+
+  it("ignores uri callbacks on other paths without throwing", async () => {
+    await activate(makeContext());
+    // Any application on the machine can invoke the handler, so an unexpected
+    // link must be inert rather than an error the student sees.
+    expect(() =>
+      mock.__state.uriHandler!.handleUri({ path: "/somewhere-else", query: "payload=x" })
+    ).not.toThrow();
+    expect(() =>
+      mock.__state.uriHandler!.handleUri({ path: "/callback", query: "" })
+    ).not.toThrow();
+  });
+
   it("registers no commands beyond the expected set", async () => {
     await activate(makeContext());
     expect([...mock.__state.commands.keys()].sort()).toEqual([...EXPECTED_COMMANDS].sort());

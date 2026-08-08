@@ -128,6 +128,8 @@ const __state = {
   hoverProviders: [] as any[],
   codeActionProviders: [] as any[],
   webviewViewProviders: new Map<string, any>(),
+  /** The handler registered for `vscode://` links, so tests can fire one. */
+  uriHandler: undefined as { handleUri(uri: any): void } | undefined,
   debugTrackerFactories: [] as any[],
   /** Queued answers for showInformationMessage, consumed in order. */
   infoMessageAnswers: [] as Array<string | undefined>,
@@ -207,6 +209,11 @@ const mockWindow = {
 
   registerWebviewViewProvider: jest.fn((viewType: string, provider: any, options?: any) => {
     __state.webviewViewProviders.set(viewType, { provider, options });
+    return disposable();
+  }),
+
+  registerUriHandler: jest.fn((handler: any) => {
+    __state.uriHandler = handler;
     return disposable();
   }),
 };
@@ -335,6 +342,7 @@ function __reset(): void {
   __state.hoverProviders.length = 0;
   __state.codeActionProviders.length = 0;
   __state.webviewViewProviders.clear();
+  __state.uriHandler = undefined;
   __state.debugTrackerFactories.length = 0;
   __state.infoMessageAnswers.length = 0;
   __state.inputBoxAnswers.length = 0;
