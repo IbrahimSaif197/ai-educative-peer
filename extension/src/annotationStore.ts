@@ -111,6 +111,12 @@ export class AnnotationStore {
     return [...this.lensStates.keys()].sort((a, b) => a - b);
   }
 
+  /** Forget everything EduPeer said about one line: the student dismissed it. */
+  clearLine(line: number): void {
+    this.hints.delete(line);
+    this.lensStates.delete(line);
+  }
+
   annotationsAt(line: number): { flag?: LineFlag; hint?: LineHint } {
     const stored = this.storedFlags.find((f) => line >= f.start && line <= f.end);
     return {

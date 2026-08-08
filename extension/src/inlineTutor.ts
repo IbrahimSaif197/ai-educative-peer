@@ -172,7 +172,7 @@ export class InlineTutor {
       vscode.workspace.onDidChangeTextDocument((e) => {
         if (!this.isSupported(e.document)) return;
         this.storeFor(e.document.uri).applyChanges(toContentChanges(e.contentChanges));
-        this.diagnostics.set(e.document.uri, this.diagnosticsFor(e.document));
+        this.applyFlagsToDoc(e.document);
         this.emitter.fire();
         this.scheduleScan(e.document);
         const editor = vscode.window.activeTextEditor;
@@ -225,7 +225,8 @@ export class InlineTutor {
         (uri: vscode.Uri, line: number) => {
           const doc = vscode.window.activeTextEditor?.document;
           if (!doc || doc.uri.toString() !== uri.toString()) return;
-          this.setLensState(doc, line, { kind: "idle" });
+          this.storeFor(doc.uri).clearLine(line);
+          this.emitter.fire();
           this.renderActiveLineDecoration(vscode.window.activeTextEditor!);
         }
       )
@@ -345,21 +346,32 @@ export class InlineTutor {
     const lineText = doc.lineAt(line).text;
     if (!lineText.trim()) return;
     const store = this.storeFor(doc.uri);
-    if (!opts.force && store.annotationsAt(line).hint) {
+    const cached = store.annotationsAt(line).hint;
+    // A local rule is a placeholder for a real hint, so it must not block one
+    // once the backend is answering again. That is what `local` is for.
+    if (!opts.force && cached && !cached.local) {
       this.renderActiveLineIfMatches(doc, line);
       return;
     }
 
+    // Lens state belongs to a hint the student asked for. The debounce path
+    // fires on cursor movement, and painting a lens there would put
+    // unsolicited text on every line the cursor rests on — including under
+    // lensMode "flagged", whose entire purpose is to stop that.
+    const showState = (state: LensState) => {
+      if (opts.force) this.setLensState(doc, line, state);
+    };
+
     // Fired before anything is awaited, so the student sees the click land.
-    this.setLensState(doc, line, { kind: "loading" });
-    this.onThinkingChange(true);
+    showState({ kind: "loading" });
+    if (opts.force) this.onThinkingChange(true);
     try {
       const res = await this.api.getLineHint(doc.getText(), line + 1, doc.languageId);
       if (res.hint) {
         store.setHint(line, { hint: res.hint, concept: res.concept });
-        this.setLensState(doc, line, { kind: "ready", hint: res.hint });
+        showState({ kind: "ready", hint: res.hint });
       } else {
-        this.setLensState(doc, line, { kind: "empty" });
+        showState({ kind: "empty" });
       }
     } catch (err) {
       if (err instanceof RateLimitError) {
@@ -369,12 +381,12 @@ export class InlineTutor {
       const local = localLineHint(lineText, doc.languageId);
       if (!this.api.isAvailable && local.hint) {
         store.setHint(line, { ...local, local: true });
-        this.setLensState(doc, line, { kind: "ready", hint: local.hint });
+        showState({ kind: "ready", hint: local.hint });
       } else {
-        this.setLensState(doc, line, errorStateFor(err, this.api.isAvailable));
+        showState(errorStateFor(err, this.api.isAvailable));
       }
     } finally {
-      this.onThinkingChange(false);
+      if (opts.force) this.onThinkingChange(false);
       this.renderActiveLineIfMatches(doc, line);
     }
   }
@@ -414,15 +426,19 @@ export class InlineTutor {
     }
     const lineText = doc.lineAt(line).text;
 
-    // Real hint (backend or local rule, already unified by the store) beats a
-    // scan flag — a flag is a standing observation, the hint is the direct
-    // answer to a click.
+    // A real hint beats a scan flag beats a local rule — the local rule is
+    // the crudest of the three and only earns the line when nothing else has
+    // it. `hint.local` is what lets a real hint and a local rule share one
+    // map in the store without losing this ordering.
     const { flag, hint } = this.storeFor(doc.uri).annotationsAt(line);
-    const contentText = hint?.hint
-      ? `💡 ${hint.hint}`
-      : flag
-      ? `${flagEmoji(flag)} ${flag.question}`
-      : "";
+    const contentText =
+      hint && !hint.local
+        ? `💡 ${hint.hint}`
+        : flag
+        ? `${flagEmoji(flag)} ${flag.question}`
+        : hint?.hint
+        ? `💡 ${hint.hint}`
+        : "";
 
     if (!contentText) {
       editor.setDecorations(this.ghostDecoration, []);
@@ -511,17 +527,21 @@ export class InlineTutor {
       });
   }
 
+  /** The editor range a 1-based wire flag covers, clamped to the document. */
+  private flagRange(doc: vscode.TextDocument, flag: LineFlag): vscode.Range {
+    const startLine = Math.max(0, Math.min(doc.lineCount - 1, flag.line - 1));
+    const endLine = Math.max(startLine, Math.min(doc.lineCount - 1, flag.end_line - 1));
+    return new vscode.Range(
+      new vscode.Position(startLine, 0),
+      new vscode.Position(endLine, doc.lineAt(endLine).text.length)
+    );
+  }
+
   /** Diagnostics for whatever the store currently believes. */
   private diagnosticsFor(doc: vscode.TextDocument): vscode.Diagnostic[] {
     return this.storeFor(doc.uri).flags().map((f) => {
-      const startLine = Math.max(0, Math.min(doc.lineCount - 1, f.line - 1));
-      const endLine = Math.max(startLine, Math.min(doc.lineCount - 1, f.end_line - 1));
-      const range = new vscode.Range(
-        new vscode.Position(startLine, 0),
-        new vscode.Position(endLine, doc.lineAt(endLine).text.length)
-      );
       const diag = new vscode.Diagnostic(
-        range,
+        this.flagRange(doc, f),
         `${flagEmoji(f)} ${f.question}`,
         f.severity === "warning"
           ? vscode.DiagnosticSeverity.Warning
@@ -539,12 +559,7 @@ export class InlineTutor {
     const infoRanges: vscode.Range[] = [];
     const warnRanges: vscode.Range[] = [];
     for (const f of store.flags()) {
-      const startLine = Math.max(0, Math.min(doc.lineCount - 1, f.line - 1));
-      const endLine = Math.max(startLine, Math.min(doc.lineCount - 1, f.end_line - 1));
-      const range = new vscode.Range(
-        new vscode.Position(startLine, 0),
-        new vscode.Position(endLine, doc.lineAt(endLine).text.length)
-      );
+      const range = this.flagRange(doc, f);
       (f.severity === "warning" ? warnRanges : infoRanges).push(range);
     }
     for (const editor of vscode.window.visibleTextEditors) {
@@ -594,7 +609,7 @@ export class InlineTutor {
 
     // A flag is an observation about this code and outranks a standing offer.
     for (const flag of store.flags()) {
-      add(Math.max(0, Math.min(doc.lineCount - 1, flag.line - 1)), `${flagEmoji(flag)} ${flag.question}`);
+      add(this.flagRange(doc, flag).start.line, `${flagEmoji(flag)} ${flag.question}`);
     }
 
     // A line the student nudged must show its state even when it is neither a
