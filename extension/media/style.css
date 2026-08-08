@@ -278,7 +278,11 @@ body {
    the preview's gutter always matches the editor's. */
 .ln {
   display: grid;
-  grid-template-columns: 2.5ch 1fr;
+  /* Fixed, not auto: each row is its own grid, so an auto column would size
+     per row and the numbers would stop lining up. 4ch covers up to 9999
+     lines — real absolute line numbers are the point of this panel, and most
+     files run past the two digits the old 2.5ch fit. */
+  grid-template-columns: 4ch 1fr;
   gap: var(--s4);
 }
 

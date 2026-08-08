@@ -235,6 +235,7 @@
 
   const focusRangeEl = el("focusRange");
   const scopeToggleEl = el("scopeToggle");
+  const scopeRowEl = el("scopeRow");
 
   /** The block every ask is about, whatever the preview happens to show. */
   let focusCode = "";
@@ -289,6 +290,9 @@
   collapseBtn.addEventListener("click", () => {
     const collapsed = !codeEl.hidden;
     codeEl.hidden = collapsed;
+    // The scope row (range + "Whole file" toggle) describes the preview, so
+    // it has nothing to act on once the preview itself is hidden.
+    scopeRowEl.hidden = collapsed;
     collapseBtn.textContent = collapsed ? "Show" : "Hide";
     collapseBtn.setAttribute("aria-expanded", String(!collapsed));
   });
@@ -548,6 +552,11 @@
         break;
 
       case "fullFile":
+        // A reply can arrive after the student has already toggled back to
+        // the focus block (e.g. a quick on/off); without this guard it would
+        // silently repaint the preview with the whole file even though the
+        // button already reads "Whole file".
+        if (!showingWholeFile) break;
         // The preview widens; `currentCode` deliberately does not, so an ask
         // stays about the block even while the whole file is on screen.
         renderLines(msg.code || "", 1, cursorLine);
@@ -690,7 +699,12 @@
         break;
 
       case "externalAsk":
-        currentCode = msg.code || currentCode;
+        // Nothing to do. `askExternal` calls sendFocus() before posting this,
+        // so the "focus" message has already set both the preview and
+        // `currentCode` to the block on screen. Setting `currentCode` from
+        // `msg.code` here would point the next typed follow-up at code the
+        // student never saw — the callers pass whole documents and raw
+        // selections, not the resolved focus block.
         break;
     }
   });

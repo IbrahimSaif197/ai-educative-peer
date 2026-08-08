@@ -867,4 +867,76 @@ describe("webview — focus panel", () => {
     expect(el("scopeToggle").getAttribute("aria-pressed")).toBe("false");
     expect($$(".ln__no").map((n) => n.textContent)).toEqual(["5"]);
   });
+
+  it("keeps the composer on the focus block after an external ask carries different code", () => {
+    // `askExternal` (sidebarProvider.ts) calls sendFocus() before posting
+    // "externalAsk", so the panel already shows the focus block by the time
+    // this arrives. The callers of askExternal pass whole documents
+    // (discussLines, the debug/test-watcher asks) or a raw selection
+    // (ask-about-selection) as `code` — not the resolved focus block — so
+    // that field must not become what the composer sends next.
+    post({
+      type: "focus",
+      focusCode: "def f(n):",
+      breadcrumb: "demo.py › f",
+      startLine: 5,
+      endLine: 5,
+      cursorLine: 5,
+      fileName: "/tmp/demo.py",
+      language: "Python",
+      totalLines: 80,
+    });
+
+    post({
+      type: "externalAsk",
+      question: "explain this error",
+      code: "import math\n\ndef f(n):\n    return 1 / n\n",
+    });
+
+    // The preview is unchanged: still exactly what the "focus" message drew.
+    expect($$(".ln__no").map((n) => n.textContent)).toEqual(["5"]);
+
+    (el("input") as HTMLTextAreaElement).value = "why?";
+    (el("send") as HTMLButtonElement).click();
+
+    expect(lastSent("askHint").code).toBe("def f(n):");
+  });
+
+  it("ignores a late fullFile reply after the toggle has switched back", () => {
+    post({
+      type: "focus",
+      focusCode: "a",
+      startLine: 7,
+      endLine: 7,
+      cursorLine: 7,
+      fileName: "/tmp/demo.py",
+      language: "Python",
+      totalLines: 80,
+    });
+    const toggle = el("scopeToggle") as HTMLButtonElement;
+    toggle.click(); // requests the full file
+    toggle.click(); // switches back to the focus block before the reply arrives
+
+    post({ type: "fullFile", code: "import os\nimport sys\na" });
+
+    expect($$(".ln__no").map((n) => n.textContent)).toEqual(["7"]);
+  });
+
+  it("hides the scope row along with the code preview when collapsed", () => {
+    post({
+      type: "focus",
+      focusCode: "a",
+      startLine: 1,
+      endLine: 1,
+      cursorLine: 1,
+      fileName: "/tmp/demo.py",
+      language: "Python",
+      totalLines: 80,
+    });
+    const button = el("collapseCode") as HTMLButtonElement;
+    button.click();
+    expect((el("scopeRow") as HTMLElement).hidden).toBe(true);
+    button.click();
+    expect((el("scopeRow") as HTMLElement).hidden).toBe(false);
+  });
 });
