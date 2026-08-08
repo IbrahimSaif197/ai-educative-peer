@@ -110,3 +110,45 @@ describe("findEnclosingBlock — limits", () => {
     expect(findEnclosingBlock(PYTHON, 5, "ruby")).toBeNull();
   });
 });
+
+describe("findEnclosingBlock — a cursor on a blank line", () => {
+  const NESTED_JS = [
+    "function outer() {",   // 0
+    "  function inner() {", // 1
+    "    let a = 1;",       // 2
+    "",                     // 3
+    "    let b = 2;",       // 4
+    "  }",                  // 5
+    "}",                    // 6
+  ];
+
+  const NESTED_PY = [
+    "class Stats:",           // 0
+    "    def mean(self, n):", // 1
+    "        total = 0",      // 2
+    "",                       // 3
+    "        return total",   // 4
+  ];
+
+  it("stays in the innermost block instead of widening to the outer one", () => {
+    expect(findEnclosingBlock(NESTED_JS, 3, "javascript")).toEqual({ start: 1, end: 5 });
+  });
+
+  it("picks the innermost block for a non-blank line too", () => {
+    expect(findEnclosingBlock(NESTED_JS, 2, "javascript")).toEqual({ start: 1, end: 5 });
+  });
+
+  it("stays in the method rather than widening to the class", () => {
+    expect(findEnclosingBlock(NESTED_PY, 3, "python")).toEqual({ start: 1, end: 4 });
+  });
+
+  it("returns null on a blank line between two top-level functions", () => {
+    const between = ["def f():", "    x = 1", "", "def g():", "    y = 2"];
+    expect(findEnclosingBlock(between, 2, "python")).toBeNull();
+  });
+
+  it("borrows the indent from below when the cursor is above all code", () => {
+    const leading = ["", "def f():", "    x = 1"];
+    expect(findEnclosingBlock(leading, 0, "python")).toBeNull();
+  });
+});

@@ -79,12 +79,30 @@ export function findEnclosingBlock(
 }
 
 /**
+ * The indent to judge the cursor by. A blank line has no indentation of its
+ * own — `indentOf("")` is 0 — which would make every header deeper than the
+ * top level look like a sibling and silently widen the block to the outermost
+ * one. A blank line continues the block above it, so borrow that line's
+ * indent, falling forward only when the cursor is above the first real line.
+ */
+function cursorIndentAt(lines: string[], cursorLine: number): number {
+  if (lines[cursorLine].trim()) return indentOf(lines[cursorLine]);
+  for (let i = cursorLine - 1; i >= 0; i--) {
+    if (lines[i].trim()) return indentOf(lines[i]);
+  }
+  for (let i = cursorLine + 1; i < lines.length; i++) {
+    if (lines[i].trim()) return indentOf(lines[i]);
+  }
+  return 0;
+}
+
+/**
  * The nearest definition line at or above the cursor. A header further
  * indented than the cursor belongs to a sibling block that has already
  * closed, so it is skipped.
  */
 function findHeader(lines: string[], cursorLine: number, lensRegex: RegExp): number | null {
-  const cursorIndent = indentOf(lines[cursorLine]);
+  const cursorIndent = cursorIndentAt(lines, cursorLine);
   for (let i = cursorLine; i >= 0; i--) {
     if (!lensRegex.test(lines[i])) continue;
     if (i === cursorLine) return i;
