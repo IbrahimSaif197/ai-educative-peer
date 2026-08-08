@@ -674,6 +674,17 @@ class TestFocusField:
         assert res.status_code == 200
         assert res.json()["hint"]
 
+    def test_hint_ignores_a_null_label_instead_of_refusing_the_request(self, client):
+        """A JS/TS client can easily spell "no label" as JSON null (`?? null`);
+        that must not 422 the whole request either."""
+        payload = {
+            **VALID_HINT_PAYLOAD,
+            "focus": {"start_line": 1, "end_line": 2, "label": None},
+        }
+        res = client.post("/hint", json=payload)
+        assert res.status_code == 200
+        assert res.json()["hint"]
+
 
 # ---------------------------------------------------------------------------
 # /trace

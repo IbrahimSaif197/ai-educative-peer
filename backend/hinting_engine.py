@@ -6,6 +6,7 @@ from typing import List, Optional, Tuple
 from groq import Groq
 
 from languages import concepts_for, get_language
+from models import MAX_FOCUS_LABEL_CHARS
 
 # Appended to every system prompt. The student's file and message are data the
 # tutor discusses, not instructions it follows — without this, a "```" in the
@@ -230,7 +231,7 @@ def focus_instruction(focus: Optional[dict]) -> str:
         return ""
     if start < 1 or end < start:
         return ""
-    label = " ".join(str(focus.get("label", "")).split())[:120]
+    label = " ".join(str(focus.get("label", "")).split())[:MAX_FOCUS_LABEL_CHARS]
     where = f"lines {start}-{end}" if end > start else f"line {start}"
     named = f" ({label})" if label else ""
     return (

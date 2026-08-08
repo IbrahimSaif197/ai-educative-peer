@@ -70,6 +70,13 @@ def test_focus_range_keeps_an_inverted_span_for_its_consumer_to_ignore():
     assert (focus.start_line, focus.end_line) == (19, 12)
 
 
+def test_focus_range_keeps_a_zero_start_for_its_consumer_to_ignore():
+    # Same contract as the inverted span: the model accepts, focus_instruction
+    # is the gate.
+    focus = FocusRange(start_line=0, end_line=4)
+    assert focus.start_line == 0
+
+
 def test_focus_range_truncates_an_overlong_label():
     focus = FocusRange(start_line=1, end_line=2, label="n" * 500)
     assert len(focus.label) == MAX_FOCUS_LABEL_CHARS

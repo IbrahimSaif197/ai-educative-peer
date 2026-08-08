@@ -51,6 +51,13 @@ class FocusRange(BaseModel):
         description="Symbol name for the block, for the tutor to refer to",
     )
 
+    @field_validator("label", mode="before")
+    @classmethod
+    def _null_is_empty(cls, value: object) -> object:
+        # An explicit JSON null is a client spelling "no label", not a reason to
+        # refuse the student's hint. This has to run before the str type check.
+        return "" if value is None else value
+
     @field_validator("label")
     @classmethod
     def _single_line(cls, value: str) -> str:
