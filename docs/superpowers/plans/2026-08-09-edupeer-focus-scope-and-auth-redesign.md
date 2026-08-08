@@ -1537,11 +1537,17 @@ Expected: FAIL — the constructor takes two arguments, lenses still say "Get a 
 
 Make these edits to `extension/src/inlineTutor.ts`:
 
-1. Delete the `FileState` interface (lines 15-24) and the `fileStates` field. Replace with:
+1. Delete the `FileState` interface (lines 15-24) and the `fileStates` field. Replace with three fields — the store holds what EduPeer believes about the code, and the two fingerprint maps de-duplicate scan requests, which is a different job:
 
 ```ts
   private readonly stores = new Map<string, AnnotationStore>();
+  /** Content of the last scan that actually succeeded, per document. */
+  private readonly scanFingerprints = new Map<string, string>();
+  /** Content of a scan in flight; de-dupes without claiming success. */
+  private readonly inFlightFingerprints = new Map<string, string>();
 ```
+
+`runScan` reads and writes these two maps in place of `state.scanFingerprint` and `state.inFlightFingerprint`, keyed on `doc.uri.toString()`. Its `finally` block still clears the in-flight entry only when it is still the one this call set. The `onDidCloseTextDocument` handler deletes from all three maps.
 
 2. Replace `stateFor(uri)` with:
 
@@ -2117,10 +2123,11 @@ git commit -m "Let a request name the block it is about, and point the prompt at
 
 **Files:**
 - Modify: `extension/src/apiClient.ts:69-89` (`HintRequest`), `:486-495` (`getLineHint`)
-- Test: `extension/src/__tests__/apiClient.test.ts`
+- Modify: `extension/src/inlineTutor.ts` (`fetchLineHint`, so the new parameter has a caller)
+- Test: `extension/src/__tests__/apiClient.test.ts`, `extension/src/__tests__/inlineTutor.test.ts`
 
 **Interfaces:**
-- Consumes: the wire shape from Task 7.
+- Consumes: the wire shape from Task 7; `resolveFocus` from Task 3.
 - Produces: `interface FocusRange { start_line: number; end_line: number; label?: string }`, `HintRequest.focus?: FocusRange`, `getLineHint(code, line, language?, focus?)`.
 
 - [ ] **Step 1: Write the failing test**
@@ -2225,10 +2232,70 @@ Replace `getLineHint`:
 Run: `cd extension && npx jest src/__tests__/apiClient.test.ts`
 Expected: PASS.
 
-- [ ] **Step 5: Commit**
+- [ ] **Step 5: Write the failing test for the caller**
+
+An optional parameter nothing passes is dead weight. Append to `extension/src/__tests__/inlineTutor.test.ts`, reusing the `setup`/`lensTitles` helpers added in Task 6:
+
+```ts
+describe("InlineTutor — line hints carry the focus block", () => {
+  const vscode = require("vscode");
+
+  it("sends the enclosing block's 1-based span with the line hint", async () => {
+    const api = {
+      isAvailable: true,
+      getLineHint: jest.fn().mockResolvedValue({ hint: "h", concept: "division" }),
+    };
+    const { doc } = setup(api);
+    vscode.commands.executeCommand.mockResolvedValue(undefined); // heuristic path
+
+    await vscode.__runCommand("edupeer.nudgeLine", doc.uri, 1);
+
+    expect(api.getLineHint).toHaveBeenCalledWith(
+      doc.getText(),
+      2,
+      "python",
+      { start_line: 1, end_line: 2, label: "f" }
+    );
+  });
+});
+```
+
+- [ ] **Step 6: Run to verify it fails**
+
+Run: `cd extension && npx jest src/__tests__/inlineTutor.test.ts`
+Expected: FAIL — `getLineHint` is called with three arguments.
+
+- [ ] **Step 7: Wire the caller**
+
+In `extension/src/inlineTutor.ts`, add the import:
+
+```ts
+import { resolveFocus } from "./focusScope";
+```
+
+and replace the `getLineHint` call inside `fetchLineHint` with:
+
+```ts
+      // The same block the sidebar is showing, so both surfaces agree on
+      // what "the code you're working on" means.
+      const at = new vscode.Position(line, 0);
+      const focus = await resolveFocus(doc, new vscode.Selection(at, at));
+      const res = await this.api.getLineHint(doc.getText(), line + 1, doc.languageId, {
+        start_line: focus.startLine + 1,
+        end_line: focus.endLine + 1,
+        label: focus.label,
+      });
+```
+
+- [ ] **Step 8: Run tests to verify they pass**
+
+Run: `cd extension && npx jest src/__tests__/inlineTutor.test.ts src/__tests__/apiClient.test.ts`
+Expected: PASS.
+
+- [ ] **Step 9: Commit**
 
 ```bash
-git add extension/src/apiClient.ts extension/src/__tests__/apiClient.test.ts
+git add extension/src/apiClient.ts extension/src/inlineTutor.ts extension/src/__tests__/apiClient.test.ts extension/src/__tests__/inlineTutor.test.ts
 git commit -m "Carry the focus block on hint and line-hint requests"
 ```
 
@@ -3482,7 +3549,9 @@ In `extension/media/main.js`, add next to `showEmptyState`:
   }
 ```
 
-In the `"authState"` case, add `refreshPlaceholder();` as the last statement.
+In the `"authState"` case, add `refreshPlaceholder();` as the last statement — `signedIn` is assigned earlier in that case, so it is already current.
+
+In the `"restoreChat"` case, replace `if (!turns.length) showEmptyState();` with `refreshPlaceholder();`. Otherwise a signed-out student with no history sees the generic empty state after every window reload, which is the one moment the sign-in card exists for.
 
 In `showEmptyState`, no change. In the `"resetDone"` case the chat is rebuilt with turns, so no change is needed there.
 
