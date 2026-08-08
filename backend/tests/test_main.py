@@ -661,6 +661,21 @@ class TestEditSummaryAndConfidence:
 
 
 # ---------------------------------------------------------------------------
+# focus
+# ---------------------------------------------------------------------------
+
+class TestFocusField:
+    def test_hint_ignores_a_nonsense_focus_instead_of_refusing_the_request(self, client):
+        """An optional enrichment field must never cost the student their hint."""
+        # start > end: the extension would have to be buggy to send this, and the
+        # student should still get tutored when it is.
+        payload = {**VALID_HINT_PAYLOAD, "focus": {"start_line": 9, "end_line": 2}}
+        res = client.post("/hint", json=payload)
+        assert res.status_code == 200
+        assert res.json()["hint"]
+
+
+# ---------------------------------------------------------------------------
 # /trace
 # ---------------------------------------------------------------------------
 

@@ -55,10 +55,7 @@ class TestUserBadges:
         assert u.solved_at_level_1 == 0
 
 
-import pytest
-from pydantic import ValidationError
-
-from models import FocusRange, HintRequest, LineHintRequest
+from models import FocusRange, HintRequest, LineHintRequest, MAX_FOCUS_LABEL_CHARS
 
 
 def test_focus_range_accepts_a_normal_span():
@@ -66,14 +63,16 @@ def test_focus_range_accepts_a_normal_span():
     assert (focus.start_line, focus.end_line) == (12, 19)
 
 
-def test_focus_range_rejects_an_end_before_its_start():
-    with pytest.raises(ValidationError):
-        FocusRange(start_line=19, end_line=12)
+def test_focus_range_keeps_an_inverted_span_for_its_consumer_to_ignore():
+    # An optional enrichment field must never cost the student their hint.
+    # focus_instruction is the single gate — see the engine tests.
+    focus = FocusRange(start_line=19, end_line=12)
+    assert (focus.start_line, focus.end_line) == (19, 12)
 
 
-def test_focus_range_rejects_a_zero_start():
-    with pytest.raises(ValidationError):
-        FocusRange(start_line=0, end_line=4)
+def test_focus_range_truncates_an_overlong_label():
+    focus = FocusRange(start_line=1, end_line=2, label="n" * 500)
+    assert len(focus.label) == MAX_FOCUS_LABEL_CHARS
 
 
 def test_focus_range_flattens_a_multiline_label():

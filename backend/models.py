@@ -1,4 +1,4 @@
-from pydantic import BaseModel, Field, field_validator, model_validator
+from pydantic import BaseModel, Field, field_validator
 from typing import List, Literal, Optional
 
 
@@ -35,13 +35,19 @@ class FocusRange(BaseModel):
     `code` still carries the whole file, because a hint about a function is
     usually wrong without its imports and callers. This narrows the model's
     attention inside that file rather than replacing it.
+
+    Deliberately permissive: `focus` is an optional enrichment, not a
+    contract the client must satisfy exactly. An inverted or out-of-range
+    span is nonsensical, not invalid — rejecting it here would turn a
+    degradable failure into a 422 that silences the tutor entirely.
+    `focus_instruction` and `generate_line_hint`'s window guard are the
+    single gate that decides whether a span is usable.
     """
 
-    start_line: int = Field(..., ge=1, description="1-based first line of the block")
-    end_line: int = Field(..., ge=1, description="1-based last line, inclusive")
+    start_line: int = Field(..., description="1-based first line of the block")
+    end_line: int = Field(..., description="1-based last line, inclusive")
     label: str = Field(
         default="",
-        max_length=MAX_FOCUS_LABEL_CHARS,
         description="Symbol name for the block, for the tutor to refer to",
     )
 
@@ -49,14 +55,10 @@ class FocusRange(BaseModel):
     @classmethod
     def _single_line(cls, value: str) -> str:
         # The label lands in the prompt outside the untrusted-input wrapper, so
-        # it must not be able to contain its own instructions on a new line.
-        return " ".join(value.split())
-
-    @model_validator(mode="after")
-    def _ordered(self) -> "FocusRange":
-        if self.end_line < self.start_line:
-            raise ValueError("end_line must be >= start_line")
-        return self
+        # it must not be able to carry its own instructions on a new line.
+        # Truncating rather than rejecting keeps a long symbol name from
+        # costing the student their hint.
+        return " ".join(value.split())[:MAX_FOCUS_LABEL_CHARS]
 
 
 class HintRequest(BaseModel):
