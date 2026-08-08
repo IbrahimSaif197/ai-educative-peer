@@ -1,6 +1,6 @@
 import * as vscode from "vscode";
-import { InlineTutor } from "../inlineTutor";
-import { RateLimitError } from "../apiClient";
+import { InlineTutor, errorStateFor, lensTitle } from "../inlineTutor";
+import { AuthError, RateLimitError } from "../apiClient";
 
 const mock = vscode as any;
 
@@ -447,5 +447,68 @@ describe("line hints", () => {
     expect(vscode.window.showInformationMessage).toHaveBeenCalledWith(
       expect.stringContaining("open a supported file first")
     );
+  });
+});
+
+describe("lensTitle", () => {
+  it("shows the offer while idle", () => {
+    expect(lensTitle({ kind: "idle" }, "💡 Ask EduPeer")).toBe("💡 Ask EduPeer");
+  });
+
+  it("shows that it is working the moment it is clicked", () => {
+    expect(lensTitle({ kind: "loading" }, "💡 Ask EduPeer")).toBe("⏳ EduPeer is thinking…");
+  });
+
+  it("shows the hint once it arrives", () => {
+    expect(lensTitle({ kind: "ready", hint: "what if n is empty?" }, "💡 Ask EduPeer")).toBe(
+      "💡 what if n is empty?"
+    );
+  });
+
+  it("says so when there is nothing to say", () => {
+    expect(lensTitle({ kind: "empty" }, "💡 Ask EduPeer")).toBe(
+      "✓ Nothing to flag on this line"
+    );
+  });
+
+  it("offers a retry on failure", () => {
+    expect(
+      lensTitle({ kind: "error", reason: "llm", message: "The tutor couldn't answer that" }, "x")
+    ).toBe("⚠️ The tutor couldn't answer that — click to retry");
+  });
+
+  it("sends an unauthenticated student to sign in, not to retry", () => {
+    expect(
+      lensTitle({ kind: "error", reason: "auth", message: "Sign in to get hints" }, "x")
+    ).toBe("⚠️ Sign in to get hints — click to sign in");
+  });
+});
+
+describe("errorStateFor", () => {
+  it("names a broken sign-in", () => {
+    const state = errorStateFor(new AuthError("no token", 401), true);
+    expect(state).toMatchObject({ kind: "error", reason: "auth" });
+  });
+
+  it("names throttling and says how long", () => {
+    const state = errorStateFor(new RateLimitError(120), true);
+    expect(state).toMatchObject({ kind: "error", reason: "rate-limit" });
+    expect(state.kind === "error" && state.message).toContain("2m");
+  });
+
+  it("names an unreachable backend before it names anything else", () => {
+    const state = errorStateFor(new Error("fetch failed"), false);
+    expect(state).toMatchObject({ kind: "error", reason: "offline" });
+  });
+
+  it("names an LLM failure from the backend's 502", () => {
+    const state = errorStateFor(new Error("line-hint failed (502)"), true);
+    expect(state).toMatchObject({ kind: "error", reason: "llm" });
+  });
+
+  it("still produces a state for something it has never seen", () => {
+    const state = errorStateFor(new Error("kaboom"), true);
+    expect(state).toMatchObject({ kind: "error", reason: "unknown" });
+    expect(state.kind === "error" && state.message.length).toBeGreaterThan(0);
   });
 });

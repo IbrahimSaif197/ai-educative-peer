@@ -1,5 +1,6 @@
 import * as vscode from "vscode";
-import { ApiClient, LineFlag, RateLimitError } from "./apiClient";
+import { ApiClient, AuthError, LineFlag, RateLimitError } from "./apiClient";
+import { AnnotationStore, ContentChange, LensState } from "./annotationStore";
 import {
   SUPPORTED_LANGUAGES,
   SUPPORTED_LANGUAGE_IDS,
@@ -9,6 +10,51 @@ import {
 import { localLineHint } from "./localTutor";
 
 import { codeFingerprint as fingerprintCode } from "./pedagogy";
+
+/**
+ * The failure classes a student can actually do something about, each with the
+ * one sentence that says what to do. Everything that used to be swallowed at
+ * the catch site now lands here instead.
+ */
+export function errorStateFor(err: unknown, apiAvailable: boolean): LensState {
+  if (err instanceof RateLimitError) {
+    const minutes = Math.max(1, Math.round(err.retryAfterSeconds / 60));
+    return {
+      kind: "error",
+      reason: "rate-limit",
+      message: `Hint budget used up, back in ${minutes}m`,
+    };
+  }
+  if (err instanceof AuthError) {
+    return { kind: "error", reason: "auth", message: "Sign in to get hints" };
+  }
+  if (!apiAvailable) {
+    return { kind: "error", reason: "offline", message: "Backend unreachable" };
+  }
+  const message = (err as { message?: string })?.message ?? String(err);
+  if (/\(5\d\d\)/.test(message)) {
+    return { kind: "error", reason: "llm", message: "The tutor couldn't answer that" };
+  }
+  return { kind: "error", reason: "unknown", message: "That didn't work" };
+}
+
+/** What the lens says. `fallback` is the idle title for this line. */
+export function lensTitle(state: LensState, fallback: string): string {
+  switch (state.kind) {
+    case "loading":
+      return "⏳ EduPeer is thinking…";
+    case "ready":
+      return `💡 ${state.hint}`;
+    case "empty":
+      return "✓ Nothing to flag on this line";
+    case "error":
+      return state.reason === "auth"
+        ? `⚠️ ${state.message} — click to sign in`
+        : `⚠️ ${state.message} — click to retry`;
+    default:
+      return fallback;
+  }
+}
 
 type LineHintCache = Map<string, { hint: string; concept: string }>;
 
