@@ -401,7 +401,13 @@ describe("line hints", () => {
     });
     const { editor } = activate(api);
     await mock.__runCommand("edupeer.nudgeLine", editor.document.uri, 2);
-    expect(api.getLineHint).toHaveBeenCalledWith(PY, 3, "python");
+    // Line 2 (0-based) sits inside `average`'s body (lines 0-4), so the
+    // heuristic resolves the whole function as the focus block.
+    expect(api.getLineHint).toHaveBeenCalledWith(PY, 3, "python", {
+      start_line: 1,
+      end_line: 5,
+      label: "average",
+    });
     const call = editor.setDecorations.mock.calls.at(-1);
     expect(call[1][0].renderOptions.after.contentText).toBe("💡 Check the bound");
   });
@@ -593,7 +599,11 @@ describe("InlineTutor — the lens is the feedback channel", () => {
     const { doc, thinking } = setup(api);
 
     const pending = vscode.__runCommand("edupeer.nudgeLine", doc.uri, 1);
-    await Promise.resolve();
+    // fetchLineHint now awaits resolveFocus() before calling getLineHint,
+    // which adds a few more microtask hops (it awaits the document-symbol
+    // provider) — one tick is no longer enough to guarantee getLineHint has
+    // actually been invoked and `release` rebound to its real resolver.
+    for (let i = 0; i < 10; i++) await Promise.resolve();
 
     expect(lensTitles(doc)).toContain("⏳ EduPeer is thinking…");
     expect(thinking[0]).toBe(true);
@@ -735,5 +745,25 @@ describe("InlineTutor — the lens is the feedback channel", () => {
       1,
       "what is n here?"
     );
+  });
+
+  describe("InlineTutor — line hints carry the focus block", () => {
+    it("sends the enclosing block's 1-based span with the line hint", async () => {
+      const api = {
+        isAvailable: true,
+        getLineHint: jest.fn().mockResolvedValue({ hint: "h", concept: "division" }),
+      };
+      const { doc } = setup(api);
+      vscode.commands.executeCommand.mockResolvedValue(undefined); // heuristic path
+
+      await vscode.__runCommand("edupeer.nudgeLine", doc.uri, 1);
+
+      expect(api.getLineHint).toHaveBeenCalledWith(
+        doc.getText(),
+        2,
+        "python",
+        { start_line: 1, end_line: 2, label: "f" }
+      );
+    });
   });
 });

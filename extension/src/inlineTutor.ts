@@ -8,6 +8,7 @@ import {
   supportedLanguageList,
 } from "./languages";
 import { localLineHint } from "./localTutor";
+import { resolveFocus } from "./focusScope";
 
 import { codeFingerprint as fingerprintCode } from "./pedagogy";
 
@@ -366,7 +367,15 @@ export class InlineTutor {
     showState({ kind: "loading" });
     if (opts.force) this.onThinkingChange(true);
     try {
-      const res = await this.api.getLineHint(doc.getText(), line + 1, doc.languageId);
+      // The same block the sidebar is showing, so both surfaces agree on
+      // what "the code you're working on" means.
+      const at = new vscode.Position(line, 0);
+      const focus = await resolveFocus(doc, new vscode.Selection(at, at));
+      const res = await this.api.getLineHint(doc.getText(), line + 1, doc.languageId, {
+        start_line: focus.startLine + 1,
+        end_line: focus.endLine + 1,
+        label: focus.label,
+      });
       if (res.hint) {
         store.setHint(line, { hint: res.hint, concept: res.concept });
         showState({ kind: "ready", hint: res.hint });
