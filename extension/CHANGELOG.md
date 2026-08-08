@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.0.1
+
+- Fix sign-in failing with "Failed to fetch". The signed-in session is now
+  handed back through VS Code's URI scheme instead of a POST to a local
+  server, which browsers had started gating behind a permission prompt about
+  accessing other apps on your device. Declining that prompt previously left
+  sign-in broken with no way to recover.
+
 ## 1.0.0
 
 First public release.
