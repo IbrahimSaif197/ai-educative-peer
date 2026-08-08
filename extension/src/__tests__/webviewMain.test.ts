@@ -136,29 +136,74 @@ describe("restoring a transcript", () => {
 
 describe("the code preview", () => {
   it("renders one numbered row per line", () => {
-    post({ type: "activeCode", code: "a = 1\nb = 2\n", fileName: "/tmp/demo.py", language: "Python" });
+    post({
+      type: "focus",
+      focusCode: "a = 1\nb = 2\n",
+      startLine: 1,
+      endLine: 3,
+      cursorLine: 1,
+      fileName: "/tmp/demo.py",
+      language: "Python",
+      totalLines: 3,
+    });
     expect($$("#codeSnippet .ln")).toHaveLength(3);
   });
 
   it("shows the file name without its directory", () => {
-    post({ type: "activeCode", code: "x", fileName: "/home/me/demo.py", language: "Python" });
+    post({
+      type: "focus",
+      focusCode: "x",
+      startLine: 1,
+      endLine: 1,
+      cursorLine: 1,
+      fileName: "/home/me/demo.py",
+      language: "Python",
+      totalLines: 1,
+    });
     expect(el("fileName").textContent).toBe("demo.py");
   });
 
   it("shows the language chip", () => {
-    post({ type: "activeCode", code: "x", fileName: "a.py", language: "Python" });
+    post({
+      type: "focus",
+      focusCode: "x",
+      startLine: 1,
+      endLine: 1,
+      cursorLine: 1,
+      fileName: "a.py",
+      language: "Python",
+      totalLines: 1,
+    });
     expect((el("langChip") as HTMLElement).hidden).toBe(false);
     expect(el("langChip").textContent).toBe("Python");
   });
 
   it("hides the chip for an unsupported language", () => {
-    post({ type: "activeCode", code: "x", fileName: "a.md", language: "" });
+    post({
+      type: "focus",
+      focusCode: "x",
+      startLine: 1,
+      endLine: 1,
+      cursorLine: 1,
+      fileName: "a.md",
+      language: "",
+      totalLines: 1,
+    });
     expect((el("langChip") as HTMLElement).hidden).toBe(true);
   });
 
   it("caps the preview and says how much it dropped", () => {
     const code = Array.from({ length: 260 }, (_, i) => `line ${i}`).join("\n");
-    post({ type: "activeCode", code, fileName: "big.py", language: "Python" });
+    post({
+      type: "focus",
+      focusCode: code,
+      startLine: 1,
+      endLine: 260,
+      cursorLine: 1,
+      fileName: "big.py",
+      language: "Python",
+      totalLines: 260,
+    });
     expect($$("#codeSnippet .ln")).toHaveLength(201);
     expect(el("codeSnippet").textContent).toContain("60 more lines");
   });
@@ -285,7 +330,16 @@ describe("streaming", () => {
 
 describe("the composer", () => {
   it("sends the typed question", () => {
-    post({ type: "activeCode", code: "x = 1", fileName: "a.py", language: "Python" });
+    post({
+      type: "focus",
+      focusCode: "x = 1",
+      startLine: 1,
+      endLine: 1,
+      cursorLine: 1,
+      fileName: "a.py",
+      language: "Python",
+      totalLines: 1,
+    });
     (el("input") as HTMLTextAreaElement).value = "why does it crash?";
     (el("send") as HTMLButtonElement).click();
     const msg = lastSent("askHint");
@@ -687,5 +741,130 @@ describe("stream sequencing", () => {
     post({ type: "hint", seq: 1, hint: "done", hint_level: 1, concept_tags: [], mode: "hint" });
     expect(lastTurn().getAttribute("aria-hidden")).toBeNull();
     expect(lastTurn().textContent).toContain("done");
+  });
+});
+
+// This file's harness predates `loadWebview()`: `beforeEach` already calls
+// `load()` and resets the module-level `sent`/`saved`, and `post`/`el`/`$$`
+// read and drive the same jsdom `document` those tests share. The new tests
+// below use that existing harness rather than a `loadWebview()` wrapper that
+// does not exist in this file.
+describe("webview — focus panel", () => {
+  it("renders the focus block with its real line numbers", () => {
+    post({
+      type: "focus",
+      focusCode: "def f(n):\n    return 1 / n",
+      breadcrumb: "demo.py › f",
+      startLine: 12,
+      endLine: 13,
+      cursorLine: 13,
+      fileName: "/tmp/demo.py",
+      language: "Python",
+      totalLines: 40,
+    });
+
+    const gutters = $$(".ln__no").map((n) => n.textContent);
+    expect(gutters).toEqual(["12", "13"]);
+    expect(el("fileName").textContent).toBe("demo.py › f");
+    expect(el("focusRange").textContent).toBe("lines 12–13");
+  });
+
+  it("marks the cursor's line", () => {
+    post({
+      type: "focus",
+      focusCode: "a\nb\nc",
+      breadcrumb: "demo.py › f",
+      startLine: 1,
+      endLine: 3,
+      cursorLine: 2,
+      fileName: "/tmp/demo.py",
+      language: "Python",
+      totalLines: 3,
+    });
+
+    const marked = $$(".ln.is-cursor");
+    expect(marked).toHaveLength(1);
+    expect(marked[0].textContent).toContain("b");
+  });
+
+  it("asks the extension for the full file when the toggle is used", () => {
+    post({
+      type: "focus",
+      focusCode: "a",
+      breadcrumb: "demo.py › f",
+      startLine: 1,
+      endLine: 1,
+      cursorLine: 1,
+      fileName: "/tmp/demo.py",
+      language: "Python",
+      totalLines: 80,
+    });
+
+    (el("scopeToggle") as HTMLButtonElement).click();
+
+    expect(sent).toContainEqual({ type: "requestFullFile" });
+  });
+
+  it("still asks about the focus block while the full file is shown", () => {
+    post({
+      type: "focus",
+      focusCode: "def f(n):",
+      breadcrumb: "demo.py › f",
+      startLine: 1,
+      endLine: 1,
+      cursorLine: 1,
+      fileName: "/tmp/demo.py",
+      language: "Python",
+      totalLines: 80,
+    });
+    post({ type: "fullFile", code: "import math\ndef f(n):" });
+
+    (el("input") as HTMLTextAreaElement).value = "why?";
+    (el("send") as HTMLButtonElement).click();
+
+    const ask = lastSent("askHint");
+    expect(ask.code).toBe("def f(n):");
+  });
+
+  it("tolerates a focus message with no editor open", () => {
+    // The wire shape sidebarProvider posts when there is no active editor:
+    // startLine/endLine/cursorLine/breadcrumb are absent, not zero.
+    post({ type: "focus", focusCode: "", fileName: "", language: "", totalLines: 0 });
+
+    expect(el("codeSnippet").textContent).toContain("No file open");
+    expect(el("fileName").textContent).toBe("No active file");
+    expect(el("focusRange").textContent).toBe("");
+    expect((el("scopeToggle") as HTMLElement).hidden).toBe(true);
+  });
+
+  it("collapses the whole-file toggle when a new focus block arrives", () => {
+    post({
+      type: "focus",
+      focusCode: "a",
+      startLine: 1,
+      endLine: 1,
+      cursorLine: 1,
+      fileName: "/tmp/demo.py",
+      language: "Python",
+      totalLines: 80,
+    });
+    (el("scopeToggle") as HTMLButtonElement).click();
+    expect(el("scopeToggle").textContent).toBe("Just this block");
+    expect(el("scopeToggle").getAttribute("aria-pressed")).toBe("true");
+
+    post({
+      type: "focus",
+      focusCode: "def g():",
+      startLine: 5,
+      endLine: 5,
+      cursorLine: 5,
+      fileName: "/tmp/demo.py",
+      language: "Python",
+      totalLines: 80,
+    });
+
+    expect(el("scopeToggle").textContent).toBe("Whole file");
+    expect(el("scopeToggle").getAttribute("aria-pressed")).toBe("false");
+    expect($$(".ln__no").map((n) => n.textContent)).toEqual(["5"]);
   });
 });

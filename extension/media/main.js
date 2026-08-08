@@ -233,7 +233,16 @@
 
   // ----------------------------------------------------------- code preview
 
-  function renderCode(code) {
+  const focusRangeEl = el("focusRange");
+  const scopeToggleEl = el("scopeToggle");
+
+  /** The block every ask is about, whatever the preview happens to show. */
+  let focusCode = "";
+  let focusStartLine = 1;
+  let cursorLine = 0;
+  let showingWholeFile = false;
+
+  function renderLines(code, firstLine, markLine) {
     while (codeEl.firstChild) codeEl.removeChild(codeEl.firstChild);
     if (!code) {
       const line = document.createElement("span");
@@ -244,12 +253,20 @@
     }
     const lines = code.split("\n");
     const shown = lines.slice(0, MAX_PREVIEW_LINES);
-    for (const text of shown) {
-      const line = document.createElement("span");
-      line.className = "ln";
-      line.textContent = text || " ";
-      codeEl.appendChild(line);
-    }
+    shown.forEach((text, offset) => {
+      const number = firstLine + offset;
+      const row = document.createElement("span");
+      row.className = number === markLine ? "ln is-cursor" : "ln";
+      const gutter = document.createElement("span");
+      gutter.className = "ln__no";
+      gutter.textContent = String(number);
+      const body = document.createElement("span");
+      body.className = "ln__text";
+      body.textContent = text || " ";
+      row.appendChild(gutter);
+      row.appendChild(body);
+      codeEl.appendChild(row);
+    });
     if (lines.length > shown.length) {
       const more = document.createElement("span");
       more.className = "ln ln--empty";
@@ -257,6 +274,17 @@
       codeEl.appendChild(more);
     }
   }
+
+  scopeToggleEl.addEventListener("click", () => {
+    showingWholeFile = !showingWholeFile;
+    scopeToggleEl.setAttribute("aria-pressed", String(showingWholeFile));
+    scopeToggleEl.textContent = showingWholeFile ? "Just this block" : "Whole file";
+    if (showingWholeFile) {
+      vscode.postMessage({ type: "requestFullFile" });
+    } else {
+      renderLines(focusCode, focusStartLine, cursorLine);
+    }
+  });
 
   collapseBtn.addEventListener("click", () => {
     const collapsed = !codeEl.hidden;
@@ -496,14 +524,33 @@
         break;
       }
 
-      case "activeCode":
-        currentCode = msg.code || "";
-        renderCode(currentCode);
-        fileNameEl.textContent = msg.fileName
-          ? msg.fileName.split(/[\\/]/).pop()
-          : "No active file";
+      case "focus":
+        focusCode = msg.focusCode || "";
+        focusStartLine = msg.startLine || 1;
+        cursorLine = msg.cursorLine || 0;
+        currentCode = focusCode;
+        showingWholeFile = false;
+        scopeToggleEl.setAttribute("aria-pressed", "false");
+        scopeToggleEl.textContent = "Whole file";
+        scopeToggleEl.hidden = !msg.totalLines;
+        renderLines(focusCode, focusStartLine, cursorLine);
+        fileNameEl.textContent =
+          msg.breadcrumb || (msg.fileName ? msg.fileName.split(/[\\/]/).pop() : "No active file");
+        fileNameEl.title = msg.fileName || "";
+        focusRangeEl.textContent =
+          msg.startLine && msg.endLine
+            ? msg.startLine === msg.endLine
+              ? `line ${msg.startLine}`
+              : `lines ${msg.startLine}–${msg.endLine}`
+            : "";
         langChipEl.textContent = msg.language || "";
         langChipEl.hidden = !msg.language;
+        break;
+
+      case "fullFile":
+        // The preview widens; `currentCode` deliberately does not, so an ask
+        // stays about the block even while the whole file is on screen.
+        renderLines(msg.code || "", 1, cursorLine);
         break;
 
       case "userMessage":
@@ -644,7 +691,6 @@
 
       case "externalAsk":
         currentCode = msg.code || currentCode;
-        renderCode(currentCode);
         break;
     }
   });
@@ -658,7 +704,7 @@
   } else {
     showEmptyState();
   }
-  renderCode("");
+  renderLines("", 1, 0);
 
   vscode.postMessage({ type: "ready" });
 })();

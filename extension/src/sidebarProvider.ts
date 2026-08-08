@@ -158,6 +158,9 @@ export class EduPeerSidebarProvider implements vscode.WebviewViewProvider {
         case "refreshCode":
           await this.sendFocus();
           return;
+        case "requestFullFile":
+          this.post({ type: "fullFile", code: this.lastFullCode });
+          return;
         case "signIn":
           await vscode.commands.executeCommand("edupeer.signIn");
           return;
@@ -702,6 +705,11 @@ export class EduPeerSidebarProvider implements vscode.WebviewViewProvider {
       <button id="reviewBtn" class="btn btn--accent btn--sm" hidden title="A spaced-review exercise is ready">Review</button>
       <button id="collapseCode" class="btn btn--ghost btn--sm" title="Show or hide the code preview" aria-expanded="true">Hide</button>
       <button id="refreshCode" class="btn btn--ghost btn--sm" title="Re-read the active file">Refresh</button>
+    </div>
+    <div class="filecard__scope">
+      <span id="focusRange" class="filecard__range"></span>
+      <span class="topbar__spacer"></span>
+      <button id="scopeToggle" class="btn btn--ghost btn--sm" aria-pressed="false" hidden>Whole file</button>
     </div>
     <pre id="codeSnippet" class="filecard__code" tabindex="0"></pre>
   </section>

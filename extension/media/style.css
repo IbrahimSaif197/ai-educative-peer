@@ -247,7 +247,6 @@ body {
   white-space: nowrap;
 }
 
-/* Line numbers come from a counter, so the code itself stays selectable. */
 .filecard__code {
   margin: 0;
   padding: var(--s3) var(--s4);
@@ -260,27 +259,50 @@ body {
   font-size: var(--t-micro);
   line-height: 1.6;
   white-space: pre;
-  counter-reset: line;
 }
 
-.filecard__code .ln {
+.filecard__scope {
+  display: flex;
+  align-items: center;
+  gap: var(--s3);
+  padding: 0 var(--s5) var(--s3);
+}
+
+.filecard__range {
+  font-family: var(--mono);
+  font-size: var(--t-micro);
+  color: var(--ink-dim);
+}
+
+/* Line numbers are real DOM content now (`.ln__no`), not a CSS counter, so
+   the preview's gutter always matches the editor's. */
+.ln {
+  display: grid;
+  grid-template-columns: 2.5ch 1fr;
+  gap: var(--s4);
+}
+
+/* The "No file open" and "… N more lines" rows are a single line of text,
+   not a numbered code line, so they opt out of the two-column grid. */
+.ln--empty {
   display: block;
 }
 
-.filecard__code .ln::before {
-  counter-increment: line;
-  content: counter(line);
-  display: inline-block;
-  width: 2.5ch;
-  margin-right: var(--s4);
-  text-align: right;
+.ln__no {
   color: var(--ink-dim);
-  opacity: 0.55;
+  opacity: 0.6;
+  text-align: right;
   user-select: none;
 }
 
-.filecard__code .ln--empty::before {
-  opacity: 0.3;
+.ln__text {
+  white-space: pre;
+}
+
+/* The line the cursor is on, so the panel and the editor agree. */
+.ln.is-cursor {
+  background: var(--surface-sunken);
+  box-shadow: inset 2px 0 0 var(--accent);
 }
 
 /* ------------------------------------------------------------------- chat */
