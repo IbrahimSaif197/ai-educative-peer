@@ -329,7 +329,11 @@ hosted services required.
    web service.
 2. It then prompts for the six values marked `sync: false`. Paste the same
    values as your local `.env`. `FIREBASE_PRIVATE_KEY` goes in as a single line
-   with the literal `\n` escapes intact — `firebase_service.py` un-escapes them.
+   with the literal `\n` escapes intact but **without** the surrounding double
+   quotes: those are dotenv syntax that `python-dotenv` strips on load, whereas
+   Render stores the field verbatim. `firebase_service.py` un-escapes the `\n`
+   sequences itself. A key pasted with the quotes still attached builds fine
+   and then fails at startup in `credentials.Certificate`.
 3. Apply. First build takes a few minutes (`grpcio` compiles from source if a
    wheel is missing, which is why `PYTHON_VERSION` is pinned to 3.12.6).
 4. Confirm `https://<service>.onrender.com/health` returns

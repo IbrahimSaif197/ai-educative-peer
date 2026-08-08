@@ -28,8 +28,11 @@ services:
         sync: false
       - key: FIREBASE_PROJECT_ID
         sync: false
-      # Paste as a single line, keeping the literal \n escapes and the quotes —
-      # firebase_service.py:217 un-escapes them.
+      # Paste as a single line, keeping the literal \n escapes but WITHOUT the
+      # surrounding double quotes. The quotes in .env are dotenv syntax that
+      # python-dotenv strips; Render stores the field verbatim, so leaving them
+      # in makes credentials.Certificate fail at startup.
+      # firebase_service.py:217 un-escapes the \n sequences.
       - key: FIREBASE_PRIVATE_KEY
         sync: false
       - key: FIREBASE_CLIENT_EMAIL
