@@ -74,13 +74,14 @@ export class AnnotationStore {
     }));
   }
 
+  /** The one place a stored span becomes wire-shaped, 1-based line numbers. */
+  private toWireFlag(stored: StoredFlag): LineFlag {
+    return { ...stored.flag, line: stored.start + 1, end_line: stored.end + 1 };
+  }
+
   /** Flags in wire form, with their current (possibly shifted) line numbers. */
   flags(): LineFlag[] {
-    return this.storedFlags.map(({ start, end, flag }) => ({
-      ...flag,
-      line: start + 1,
-      end_line: end + 1,
-    }));
+    return this.storedFlags.map((s) => this.toWireFlag(s));
   }
 
   setHint(line: number, hint: LineHint): void {
@@ -102,7 +103,7 @@ export class AnnotationStore {
   annotationsAt(line: number): { flag?: LineFlag; hint?: LineHint } {
     const stored = this.storedFlags.find((f) => line >= f.start && line <= f.end);
     return {
-      flag: stored ? { ...stored.flag, line: stored.start + 1, end_line: stored.end + 1 } : undefined,
+      flag: stored ? this.toWireFlag(stored) : undefined,
       hint: this.hints.get(line),
     };
   }
