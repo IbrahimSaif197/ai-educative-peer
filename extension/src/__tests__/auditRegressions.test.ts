@@ -137,13 +137,18 @@ const ofType = (posted: any[], type: string) => posted.filter((m) => m.type === 
 beforeEach(() => mock.__reset());
 
 describe("the hint ladder is keyed on the problem", () => {
-  it("sends the document uri as problem_key", async () => {
+  it("keys problem_key on the document uri plus the focused symbol", async () => {
     const h = build();
     await h.send({ type: "ready" });
     await h.send({ type: "askHint", question: "help", code: CODE, mode: "hint" });
     await h.send({ type: "explainSkip" });
     const req = h.api.streamHint.mock.calls[0][0];
-    expect(req.problem_key).toBe(mock.window.activeTextEditor.document.uri.toString());
+    // A different function is a different problem: being stuck on `main`
+    // should not start at hint 3 because you were stuck on `parse` a minute
+    // ago, so the key carries the resolved symbol, not just the file.
+    expect(req.problem_key).toBe(
+      `${mock.window.activeTextEditor.document.uri.toString()}#average`
+    );
   });
 });
 
