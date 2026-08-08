@@ -225,6 +225,19 @@
           "default": true,
           "description": "Show inline Socratic hints beside the line you're editing."
         },
+        "edupeer.lensMode": {
+          "type": "string",
+          "enum": [
+            "all",
+            "flagged"
+          ],
+          "enumDescriptions": [
+            "Offer a hint on every function and class, and show flagged lines.",
+            "Only show lines EduPeer has actually flagged."
+          ],
+          "default": "all",
+          "description": "Which CodeLens entries EduPeer shows above your code. Set edupeer.inlineHints to false to turn the inline surface off entirely."
+        },
         "edupeer.autoScan": {
           "type": "boolean",
           "default": true,
