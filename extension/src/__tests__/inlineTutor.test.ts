@@ -599,14 +599,18 @@ describe("InlineTutor — the lens is the feedback channel", () => {
     const { doc, thinking } = setup(api);
 
     const pending = vscode.__runCommand("edupeer.nudgeLine", doc.uri, 1);
-    // fetchLineHint now awaits resolveFocus() before calling getLineHint,
-    // which adds a few more microtask hops (it awaits the document-symbol
-    // provider) — one tick is no longer enough to guarantee getLineHint has
-    // actually been invoked and `release` rebound to its real resolver.
-    for (let i = 0; i < 10; i++) await Promise.resolve();
 
+    // Zero ticks: the lens must have flipped before anything was awaited.
+    // Flushing first would let a `showState` moved after `await resolveFocus`
+    // pass just as easily, which is the regression this test exists to catch.
     expect(lensTitles(doc)).toContain("⏳ EduPeer is thinking…");
     expect(thinking[0]).toBe(true);
+
+    // fetchLineHint now awaits resolveFocus() before calling getLineHint,
+    // which adds a few more microtask hops (it awaits the document-symbol
+    // provider) — flush enough ticks that getLineHint has actually been
+    // invoked and `release` rebound to its real resolver before calling it.
+    for (let i = 0; i < 10; i++) await Promise.resolve();
 
     release({ hint: "what is n here?", concept: "division" });
     await pending;
