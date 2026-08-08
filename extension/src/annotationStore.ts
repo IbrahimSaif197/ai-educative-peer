@@ -100,6 +100,17 @@ export class AnnotationStore {
     return this.lensStates.get(line) ?? IDLE;
   }
 
+  /**
+   * Lines carrying a state other than idle, ascending.
+   *
+   * The lens provider needs these: Ctrl+Alt+H works on any line, so a line the
+   * student nudged must be able to show its own state even when it is neither
+   * a definition nor a flagged line.
+   */
+  activeLensLines(): number[] {
+    return [...this.lensStates.keys()].sort((a, b) => a - b);
+  }
+
   annotationsAt(line: number): { flag?: LineFlag; hint?: LineHint } {
     const stored = this.storedFlags.find((f) => line >= f.start && line <= f.end);
     return {

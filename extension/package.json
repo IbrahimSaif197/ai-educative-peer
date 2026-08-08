@@ -116,6 +116,14 @@
       {
         "command": "edupeer.signOut",
         "title": "EduPeer: Sign Out"
+      },
+      {
+        "command": "edupeer.deepenLine",
+        "title": "EduPeer: Go Deeper on This Line"
+      },
+      {
+        "command": "edupeer.dismissLine",
+        "title": "EduPeer: Dismiss This Line Hint"
       }
     ],
     "menus": {
@@ -159,6 +167,14 @@
       "commandPalette": [
         {
           "command": "edupeer.discussLines",
+          "when": "false"
+        },
+        {
+          "command": "edupeer.deepenLine",
+          "when": "false"
+        },
+        {
+          "command": "edupeer.dismissLine",
           "when": "false"
         }
       ]

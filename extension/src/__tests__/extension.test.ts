@@ -20,6 +20,8 @@ const EXPECTED_COMMANDS = [
   // Registered by InlineTutor, which activate() constructs.
   "edupeer.nudgeLine",
   "edupeer.scanFile",
+  "edupeer.deepenLine",
+  "edupeer.dismissLine",
 ];
 
 const PY = "def add(a, b):\n    return a - b\n";

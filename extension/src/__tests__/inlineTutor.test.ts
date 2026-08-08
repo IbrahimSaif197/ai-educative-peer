@@ -113,7 +113,7 @@ describe("provideCodeLenses", () => {
     const { doc } = activate(makeApi());
     const lenses = lensProvider().provideCodeLenses(doc);
     expect(lenses).toHaveLength(1);
-    expect(lenses[0].command.title).toBe("💡 Get a hint");
+    expect(lenses[0].command.title).toBe("💡 Ask EduPeer");
     expect(lenses[0].command.command).toBe("edupeer.nudgeLine");
   });
 
@@ -320,7 +320,9 @@ describe("scanning and diagnostics", () => {
     const api = makeApi({ scanCode: jest.fn(async () => ({ flags: [] })) });
     const { tutor, doc } = activate(api);
     await runScheduledScan();
-    mock.__state.listeners.textDocument.forEach((fn: any) => fn({ document: doc }));
+    mock.__state.listeners.textDocument.forEach((fn: any) =>
+      fn({ document: doc, contentChanges: [] })
+    );
     await runScheduledScan();
     expect(api.scanCode).toHaveBeenCalledTimes(1);
   });
@@ -355,7 +357,9 @@ describe("scanning and diagnostics", () => {
     await runScheduledScan();
     expect(api.scanCode).toHaveBeenCalledTimes(1);
     // A further edit inside the window must not schedule another scan.
-    mock.__state.listeners.textDocument.forEach((fn: any) => fn({ document: doc }));
+    mock.__state.listeners.textDocument.forEach((fn: any) =>
+      fn({ document: doc, contentChanges: [] })
+    );
     await runScheduledScan();
     expect(api.scanCode).toHaveBeenCalledTimes(1);
   });
@@ -417,14 +421,17 @@ describe("line hints", () => {
     );
   });
 
-  it("falls back to a local rule when throttled", async () => {
+  it("does not fall back to a local rule merely for being throttled", async () => {
+    // Being rate-limited is not the same as being offline: the backend is
+    // still reachable, so the student gets a retryable wait message (via the
+    // lens's error state) rather than a downgraded local-rule guess.
     const api = makeApi({
       getLineHint: jest.fn(async () => { throw new RateLimitError(30); }),
     });
     const { editor } = activate(api);
     await mock.__runCommand("edupeer.nudgeLine", editor.document.uri, 2);
     const call = editor.setDecorations.mock.calls.at(-1);
-    expect(call[1][0].renderOptions.after.contentText).toContain("💡");
+    expect(call[1]).toEqual([]);
   });
 
   it("shows nothing when the backend errors but is still reachable", async () => {
@@ -510,5 +517,130 @@ describe("errorStateFor", () => {
     const state = errorStateFor(new Error("kaboom"), true);
     expect(state).toMatchObject({ kind: "error", reason: "unknown" });
     expect(state.kind === "error" && state.message.length).toBeGreaterThan(0);
+  });
+});
+
+describe("InlineTutor — the lens is the feedback channel", () => {
+  const vscode = require("vscode");
+
+  const SOURCE = ["def f(n):", "    return 1 / n", "", "def g():", "    return f(0)"].join("\n");
+
+  function setup(api: any) {
+    vscode.__reset();
+    vscode.__state.configuration = { inlineHints: true, lensMode: "all", autoScan: false };
+    const doc = vscode.__makeDocument(SOURCE, "python", "/tmp/demo.py");
+    const editor = vscode.__makeEditor(doc, 1, 0);
+    vscode.window.activeTextEditor = editor;
+    vscode.window.visibleTextEditors = [editor];
+    const thinking: boolean[] = [];
+    const tutor = new (require("../inlineTutor").InlineTutor)(
+      { subscriptions: [] },
+      api,
+      (value: boolean) => thinking.push(value)
+    );
+    tutor.activate();
+    // Disposed by the file's top-level afterEach, like every other tutor this
+    // file creates — otherwise a debounce timer scheduled by a textDocument
+    // edit (see "clears the hint...") outlives the test that started it.
+    live.push(tutor);
+    return { tutor, doc, editor, thinking };
+  }
+
+  function lensTitles(doc: any) {
+    const { provider } = vscode.__state.codeLensProviders[0];
+    return provider.provideCodeLenses(doc).map((lens: any) => lens.command.title);
+  }
+
+  it("flips the lens to loading before the request resolves", async () => {
+    let release: (value: any) => void = () => {};
+    const api = {
+      isAvailable: true,
+      getLineHint: jest.fn(() => new Promise((resolve) => (release = resolve))),
+    };
+    const { doc, thinking } = setup(api);
+
+    const pending = vscode.__runCommand("edupeer.nudgeLine", doc.uri, 1);
+    await Promise.resolve();
+
+    expect(lensTitles(doc)).toContain("⏳ EduPeer is thinking…");
+    expect(thinking[0]).toBe(true);
+
+    release({ hint: "what is n here?", concept: "division" });
+    await pending;
+
+    expect(lensTitles(doc)).toContain("💡 what is n here?");
+    expect(thinking[thinking.length - 1]).toBe(false);
+  });
+
+  it("shows a retryable error instead of nothing when the call fails", async () => {
+    const api = {
+      isAvailable: true,
+      getLineHint: jest.fn().mockRejectedValue(new Error("line-hint failed (502)")),
+    };
+    const { doc } = setup(api);
+
+    await vscode.__runCommand("edupeer.nudgeLine", doc.uri, 1);
+
+    expect(lensTitles(doc)).toContain("⚠️ The tutor couldn't answer that — click to retry");
+  });
+
+  it("shows the empty state when the model has nothing to say", async () => {
+    const api = {
+      isAvailable: true,
+      getLineHint: jest.fn().mockResolvedValue({ hint: "", concept: "general" }),
+    };
+    const { doc } = setup(api);
+
+    await vscode.__runCommand("edupeer.nudgeLine", doc.uri, 1);
+
+    expect(lensTitles(doc)).toContain("✓ Nothing to flag on this line");
+  });
+
+  it("offers rather than accuses on definition lines", () => {
+    const { doc } = setup({ isAvailable: true, getLineHint: jest.fn() });
+
+    const titles = lensTitles(doc);
+    expect(titles).toContain("💡 Ask EduPeer");
+    expect(titles.join(" ")).not.toContain("Get a hint");
+  });
+
+  it("hides the offer lenses when lensMode is flagged", () => {
+    const { doc } = setup({ isAvailable: true, getLineHint: jest.fn() });
+    vscode.__state.configuration.lensMode = "flagged";
+
+    expect(lensTitles(doc)).toEqual([]);
+  });
+
+  it("shows the state on a nudged line even when lensMode hides the offers", async () => {
+    const api = {
+      isAvailable: true,
+      getLineHint: jest.fn().mockResolvedValue({ hint: "what is n here?", concept: "division" }),
+    };
+    const { doc } = setup(api);
+    vscode.__state.configuration.lensMode = "flagged";
+
+    await vscode.__runCommand("edupeer.nudgeLine", doc.uri, 1);
+
+    // Line 1 is neither a definition nor flagged. The student asked anyway.
+    expect(lensTitles(doc)).toContain("💡 what is n here?");
+  });
+
+  it("clears the hint when the student edits that line", async () => {
+    const api = {
+      isAvailable: true,
+      getLineHint: jest.fn().mockResolvedValue({ hint: "what is n here?", concept: "division" }),
+    };
+    const { doc } = setup(api);
+    await vscode.__runCommand("edupeer.nudgeLine", doc.uri, 1);
+    expect(lensTitles(doc)).toContain("💡 what is n here?");
+
+    for (const listener of vscode.__state.listeners.textDocument) {
+      listener({
+        document: doc,
+        contentChanges: [{ range: new vscode.Range(1, 4, 1, 18), text: "return 0" }],
+      });
+    }
+
+    expect(lensTitles(doc).join(" ")).not.toContain("what is n here?");
   });
 });
