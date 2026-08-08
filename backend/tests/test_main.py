@@ -88,6 +88,26 @@ class TestHealth:
         assert data["status"] == "ok"
         assert data["service"] == "edupeer-backend"
 
+    def test_reports_firestore_state(self, client, monkeypatch):
+        """A failed Firebase init must be visible here, not just in the logs."""
+        import main
+
+        monkeypatch.setattr(type(main.firebase), "enabled", property(lambda _: True))
+        assert client.get("/health").json()["firestore"] == "ok"
+
+        monkeypatch.setattr(type(main.firebase), "enabled", property(lambda _: False))
+        assert client.get("/health").json()["firestore"] == "unavailable"
+
+    def test_stays_ok_when_firestore_is_down(self, client, monkeypatch):
+        """Render's health check and the extension's probe both key off
+        `status`, so losing Firestore must not read as the service being down."""
+        import main
+
+        monkeypatch.setattr(type(main.firebase), "enabled", property(lambda _: False))
+        res = client.get("/health")
+        assert res.status_code == 200
+        assert res.json()["status"] == "ok"
+
 
 # ---------------------------------------------------------------------------
 # /hint

@@ -219,7 +219,7 @@ Awarded automatically after each interaction:
 
 | Method | Path             | Description                                    |
 | ------ | ---------------- | ---------------------------------------------- |
-| GET    | `/health`        | Health check.                                  |
+| GET    | `/health`        | Health check. Also reports `firestore`.        |
 | GET    | `/auth/config`   | Firebase web-app config (public values).       |
 | GET    | `/auth/login`    | Browser-based Firebase sign-in flow.           |
 | POST   | `/auth/migrate`  | Migrate anonymous progress to a signed-in account. |
@@ -337,7 +337,14 @@ hosted services required.
 3. Apply. First build takes a few minutes (`grpcio` compiles from source if a
    wheel is missing, which is why `PYTHON_VERSION` is pinned to 3.12.6).
 4. Confirm `https://<service>.onrender.com/health` returns
-   `{"status":"ok","service":"edupeer-backend"}`.
+   `{"status":"ok","service":"edupeer-backend","firestore":"ok"}`.
+
+   `firestore` is the field to watch. `FirebaseService.__init__` catches a
+   failed credential load, logs `[firebase] initialization failed: ...` and
+   carries on, so a bad service-account key produces a service that answers
+   every request normally while persisting nothing. `status` stays `ok` in that
+   case by design, so Render's health check and the extension's reachability
+   probe keep meaning "the process is serving".
 5. If Render assigned a hostname other than `edupeer-backend.onrender.com`,
    update the `edupeer.backendUrl` default in `extension/package.json` and
    `DEFAULT_BACKEND_URL` in `extension/src/extension.ts` to match.
@@ -357,9 +364,17 @@ tutor instead of the real one.
 Two ways round it, before putting the backend in front of testers:
 
 - Upgrade to the Starter plan (currently $7/month), which does not sleep.
-- Keep the free plan and ping `/health` every 10 minutes from an external cron
-  (GitHub Actions, cron-job.org). One always-on service fits inside the free
-  monthly instance-hour allowance, but nothing else will.
+- Keep the free plan and ping `/health` on a schedule.
+  `.github/workflows/keep-backend-awake.yml` does this every 10 minutes and
+  fails the run if `firestore` comes back `unavailable`, so a broken key
+  surfaces as a notification rather than as confused testers.
+
+The workflow is the cheaper option but not the more reliable one. GitHub's
+scheduled runs are best-effort and are often 5-15 minutes late, which can
+exceed Render's idle window; they are also disabled automatically after 60 days
+without a commit. A dedicated pinger (cron-job.org, UptimeRobot) keeps better
+time. One always-on free service uses roughly 730 of the 750 free instance
+hours a month, so this leaves no room for a second one.
 
 ## Publishing the extension to the Marketplace
 

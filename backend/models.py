@@ -82,6 +82,9 @@ class HintResponse(BaseModel):
 class HealthResponse(BaseModel):
     status: str
     service: str
+    # "ok" or "unavailable". FirebaseService swallows a failed init, so without
+    # this the service looks perfectly healthy while nothing persists.
+    firestore: str = "unknown"
 
 
 class UserBadges(BaseModel):

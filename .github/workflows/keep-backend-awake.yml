@@ -1,0 +1,48 @@
+# Render's free plan stops the service after ~15 minutes idle and takes ~50s to
+# wake. The extension abandons a request after 20s, so the first student to ask
+# a question after an idle period silently gets the offline fallback tutor.
+# Pinging /health keeps the instance up.
+#
+# Caveats worth knowing before relying on this:
+#   - GitHub's scheduled runs are best-effort and are routinely late by 5-15
+#     minutes under load, which can exceed Render's idle window. A dedicated
+#     pinger (cron-job.org, UptimeRobot) is more punctual.
+#   - Scheduled workflows are disabled automatically after 60 days with no
+#     commits to the repository.
+#   - One always-on free service consumes roughly 730 of the 750 free instance
+#     hours per month, so this leaves no room for a second free service.
+name: Keep backend awake
+
+on:
+  schedule:
+    - cron: "*/10 * * * *"
+  workflow_dispatch:
+
+# A late run must not stack up behind an in-flight one.
+concurrency:
+  group: keep-backend-awake
+  cancel-in-progress: true
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Ping /health
+        run: |
+          # --max-time 90 covers a cold start; the retries cover a wake that
+          # takes longer than that or a deploy happening mid-ping.
+          body=$(curl -fsS --max-time 90 --retry 3 --retry-delay 30 \
+                   --retry-all-errors \
+                   https://edupeer-backend.onrender.com/health)
+          echo "$body"
+
+          # A woken service that cannot reach Firestore still answers 200, so
+          # curl -f alone would call this a success while nothing persists.
+          case "$body" in
+            *'"firestore":"ok"'*)
+              echo "::notice::Backend awake, Firestore connected." ;;
+            *)
+              echo "::error::Backend is up but Firestore is unavailable — check the service-account key in Render's environment."
+              exit 1 ;;
+          esac

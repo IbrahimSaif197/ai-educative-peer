@@ -121,7 +121,17 @@ async def _cached_profile(uid: str) -> dict:
 
 @app.get("/health", response_model=HealthResponse)
 async def health() -> HealthResponse:
-    return HealthResponse(status="ok", service="edupeer-backend")
+    # `status` stays "ok" whenever the process is serving, so Render's health
+    # check and the extension's reachability probe keep their meaning. Firestore
+    # is reported separately: a bad service-account key leaves every feature
+    # working except persistence, which is otherwise invisible until a student
+    # notices their progress never saved. The reason is deliberately not
+    # exposed here — it goes to the logs, since this endpoint is public.
+    return HealthResponse(
+        status="ok",
+        service="edupeer-backend",
+        firestore="ok" if firebase.enabled else "unavailable",
+    )
 
 
 _STATIC_DIR = os.path.join(os.path.dirname(__file__), "static")
