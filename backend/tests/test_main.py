@@ -234,7 +234,9 @@ class TestHintStream:
         import main as app_main
         app_main._profile_cache.clear()
 
-        def fake_stream(code, question, level, language, history, mode, pacing, edit_summary=""):
+        def fake_stream(
+            code, question, level, language, history, mode, pacing, edit_summary="", focus=None,
+        ):
             yield {"type": "delta", "text": "Look at "}
             yield {"type": "delta", "text": "your loop."}
             yield {"type": "done", "hint": "Look at your loop. What do you think should happen next?",
@@ -780,7 +782,7 @@ class TestResponseCaching:
         import main as app_main
         calls = []
 
-        def fake_line_hint(code, line, language):
+        def fake_line_hint(code, line, language, focus=None):
             calls.append(line)
             return "Check the index", "indexing"
 

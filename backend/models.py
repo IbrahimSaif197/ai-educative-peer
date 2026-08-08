@@ -1,4 +1,4 @@
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator, model_validator
 from typing import List, Literal, Optional
 
 
@@ -24,6 +24,39 @@ MAX_CODE_CHARS = 40000
 MAX_QUESTION_CHARS = 4000
 MAX_GOAL_CHARS = 500
 MAX_PROBLEM_KEY_CHARS = 512
+
+
+MAX_FOCUS_LABEL_CHARS = 120
+
+
+class FocusRange(BaseModel):
+    """The block of code the student is actually working on.
+
+    `code` still carries the whole file, because a hint about a function is
+    usually wrong without its imports and callers. This narrows the model's
+    attention inside that file rather than replacing it.
+    """
+
+    start_line: int = Field(..., ge=1, description="1-based first line of the block")
+    end_line: int = Field(..., ge=1, description="1-based last line, inclusive")
+    label: str = Field(
+        default="",
+        max_length=MAX_FOCUS_LABEL_CHARS,
+        description="Symbol name for the block, for the tutor to refer to",
+    )
+
+    @field_validator("label")
+    @classmethod
+    def _single_line(cls, value: str) -> str:
+        # The label lands in the prompt outside the untrusted-input wrapper, so
+        # it must not be able to contain its own instructions on a new line.
+        return " ".join(value.split())
+
+    @model_validator(mode="after")
+    def _ordered(self) -> "FocusRange":
+        if self.end_line < self.start_line:
+            raise ValueError("end_line must be >= start_line")
+        return self
 
 
 class HintRequest(BaseModel):
@@ -70,6 +103,10 @@ class HintRequest(BaseModel):
         ge=0,
         le=3,
         description="Self-rated confidence before the hint; 0 means not given",
+    )
+    focus: Optional[FocusRange] = Field(
+        default=None,
+        description="The block inside `code` the student is working on",
     )
 
 
@@ -120,6 +157,10 @@ class LineHintRequest(BaseModel):
     code: str = Field(default="", max_length=MAX_CODE_CHARS, description="Full file content")
     line: int = Field(..., ge=1, description="1-based line the user is editing")
     language: str = Field(default="python", description="VS Code languageId of the code")
+    focus: Optional[FocusRange] = Field(
+        default=None,
+        description="The block inside `code` the student is working on",
+    )
 
 
 class LineHintResponse(BaseModel):

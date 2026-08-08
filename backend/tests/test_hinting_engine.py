@@ -582,3 +582,28 @@ class TestDesignTraceTable:
     def test_variables_of_wrong_type_yields_nothing(self):
         engine = self._engine('{"variables": "i and j", "steps": 4, "prompt": "T."}')
         assert engine.design_trace_table("code") == ([], 0, "")
+
+
+from hinting_engine import focus_instruction
+
+
+def test_focus_instruction_is_empty_without_a_focus():
+    assert focus_instruction(None) == ""
+
+
+def test_focus_instruction_names_the_span_and_the_label():
+    text = focus_instruction({"start_line": 12, "end_line": 19, "label": "calculate_average"})
+    assert "lines 12-19" in text
+    assert "calculate_average" in text
+    assert "background context" in text
+
+
+def test_focus_instruction_says_line_singular_for_one_line():
+    text = focus_instruction({"start_line": 7, "end_line": 7, "label": ""})
+    assert "line 7" in text
+    assert "lines" not in text
+
+
+def test_focus_instruction_ignores_a_nonsense_span():
+    assert focus_instruction({"start_line": 0, "end_line": 4}) == ""
+    assert focus_instruction({"start_line": 9, "end_line": 2}) == ""

@@ -279,7 +279,7 @@ class TestLineNumberCachesUseAnExactHash:
         calls = []
         monkeypatch.setattr(
             app_main.engine, "generate_line_hint",
-            lambda code, line, language: calls.append(code) or ("h", "general"),
+            lambda code, line, language, focus=None: calls.append(code) or ("h", "general"),
         )
         client.post("/line-hint", json={"code": "x = 1", "line": 1, "language": "python"})
         client.post("/line-hint", json={"code": "\nx = 1", "line": 1, "language": "python"})

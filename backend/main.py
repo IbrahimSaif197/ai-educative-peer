@@ -246,7 +246,7 @@ async def hint(req: HintRequest, uid: str = Depends(rate_limited("hint"))) -> Hi
         hint_text, concept_tags = await asyncio.to_thread(
             engine.generate_hint,
             req.code, req.question, level, language, history, req.mode, pacing,
-            req.edit_summary,
+            req.edit_summary, req.focus.model_dump() if req.focus else None,
         )
     except Exception as e:
         # The level was only peeked, never committed, so the student can retry
@@ -291,7 +291,7 @@ async def hint_stream(req: HintRequest, uid: str = Depends(rate_limited("hint"))
         try:
             for event in engine.stream_hint(
                 req.code, req.question, level, language, history, req.mode, pacing,
-                req.edit_summary,
+                req.edit_summary, req.focus.model_dump() if req.focus else None,
             ):
                 if event.get("type") == "done":
                     done = event
@@ -416,15 +416,19 @@ async def line_hint(
     if not req.code.strip():
         return LineHintResponse(hint="", concept="general")
     language = normalize_language(req.language)
+    focus = req.focus.model_dump() if req.focus else None
     # Exact hash, for the same reason as /scan: the entry is keyed to a line
-    # number, so whitespace that shifts lines must miss the cache.
-    key = (uid, language, req.line, raw_code_hash(req.code))
+    # number, so whitespace that shifts lines must miss the cache. focus_key
+    # is part of it too, so two different focus blocks on the same line don't
+    # collide and serve each other's cached answer.
+    focus_key = (focus["start_line"], focus["end_line"]) if focus else None
+    key = (uid, language, req.line, focus_key, raw_code_hash(req.code))
     cached = LINE_HINT_CACHE.get(key)
     if cached is not None:
         return LineHintResponse(hint=cached[0], concept=cached[1])
     try:
         hint_text, concept = await asyncio.to_thread(
-            engine.generate_line_hint, req.code, req.line, language
+            engine.generate_line_hint, req.code, req.line, language, focus
         )
     except Exception as e:
         raise HTTPException(status_code=502, detail=f"LLM error: {e}")
