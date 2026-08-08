@@ -15,6 +15,8 @@ export interface StatusSnapshot {
   offline: boolean;
   /** Sign-in is failing even though the backend is answering. */
   authFailed?: boolean;
+  /** A line hint is in flight. Mirrors the inline lens's loading state. */
+  thinking?: boolean;
 }
 
 /** Pure: the text and tooltip for a snapshot, so it can be unit-tested. */
@@ -24,6 +26,8 @@ export function renderStatus(snapshot: StatusSnapshot): { text: string; tooltip:
     parts.push("offline");
   } else if (snapshot.authFailed) {
     parts.push("sign-in error");
+  } else if (snapshot.thinking) {
+    parts.push("$(sync~spin)");
   } else if (snapshot.hintLevel >= 1) {
     parts.push(`hint ${Math.min(3, snapshot.hintLevel)}/3`);
   }
@@ -42,6 +46,9 @@ export function renderStatus(snapshot: StatusSnapshot): { text: string; tooltip:
       ? `Practice streak: ${snapshot.streakDays} day${snapshot.streakDays === 1 ? "" : "s"}`
       : "No streak yet — practise today to start one",
   ];
+  if (snapshot.thinking) {
+    tooltipLines.push("Working on a hint for the line you're on");
+  }
   if (snapshot.reviewDue) tooltipLines.push("A spaced review is ready");
   if (snapshot.offline) {
     tooltipLines.push("Backend unreachable — hints are local rules for now");
@@ -60,6 +67,7 @@ export class StatusBar {
     streakDays: 0,
     reviewDue: false,
     offline: false,
+    thinking: false,
   };
 
   constructor(private readonly isRelevant: () => boolean) {
