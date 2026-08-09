@@ -73,6 +73,7 @@ export async function activate(context: vscode.ExtensionContext) {
         streakDays: progress.streak_days,
         reviewDue: progress.review_due,
       });
+      provider.postStreak(progress.streak_days);
     } catch {
       /* the status bar is decoration; never surface a failure here */
     }
@@ -93,6 +94,7 @@ export async function activate(context: vscode.ExtensionContext) {
   const tutor = new InlineTutor(context, api, (thinking) => statusBar.update({ thinking }));
   tutor.activate();
   context.subscriptions.push({ dispose: () => tutor.dispose() });
+  context.subscriptions.push(tutor.onDidScanClean(() => provider.postScanClean()));
 
   // Retry any migration that failed on a previous run.
   void auth.runPendingMigration();

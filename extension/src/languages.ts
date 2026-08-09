@@ -11,48 +11,70 @@ export interface LanguageInfo {
    * standing "💡 Get a hint" CodeLens.
    */
   lensRegex: RegExp;
+  /** Line-comment token, used to find seeded `bug:` markers. */
+  lineComment: string;
+  /** Block-comment delimiters, for the languages whose demos use them. */
+  blockComment?: [string, string];
 }
 
 export const SUPPORTED_LANGUAGES: Record<string, LanguageInfo> = {
   python: {
     label: "Python",
     lensRegex: /^\s*(def|class)\s+\w+/,
+    lineComment: "#",
   },
   javascript: {
     label: "JavaScript",
     lensRegex: /^\s*(export\s+)?(async\s+)?(function\s+\w+|class\s+\w+|(const|let|var)\s+\w+\s*=\s*(async\s*)?(\([^)]*\)|\w+)\s*=>)/,
+    lineComment: "//",
+    blockComment: ["/*", "*/"],
   },
   java: {
     label: "Java",
     lensRegex: /^\s*(public|private|protected|static|final|abstract|class|interface|enum)\b.*(\{|\))\s*\{?\s*$/,
+    lineComment: "//",
+    blockComment: ["/*", "*/"],
   },
   c: {
     label: "C",
     lensRegex: /^[A-Za-z_][\w\s\*]*\s[\w\*]+\s*\([^;]*\)\s*\{?\s*$/,
+    lineComment: "//",
+    blockComment: ["/*", "*/"],
   },
   cpp: {
     label: "C++",
     lensRegex: /^\s*(class|struct)\s+\w+|^[A-Za-z_][\w\s\*&:<>,]*\s[\w\*&:]+\s*\([^;]*\)\s*(const)?\s*\{?\s*$/,
+    lineComment: "//",
+    blockComment: ["/*", "*/"],
   },
   csharp: {
     label: "C#",
     lensRegex: /^\s*(public|private|protected|internal|static|class|interface|struct|enum)\b.*(\{|\))\s*\{?\s*$/,
+    lineComment: "//",
+    blockComment: ["/*", "*/"],
   },
   typescript: {
     label: "TypeScript",
     lensRegex: /^\s*(export\s+)?(async\s+)?(function\s+\w+|class\s+\w+|interface\s+\w+|(const|let|var)\s+\w+\s*=\s*(async\s*)?(\([^)]*\)|\w+)\s*=>)/,
+    lineComment: "//",
+    blockComment: ["/*", "*/"],
   },
   go: {
     label: "Go",
     lensRegex: /^\s*func\s+(\(\w+ [^)]+\)\s*)?\w+\s*\(/,
+    lineComment: "//",
+    blockComment: ["/*", "*/"],
   },
   rust: {
     label: "Rust",
     lensRegex: /^\s*(pub\s+)?(async\s+)?(fn\s+\w+|struct\s+\w+|enum\s+\w+|impl\b|trait\s+\w+)/,
+    lineComment: "//",
+    blockComment: ["/*", "*/"],
   },
   sql: {
     label: "SQL",
     lensRegex: /^\s*(SELECT|INSERT|UPDATE|DELETE|CREATE|WITH)\b/i,
+    lineComment: "--",
   },
 };
 

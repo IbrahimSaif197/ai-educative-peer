@@ -111,11 +111,11 @@ async function build(
  * test's document.
  */
 async function setupProvider(
-  source: string,
-  cursorLine: number,
+  source: string = CODE,
+  cursorLine = 0,
   path = "/tmp/focus/demo.py",
   languageId = "python"
-): Promise<{ provider: EduPeerSidebarProvider; posted: any[]; api: any; doc: any }> {
+): Promise<{ provider: EduPeerSidebarProvider; posted: any[]; api: any; doc: any; html: string }> {
   const posted: any[] = [];
   const state = new Map<string, any>();
   const api = makeApi();
@@ -165,7 +165,7 @@ async function setupProvider(
 
   provider.resolveWebviewView(view);
 
-  return { provider, posted, api, doc };
+  return { provider, posted, api, doc, html: view.webview.html };
 }
 
 const latest = (posted: any[], type: string) =>
@@ -1124,5 +1124,125 @@ describe("EduPeerSidebarProvider — focus scoping", () => {
 
     expect(second.startLine).not.toBe(first.startLine);
     expect(second.breadcrumb).not.toBe(first.breadcrumb);
+  });
+});
+
+describe("EduPeerSidebarProvider — streak chip", () => {
+  /** One webview host, with its own message log and its own `ready` channel. */
+  function makeView(posted: any[]) {
+    let receive: ((msg: any) => Promise<void>) | undefined;
+    const view = {
+      webview: {
+        options: {},
+        html: "",
+        cspSource: "vscode-webview:",
+        asWebviewUri: (u: any) => u,
+        postMessage: (msg: any) => {
+          posted.push(msg);
+          return Promise.resolve(true);
+        },
+        onDidReceiveMessage: (fn: any) => {
+          receive = fn;
+          return { dispose: jest.fn() };
+        },
+      },
+      show: jest.fn(),
+      onDidDispose: jest.fn(() => ({ dispose: jest.fn() })),
+    } as any;
+    return { view, send: (msg: any) => receive!(msg) };
+  }
+
+  it("re-posts the last streak when the sidebar is closed and reopened", async () => {
+    const h = await build();
+    h.provider.postStreak(4);
+
+    // VS Code re-resolves the view whenever the sidebar host is recreated
+    // (closing and reopening the sidebar does it — see the comment on
+    // `onDidDispose` in resolveWebviewView). `post` is a no-op while there is
+    // no view, so the streak pushed above never reached this new webview; it
+    // must be re-sent from cached provider state on "ready", the same way
+    // `postOffline`/`postAuthTrouble` re-derive from live `api` state there.
+    const reopened: any[] = [];
+    const second = makeView(reopened);
+    h.provider.resolveWebviewView(second.view);
+    await second.send({ type: "ready" });
+
+    const streak = latest(reopened, "streak");
+    expect(streak).toBeDefined();
+    expect(streak.days).toBe(4);
+  });
+});
+
+describe("EduPeerSidebarProvider — webview CSP", () => {
+  it("allows fonts from the extension, and nothing else", async () => {
+    const { html } = await setupProvider(); // returns the resolved webview html
+    const csp = /content="([^"]*)"/.exec(html)![1];
+
+    expect(csp).toContain("font-src");
+    // Scoped to the extension's own directory, never a CDN.
+    expect(csp).not.toContain("https://fonts.gstatic.com");
+    expect(csp).not.toContain("https://fonts.googleapis.com");
+    expect(csp).toContain("default-src 'none'");
+  });
+});
+
+/**
+ * Neither fixture reuses the default `setupProvider` path with a cursor line
+ * another test in this file already resolved at that same path: `resolveFocus`
+ * memoises on uri+version+cursor in a cache nothing here resets (see the
+ * comment on "EduPeerSidebarProvider — focus scoping" above), so a collision
+ * would silently hand back another test's cached scope.
+ */
+describe("EduPeerSidebarProvider — cursor vs focus", () => {
+  beforeEach(() => mock.__reset());
+
+  /** A 2-line function: the enclosing block is the same wherever the cursor lands in it. */
+  const TWO_LINE_BLOCK = "def f():\n    return 1";
+
+  const TWO_FUNCTIONS = [
+    "def first():",
+    "    return 1",
+    "",
+    "",
+    "def second():",
+    "    return 2",
+  ].join("\n");
+
+  /** Move the cursor within the already-open document, the way an arrow key would. */
+  function moveCursor(doc: any, line: number) {
+    mock.window.activeTextEditor = mock.__makeEditor(doc, line);
+  }
+
+  it("posts cursor, not focus, when only the cursor line moved", async () => {
+    // Same document, same version, same block: the focus signature is
+    // unchanged, so the panel would otherwise never learn the cursor moved.
+    const { provider, posted, doc } = await setupProvider(
+      TWO_LINE_BLOCK,
+      0,
+      "/tmp/cursor-vs-focus/two-line.py"
+    );
+    await provider["sendFocus"]();
+    posted.length = 0;
+
+    moveCursor(doc, 1);
+    await provider["sendFocus"]();
+
+    expect(posted.map((m: any) => m.type)).toEqual(["cursor"]);
+    expect(posted[0].cursorLine).toBe(2);
+  });
+
+  it("posts focus when the block changed", async () => {
+    const { provider, posted, doc } = await setupProvider(
+      TWO_FUNCTIONS,
+      1,
+      "/tmp/cursor-vs-focus/two-functions.py"
+    );
+    await provider["sendFocus"]();
+    posted.length = 0;
+
+    moveCursor(doc, 5);
+    await provider["sendFocus"]();
+
+    expect(posted.map((m: any) => m.type)).toContain("focus");
   });
 });

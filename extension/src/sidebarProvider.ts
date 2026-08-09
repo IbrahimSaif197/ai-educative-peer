@@ -44,6 +44,8 @@ export class EduPeerSidebarProvider implements vscode.WebviewViewProvider {
   private lastFullCode = "";
   /** Suppresses a re-post when nothing the student can see has changed. */
   private lastFocusSignature = "";
+  /** Last cursor line posted, 1-based. Suppresses repeat cursor messages. */
+  private lastCursorLine = 0;
   private focusDebounce?: NodeJS.Timeout;
   /** Code fingerprints that already went through the explain-first gate. */
   private seenFingerprints = new Set<string>();
@@ -74,6 +76,12 @@ export class EduPeerSidebarProvider implements vscode.WebviewViewProvider {
   /** Current hint level, mirrored to the status bar. */
   private readonly levelEmitter = new vscode.EventEmitter<number>();
   readonly onDidChangeHintLevel = this.levelEmitter.event;
+  /**
+   * Last streak pushed. `post` is a no-op while the view does not exist, so a
+   * webview resolved after that push (the panel is opened on demand, not at
+   * startup) would otherwise never learn the streak. Re-read on "ready".
+   */
+  private lastStreakDays = 0;
 
   constructor(
     private readonly extensionUri: vscode.Uri,
@@ -98,6 +106,21 @@ export class EduPeerSidebarProvider implements vscode.WebviewViewProvider {
     this.post({ type: "authTrouble", value: failed });
   }
 
+  /**
+   * Mirror the practice streak into the panel. The value comes from the same
+   * progress call the status bar already makes, so this costs no extra
+   * request.
+   */
+  public postStreak(days: number): void {
+    this.lastStreakDays = days;
+    this.post({ type: "streak", days });
+  }
+
+  /** A file just went clean. The panel marks the moment. */
+  public postScanClean(): void {
+    this.post({ type: "scanClean" });
+  }
+
   public resolveWebviewView(webviewView: vscode.WebviewView): void {
     this.view = webviewView;
     // The suppression signature describes what the LAST webview was showing,
@@ -106,6 +129,7 @@ export class EduPeerSidebarProvider implements vscode.WebviewViewProvider {
     // empty `currentCode` and a Refresh button that routes back through the
     // same suppressed path.
     this.lastFocusSignature = "";
+    this.lastCursorLine = 0;
     webviewView.webview.options = {
       enableScripts: true,
       localResourceRoots: [vscode.Uri.joinPath(this.extensionUri, "media")],
@@ -124,6 +148,7 @@ export class EduPeerSidebarProvider implements vscode.WebviewViewProvider {
           await this.sendBadges();
           this.postOffline(!this.api.isAvailable);
           this.postAuthTrouble(this.api.isAuthHealthy === false);
+          this.postStreak(this.lastStreakDays);
           void this.checkReviewDue();
           return;
         case "persistChat":
@@ -602,6 +627,7 @@ export class EduPeerSidebarProvider implements vscode.WebviewViewProvider {
       this.lastFocusCode = "";
       this.lastFullCode = "";
       this.lastFocusSignature = "";
+      this.lastCursorLine = 0;
       this.lastDocumentKey = "";
       this.post({ type: "focus", focusCode: "", fileName: "", language: "", totalLines: 0 });
       return;
@@ -618,7 +644,19 @@ export class EduPeerSidebarProvider implements vscode.WebviewViewProvider {
     const signature = `${doc.uri.toString()}:${focus.startLine}:${focus.endLine}:${focusCode}`;
     // The old code posted the whole document on every keystroke; most of those
     // posts said nothing new.
-    if (!opts.force && signature === this.lastFocusSignature) return;
+    if (!opts.force && signature === this.lastFocusSignature) {
+      // The block is unchanged, so the panel does not need re-rendering — but
+      // the cursor may still have moved inside it, and the marker has to
+      // follow. A full focus post here would put the whole file back on the
+      // wire on every keystroke, which is what the signature exists to stop.
+      const cursorLine = editor.selection.active.line + 1;
+      if (cursorLine !== this.lastCursorLine) {
+        this.lastCursorLine = cursorLine;
+        this.post({ type: "cursor", cursorLine });
+      }
+      return;
+    }
+    this.lastCursorLine = editor.selection.active.line + 1;
     this.lastFocusSignature = signature;
 
     this.lastFocus = focus;
@@ -680,7 +718,7 @@ export class EduPeerSidebarProvider implements vscode.WebviewViewProvider {
     const asset = (name: string) =>
       webview.asWebviewUri(vscode.Uri.joinPath(this.extensionUri, "media", name));
     const nonce = getNonce();
-    const csp = `default-src 'none'; style-src ${webview.cspSource}; script-src 'nonce-${nonce}'; img-src ${webview.cspSource} data:;`;
+    const csp = `default-src 'none'; style-src ${webview.cspSource}; font-src ${webview.cspSource}; script-src 'nonce-${nonce}'; img-src ${webview.cspSource} data:;`;
     return `<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -706,6 +744,7 @@ export class EduPeerSidebarProvider implements vscode.WebviewViewProvider {
         <span class="brand__mark" aria-hidden="true"></span>
         <span class="brand__name">EduPeer</span>
       </span>
+      <span id="streakChip" class="streak" hidden><span aria-hidden="true">🔥</span><span id="streakDays">0</span></span>
       <span class="topbar__spacer"></span>
       <span id="accountLabel" class="topbar__account" title="Signed-in account">Not signed in</span>
       <button id="authBtn" class="btn btn--ghost btn--sm">Sign in</button>
@@ -743,15 +782,6 @@ export class EduPeerSidebarProvider implements vscode.WebviewViewProvider {
   </div>
 
   <footer class="composer">
-    <div class="stepper" id="stepper" hidden>
-      <span class="stepper__label">Hint depth</span>
-      <ol class="stepper__track" id="stepperTrack">
-        <li class="stepper__step" data-level="1"><span>1</span></li>
-        <li class="stepper__step" data-level="2"><span>2</span></li>
-        <li class="stepper__step" data-level="3"><span>3</span></li>
-      </ol>
-    </div>
-
     <fieldset class="confidence" id="confidence">
       <legend class="confidence__legend">How sure are you?</legend>
       <button type="button" class="conf" data-value="1" aria-pressed="false">No idea</button>

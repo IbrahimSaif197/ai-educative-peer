@@ -1007,3 +1007,137 @@ describe("InlineTutor — the lens is the feedback channel", () => {
     });
   });
 });
+
+describe("InlineTutor — stripping fixed bug markers", () => {
+  const MARKED = [
+    "def average(numbers):",
+    "    total = 0",
+    "    for i in range(1, len(numbers)):   # bug: off-by-one, skips the first item",
+    "    return total / len(numbers)",
+  ].join("\n");
+
+  const CODE_ON_MARKED_LINE = "    for i in range(1, len(numbers)):";
+
+  const tutors: any[] = [];
+  afterEach(() => {
+    while (tutors.length) tutors.pop().dispose();
+  });
+
+  function setupMarked(api: any, config: Record<string, any> = {}, source = MARKED) {
+    mock.__reset();
+    mock.__state.configuration = {
+      inlineHints: true,
+      lensMode: "all",
+      autoScan: false,
+      ...config,
+    };
+    const doc = mock.__makeDocument(source, "python", "/tmp/marked.py");
+    const editor = mock.__makeEditor(doc, 2, 0);
+    mock.window.activeTextEditor = editor;
+    mock.window.visibleTextEditors = [editor];
+    const tutor = new InlineTutor({ subscriptions: [] } as any, api);
+    tutor.activate();
+    tutors.push(tutor);
+    return { tutor, doc };
+  }
+
+  /** One scan that flags, then one that comes back clean. */
+  function flaggedThenClean() {
+    return jest
+      .fn()
+      .mockResolvedValueOnce({ flags: [flag({ line: 3, end_line: 3 })] })
+      .mockResolvedValueOnce({ flags: [] });
+  }
+
+  it("removes the marker once the file scans clean, keeping the code", async () => {
+    const { doc } = setupMarked(makeApi({ scanCode: flaggedThenClean() }));
+
+    await mock.__runCommand("edupeer.scanFile");
+    await mock.__runCommand("edupeer.scanFile");
+
+    expect(mock.workspace.applyEdit).toHaveBeenCalledTimes(1);
+    const [edit] = mock.__state.appliedEdits;
+    expect(edit.deletions).toHaveLength(1);
+    const { range, uri } = edit.deletions[0];
+    expect(uri).toBe(String(doc.uri));
+    expect(range.start.line).toBe(2);
+    expect(range.start.character).toBe(CODE_ON_MARKED_LINE.length);
+    expect(range.end.character).toBe(MARKED.split("\n")[2].length);
+  });
+
+  it("does nothing while the file is still flagged", async () => {
+    setupMarked(makeApi({ scanCode: jest.fn(async () => ({ flags: [flag()] })) }));
+
+    await mock.__runCommand("edupeer.scanFile");
+    await mock.__runCommand("edupeer.scanFile");
+
+    expect(mock.workspace.applyEdit).not.toHaveBeenCalled();
+  });
+
+  it("does nothing when the setting is off", async () => {
+    setupMarked(makeApi({ scanCode: flaggedThenClean() }), {
+      removeFixedBugComments: false,
+    });
+
+    await mock.__runCommand("edupeer.scanFile");
+    await mock.__runCommand("edupeer.scanFile");
+
+    expect(mock.workspace.applyEdit).not.toHaveBeenCalled();
+  });
+
+  it("does nothing when the file has no marker", async () => {
+    setupMarked(
+      makeApi({ scanCode: flaggedThenClean() }),
+      {},
+      "def average(numbers):\n    return sum(numbers) / len(numbers)\n"
+    );
+
+    await mock.__runCommand("edupeer.scanFile");
+    await mock.__runCommand("edupeer.scanFile");
+
+    expect(mock.workspace.applyEdit).not.toHaveBeenCalled();
+  });
+
+  it("leaves prose that merely mentions a bug alone", async () => {
+    setupMarked(
+      makeApi({ scanCode: flaggedThenClean() }),
+      {},
+      "def f():\n    # Off-by-one style bug: index 4 does not exist\n    return 1\n"
+    );
+
+    await mock.__runCommand("edupeer.scanFile");
+    await mock.__runCommand("edupeer.scanFile");
+
+    expect(mock.workspace.applyEdit).not.toHaveBeenCalled();
+  });
+
+  it("runs ahead of the reflection gate, not behind it", async () => {
+    // The reflection quiz is offered once per fingerprint. Stripping must not
+    // inherit that gate: the marker describes fixed code either way.
+    const scanCode = jest
+      .fn()
+      .mockResolvedValueOnce({ flags: [flag({ line: 3, end_line: 3 })] })
+      .mockResolvedValueOnce({ flags: [] })
+      .mockResolvedValueOnce({ flags: [flag({ line: 3, end_line: 3 })] })
+      .mockResolvedValueOnce({ flags: [] });
+    setupMarked(makeApi({ scanCode }));
+
+    for (let i = 0; i < 4; i++) await mock.__runCommand("edupeer.scanFile");
+
+    expect(mock.workspace.applyEdit).toHaveBeenCalledTimes(2);
+    expect(mock.window.showInformationMessage).toHaveBeenCalledTimes(1);
+  });
+
+  it("announces the clean scan exactly once per transition", async () => {
+    const api = makeApi({ scanCode: flaggedThenClean() });
+    const { tutor } = setupMarked(api);
+    let announced = 0;
+    tutor.onDidScanClean(() => announced++);
+
+    await mock.__runCommand("edupeer.scanFile");
+    expect(announced).toBe(0); // still flagged
+
+    await mock.__runCommand("edupeer.scanFile");
+    expect(announced).toBe(1);
+  });
+});

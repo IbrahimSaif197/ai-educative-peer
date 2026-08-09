@@ -18,10 +18,11 @@
   const badgesWrapEl = el("badgesWrap");
   const accountLabelEl = el("accountLabel");
   const authBtn = el("authBtn");
+  const streakChipEl = el("streakChip");
+  const streakDaysEl = el("streakDays");
   const reviewBtn = el("reviewBtn");
   const offlineBannerEl = el("offlineBanner");
   const authBannerEl = el("authBanner");
-  const stepperEl = el("stepper");
   const confidenceEl = el("confidence");
 
   const DEFAULT_PLACEHOLDER = "Describe your error or ask a question…";
@@ -62,6 +63,11 @@
   let isLoading = false;
   // Rendered turns, mirrored to the extension so they survive a reload.
   let turns = [];
+  // True only while "restoreChat" is rebuilding a saved transcript — lets
+  // buildTurn() mark those turns so their entrance (and their ladders'
+  // dot-fill/dot-ring) don't all fire at once. See buildTurn() and the
+  // "restoreChat" case below.
+  let isRestoring = false;
 
   // ------------------------------------------------------------------ chat
 
@@ -132,12 +138,41 @@
     wrap.className = `turn turn--${turn.role === "student" ? "student" : "tutor"}`;
     if (turn.role === "error") wrap.classList.add("is-error");
     if (turn.flagged) wrap.classList.add("is-flagged");
+    // A restored transcript rebuilds every turn in one pass; without this,
+    // N cards would fire their entrance (and every ladder its dot-fill and
+    // dot-ring) all at once. Live turns are unaffected — isRestoring is only
+    // ever true while the "restoreChat" handler below is looping.
+    if (isRestoring) wrap.classList.add("is-restored");
 
     if (turn.eyebrow) {
       const eyebrow = document.createElement("div");
       eyebrow.className = "turn__eyebrow";
       eyebrow.textContent = turn.eyebrow;
       wrap.appendChild(eyebrow);
+    }
+
+    // The depth belongs with the hint it describes. It used to sit pinned
+    // above the composer, describing a hint that could be several turns up.
+    if (turn.level >= 1) {
+      const ladder = document.createElement("div");
+      ladder.className = "ladder";
+      const label = document.createElement("span");
+      label.className = "ladder__label";
+      label.textContent = `hint ${turn.level}`;
+      ladder.appendChild(label);
+      // Tracked so the held state (below) has a single dot to put its static
+      // ring on: the last filled one, i.e. the current depth.
+      let lastOnDot = null;
+      for (let i = 1; i <= 3; i++) {
+        const dot = document.createElement("span");
+        const on = i <= turn.level;
+        dot.className = on ? "ladder__dot is-on" : "ladder__dot";
+        dot.style.setProperty("--dot-index", String(i - 1));
+        if (on) lastOnDot = dot;
+        ladder.appendChild(dot);
+      }
+      if (lastOnDot) lastOnDot.classList.add("ladder__dot--anchor");
+      wrap.appendChild(ladder);
     }
 
     const body = document.createElement("div");
@@ -203,30 +238,6 @@
     }
     chatEl.appendChild(row);
     scrollToEnd();
-  }
-
-  // --------------------------------------------------------------- stepper
-
-  function setLevel(level) {
-    if (!level || level < 1) {
-      stepperEl.hidden = true;
-      return;
-    }
-    stepperEl.hidden = false;
-    stepperEl.classList.remove("is-held");
-    stepperEl
-      .querySelectorAll(".stepper__step")
-      .forEach((step) =>
-        step.classList.toggle("is-on", Number(step.dataset.level) <= level)
-      );
-  }
-
-  function holdLevel() {
-    if (stepperEl.hidden) return;
-    stepperEl.classList.remove("is-held");
-    // Reflow so the animation restarts even on consecutive holds.
-    void stepperEl.offsetWidth;
-    stepperEl.classList.add("is-held");
   }
 
   // ------------------------------------------------------------ confidence
@@ -486,19 +497,28 @@
     const mode = msg.mode || "hint";
     const level = Number(msg.hint_level) || 0;
 
-    if (mode === "hint") {
-      setLevel(level);
-    } else if (mode === "attempt-gate") {
-      holdLevel();
-    }
-
     addTurn({
       role: "tutor",
       text: msg.hint,
-      eyebrow: mode === "hint" ? `Hint ${level}` : MODE_LABEL[mode] || mode,
+      eyebrow: mode === "hint" ? undefined : MODE_LABEL[mode] || mode,
+      level: mode === "hint" ? level : 0,
       tags: msg.concept_tags || [],
       flagged: FLAGGED_MODES.has(mode),
     });
+
+    if (mode === "attempt-gate") {
+      // Asked again without editing. The ladder reports that it is holding
+      // rather than advancing — the same signal the old composer stepper gave,
+      // now on the card that owns the depth.
+      const ladders = chatEl.querySelectorAll(".ladder");
+      const last = ladders[ladders.length - 1];
+      if (last) {
+        last.classList.remove("is-held");
+        // Reflow so the animation restarts on consecutive holds.
+        void last.offsetWidth;
+        last.classList.add("is-held");
+      }
+    }
 
     if (mode === "hint" && level === 3) {
       addActionRow([
@@ -551,10 +571,12 @@
         const restored = Array.isArray(msg.messages) ? msg.messages : [];
         turns = [];
         clearChat();
+        isRestoring = true;
         for (const turn of restored) {
           buildTurn(turn);
           turns.push(turn);
         }
+        isRestoring = false;
         refreshPlaceholder();
         break;
       }
@@ -581,6 +603,17 @@
         langChipEl.textContent = msg.language || "";
         langChipEl.hidden = !msg.language;
         break;
+
+      case "cursor": {
+        const line = Number(msg.cursorLine) || 0;
+        cursorLine = line;
+        const rows = codeEl.querySelectorAll(".ln");
+        rows.forEach((row) => {
+          const no = row.querySelector(".ln__no");
+          row.classList.toggle("is-cursor", !!no && Number(no.textContent) === line);
+        });
+        break;
+      }
 
       case "fullFile":
         // A reply can arrive after the student has already toggled back to
@@ -697,8 +730,21 @@
         authBannerEl.hidden = !msg.value;
         break;
 
+      case "streak": {
+        const days = Number(msg.days) || 0;
+        streakDaysEl.textContent = String(days);
+        streakChipEl.setAttribute("aria-label", `${days} day practice streak`);
+        streakChipEl.hidden = days <= 0;
+        break;
+      }
+
       case "badges":
         renderBadges(msg.badges);
+        break;
+
+      case "scanClean":
+        document.body.classList.add("is-celebrating");
+        setTimeout(() => document.body.classList.remove("is-celebrating"), 900);
         break;
 
       case "authState":
@@ -718,7 +764,6 @@
         clearChat();
         setComposerMode("hint");
         setConfidence(0);
-        setLevel(0);
         expectReflectAnswer = false;
         if (msg.summary) {
           addTurn({ role: "tutor", text: msg.summary, eyebrow: "What you learned" });
@@ -742,11 +787,18 @@
   });
 
   // Paint something immediately from webview state, then let the extension
-  // replace it with the durable copy once it answers "ready".
+  // replace it with the durable copy once it answers "ready". getState() is
+  // synchronous and local, so this runs on every webview init — sidebar
+  // hidden/shown, moved to another container, extension host reload — not
+  // just the "restoreChat" round-trip above. Same flag, same reason: without
+  // it every card here would fire its entrance and every ladder would
+  // re-fire dot-fill/dot-ring all at once.
   const saved = vscode.getState();
   if (saved && Array.isArray(saved.turns) && saved.turns.length) {
     turns = saved.turns;
+    isRestoring = true;
     for (const turn of turns) buildTurn(turn);
+    isRestoring = false;
   } else {
     showEmptyState();
   }

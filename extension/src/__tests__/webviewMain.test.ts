@@ -105,8 +105,8 @@ describe("startup", () => {
     expect(el("codeSnippet").textContent).toContain("No file open");
   });
 
-  it("hides the hint stepper until a hint arrives", () => {
-    expect((el("stepper") as HTMLElement).hidden).toBe(true);
+  it("shows no hint ladder until a hint arrives", () => {
+    expect($(".ladder")).toBeNull();
   });
 });
 
@@ -250,16 +250,19 @@ describe("the code preview", () => {
 });
 
 describe("rendering a hint", () => {
-  it("labels the depth in the eyebrow", () => {
+  it("labels the depth on the ladder, not in the eyebrow", () => {
     post({ type: "hint", hint: "Think about the bound.", hint_level: 2, concept_tags: [], mode: "hint" });
-    expect(lastTurn().querySelector(".turn__eyebrow")!.textContent).toBe("Hint 2");
+    // The eyebrow is redundant with the ladder label now, so hint turns carry
+    // no eyebrow at all — the depth is stated once, where the dots are.
+    expect(lastTurn().querySelector(".turn__eyebrow")).toBeNull();
+    expect(lastTurn().querySelector(".ladder__label")!.textContent).toBe("hint 2");
   });
 
-  it("fills the stepper up to the current depth", () => {
+  it("fills the ladder up to the current depth", () => {
     post({ type: "hint", hint: "h", hint_level: 2, concept_tags: [], mode: "hint" });
-    const on = $$(".stepper__step.is-on");
+    const on = $$(".ladder__dot.is-on");
     expect(on).toHaveLength(2);
-    expect((el("stepper") as HTMLElement).hidden).toBe(false);
+    expect($(".ladder")).not.toBeNull();
   });
 
   it("renders concept tags", () => {
@@ -309,12 +312,20 @@ describe("rendering a hint", () => {
 });
 
 describe("modes that withhold", () => {
-  it("flags the attempt gate and pulses the stepper instead of advancing", () => {
+  it("flags the attempt gate and leaves the ladder at its prior depth", () => {
     post({ type: "hint", hint: "h", hint_level: 1, concept_tags: [], mode: "hint" });
     post({ type: "hint", hint: "not yet", hint_level: 0, concept_tags: [], mode: "attempt-gate" });
     expect(lastTurn().classList.contains("is-flagged")).toBe(true);
-    expect(el("stepper").classList.contains("is-held")).toBe(true);
-    expect($$(".stepper__step.is-on")).toHaveLength(1);
+    // The gate turn carries no ladder of its own, so the only depth reading
+    // on screen is still the earlier hint's — the level is neither reset nor
+    // advanced by the gate. That refusal is not silent, though: the earlier
+    // ladder picks up an `is-held` class (see "marks the ladder held when
+    // the tutor refuses to go deeper" below), the same signal the old
+    // composer stepper gave.
+    expect(lastTurn().querySelector(".ladder")).toBeNull();
+    const ladders = $$(".ladder");
+    expect(ladders).toHaveLength(1);
+    expect(ladders[0].querySelectorAll(".ladder__dot.is-on")).toHaveLength(1);
   });
 
   it("flags a rate-limited reply", () => {
@@ -607,11 +618,11 @@ describe("errors and reset", () => {
     expect(texts[1]).toContain("back at hint 1");
   });
 
-  it("resets the stepper and the confidence chips", () => {
+  it("resets the ladder and the confidence chips", () => {
     post({ type: "hint", hint: "h", hint_level: 3, concept_tags: [], mode: "hint" });
     ($$(".conf")[1] as HTMLButtonElement).click();
     post({ type: "resetDone", summary: "" });
-    expect((el("stepper") as HTMLElement).hidden).toBe(true);
+    expect($(".ladder")).toBeNull();
     expect($$(".conf")[1].getAttribute("aria-pressed")).toBe("false");
   });
 });
@@ -1032,5 +1043,139 @@ describe("webview — signed-out state", () => {
 
     expect($(".signin")).toBeNull();
     expect(document.body.textContent).toContain("why is this failing?");
+  });
+});
+
+// As with the sections above, this harness predates `loadWebview()`: there is
+// no `dom` handle to destructure. `post`/`$`/`$$` already drive and read the
+// one jsdom `document` every test in this file shares, reset by `load()` in
+// `beforeEach`.
+describe("webview — the hint ladder lives in the card", () => {
+  it("renders one dot per level, filled up to the current one", () => {
+    post({ type: "hint", hint: "why is it empty?", hint_level: 2, concept_tags: [], mode: "hint" });
+
+    const dots = $$(".turn--tutor .ladder__dot");
+    expect(dots).toHaveLength(3);
+    expect($$(".turn--tutor .ladder__dot.is-on")).toHaveLength(2);
+  });
+
+  it("labels the card with the level", () => {
+    post({ type: "hint", hint: "h", hint_level: 3, concept_tags: [], mode: "hint" });
+
+    expect($(".turn--tutor .ladder__label")!.textContent).toBe("hint 3");
+  });
+
+  it("gives a non-hint turn no ladder", () => {
+    post({ type: "hint", hint: "nice work", hint_level: 0, concept_tags: [], mode: "reflect" });
+
+    expect($(".ladder")).toBeNull();
+  });
+
+  it("marks the ladder held when the tutor refuses to go deeper", () => {
+    post({ type: "hint", hint: "why empty?", hint_level: 1, concept_tags: [], mode: "hint" });
+    post({ type: "hint", hint: "same depth", hint_level: 0, concept_tags: [], mode: "attempt-gate" });
+
+    const ladders = $$(".ladder");
+    expect(ladders).toHaveLength(1);
+    expect(ladders[0].classList.contains("is-held")).toBe(true);
+  });
+
+  it("no longer has a stepper above the composer", () => {
+    expect($("#stepper")).toBeNull();
+  });
+});
+
+// As with the sections above, this harness predates `loadWebview()`: there is
+// no `dom` handle to destructure. `post`/`el` already drive and read the one
+// jsdom `document` every test in this file shares, reset by `load()` in
+// `beforeEach`.
+describe("webview — streak chip", () => {
+  it("shows the streak when there is one", () => {
+    post({ type: "streak", days: 4 });
+
+    const chip = el("streakChip");
+    expect(chip.hidden).toBe(false);
+    expect(chip.textContent).toContain("4");
+  });
+
+  it("hides the chip at zero rather than showing a zero", () => {
+    post({ type: "streak", days: 0 });
+
+    expect(el("streakChip").hidden).toBe(true);
+  });
+
+  it("hides the chip when the field is missing", () => {
+    post({ type: "streak" });
+
+    expect(el("streakChip").hidden).toBe(true);
+  });
+
+  it("hides the chip on a non-numeric value rather than showing NaN", () => {
+    post({ type: "streak", days: "not-a-number" });
+
+    expect(el("streakChip").hidden).toBe(true);
+  });
+
+  it("keeps the flame decorative and the count as the chip's real content", () => {
+    post({ type: "streak", days: 6 });
+
+    const chip = el("streakChip");
+    const flame = chip.firstElementChild as HTMLElement;
+    const count = el("streakDays");
+    expect(flame.getAttribute("aria-hidden")).toBe("true");
+    expect(count.textContent).toBe("6");
+    expect(count.hasAttribute("aria-hidden")).toBe(false);
+  });
+
+  // Without this, a screen reader concatenates the chip's children and reads
+  // a bare "4" — the number with no word saying what it counts.
+  it("announces what the number means, not just the number", () => {
+    post({ type: "streak", days: 4 });
+
+    expect(el("streakChip").getAttribute("aria-label")).toBe("4 day practice streak");
+  });
+});
+
+// As with the sections above, this harness predates `loadWebview()`: there is
+// no `dom` handle to destructure. `post` already drives the one jsdom
+// `document` every test in this file shares, reset by `load()` in `beforeEach`.
+describe("webview — clean scan celebration", () => {
+  it("adds the celebration class and then takes it off again", () => {
+    jest.useFakeTimers();
+
+    post({ type: "scanClean" });
+    expect(document.body.classList.contains("is-celebrating")).toBe(true);
+
+    jest.advanceTimersByTime(1000);
+    expect(document.body.classList.contains("is-celebrating")).toBe(false);
+    jest.useRealTimers();
+  });
+});
+
+// As with the sections above, this harness predates `loadWebview()` (there is
+// no `dom` handle to destructure, and no `{ post, dom }` return value): `post`
+// and `$$` already drive and read the one jsdom `document` every test in this
+// file shares, reset by `load()` in `beforeEach`.
+describe("webview — cursor moves without re-rendering", () => {
+  it("moves the marker and leaves the code rows alone", () => {
+    post({
+      type: "focus",
+      focusCode: "a\nb\nc",
+      breadcrumb: "demo.py › f",
+      startLine: 1,
+      endLine: 3,
+      cursorLine: 1,
+      fileName: "/tmp/demo.py",
+      language: "Python",
+      totalLines: 3,
+    });
+    const before = $$(".ln")[0];
+
+    post({ type: "cursor", cursorLine: 3 });
+
+    expect($$(".ln.is-cursor")).toHaveLength(1);
+    expect($$(".ln.is-cursor")[0].textContent).toContain("c");
+    // Same node: the rows were not rebuilt.
+    expect($$(".ln")[0]).toBe(before);
   });
 });
