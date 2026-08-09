@@ -1083,7 +1083,14 @@ input[type="text"]:focus {
   50% { opacity: 1; transform: scale(1); }
 }
 
+/* Replace the `animation` declaration inside the EXISTING `.caret` rule near
+   line 503 — do not add a second `.caret` rule. The old value is
+   `blink 1s steps(2, start) infinite`; a stepped blink reads as terminal
+   chrome, and this panel is warmer than that. Delete the now-orphaned
+   `@keyframes blink` too. */
 .caret {
+  /* … keep display, width, height, margin, vertical-align … */
+  background: var(--coral);
   animation: caret-blink 1s var(--ease-loop) infinite;
 }
 
