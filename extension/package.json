@@ -2,7 +2,7 @@
   "name": "edupeer",
   "displayName": "EduPeer",
   "description": "A Socratic AI tutor for novice programmers (Python, JavaScript, TypeScript, Java, C, C++, C#, Go, Rust, SQL).",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "publisher": "edupeer",
   "license": "GPL-3.0-or-later",
   "icon": "media/icon.png",
@@ -253,6 +253,11 @@
           ],
           "default": "all",
           "description": "Which CodeLens entries EduPeer shows above your code. Set edupeer.inlineHints to false to turn the inline surface off entirely."
+        },
+        "edupeer.removeFixedBugComments": {
+          "type": "boolean",
+          "default": true,
+          "description": "When a file stops being flagged, delete any comment that starts with \"bug:\" — the note described a bug you have already fixed. This is the only time EduPeer edits your code; undo puts it back."
         },
         "edupeer.autoScan": {
           "type": "boolean",

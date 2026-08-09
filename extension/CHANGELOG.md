@@ -1,5 +1,14 @@
 # Changelog
 
+## 1.2.0
+
+- Fix the bug in a practice file and the `# bug:` note describing it now
+  disappears by itself, instead of sitting there pointing at code that is
+  already correct. Only comments that start with `bug:` go, so your own notes
+  and anything that just happens to mention a bug are left alone. This is the
+  one time EduPeer edits your file: a single undo puts the comment back, and
+  `edupeer.removeFixedBugComments` turns the whole thing off.
+
 ## 1.1.0
 
 - The inline lens now shows its own state. Clicking it says "thinking"

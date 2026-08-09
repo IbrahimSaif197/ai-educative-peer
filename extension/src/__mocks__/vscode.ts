@@ -81,6 +81,14 @@ class CodeAction {
   constructor(public readonly title: string, public readonly kind?: string) {}
 }
 
+/** Records the edits a module asks for, so tests can assert on them. */
+class WorkspaceEdit {
+  readonly deletions: Array<{ uri: string; range: MockRange }> = [];
+  delete(uri: any, range: MockRange): void {
+    this.deletions.push({ uri: String(uri), range });
+  }
+}
+
 const DiagnosticSeverity = { Error: 0, Warning: 1, Information: 2, Hint: 3 };
 
 /** Mirrors vscode.SymbolKind's numbering; focusScope filters on these. */
@@ -144,6 +152,8 @@ const __state = {
   hoverProviders: [] as any[],
   codeActionProviders: [] as any[],
   webviewViewProviders: new Map<string, any>(),
+  /** WorkspaceEdits handed to workspace.applyEdit. */
+  appliedEdits: [] as any[],
   /** The handler registered for `vscode://` links, so tests can fire one. */
   uriHandler: undefined as { handleUri(uri: any): void } | undefined,
   debugTrackerFactories: [] as any[],
@@ -245,6 +255,10 @@ const workspace = {
   onDidChangeTextDocument: jest.fn((fn: any) => push(__state.listeners.textDocument, fn)),
   onDidCloseTextDocument: jest.fn((fn: any) => push(__state.listeners.closeTextDocument, fn)),
   onDidChangeConfiguration: jest.fn((fn: any) => push(__state.listeners.configuration, fn)),
+  applyEdit: jest.fn((edit: any) => {
+    __state.appliedEdits.push(edit);
+    return Promise.resolve(true);
+  }),
   openTextDocument: jest.fn((uri: any) =>
     Promise.resolve(__makeDocument("line one\nline two\nline three", "python", String(uri)))
   ),
@@ -359,6 +373,7 @@ function __reset(): void {
   __state.hoverProviders.length = 0;
   __state.codeActionProviders.length = 0;
   __state.webviewViewProviders.clear();
+  __state.appliedEdits.length = 0;
   __state.uriHandler = undefined;
   __state.debugTrackerFactories.length = 0;
   __state.infoMessageAnswers.length = 0;
@@ -386,6 +401,7 @@ module.exports = {
   CodeActionKind,
   Diagnostic,
   DiagnosticSeverity,
+  WorkspaceEdit,
   SymbolKind,
   DecorationRangeBehavior,
   OverviewRulerLane,
