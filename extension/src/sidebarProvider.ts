@@ -11,7 +11,6 @@ import { offlineTutorReply } from "./localTutor";
 import {
   EXPLAIN_FIRST_PROMPT,
   TutorMode,
-  codeFingerprint,
   frameExplainedQuestion,
   framePrediction,
   frameReviewAnswer,
@@ -37,6 +36,10 @@ export class EduPeerSidebarProvider implements vscode.WebviewViewProvider {
   private lastLanguageId = "python";
   /** Identifies the document the attempt tracker is following. */
   private lastDocumentKey = "";
+  /** The open document, ignoring which block the cursor is in. */
+  private get lastFileKey(): string {
+    return this.lastDocumentKey.split("#")[0];
+  }
   /** The block the student is working on; drives the panel and every ask. */
   private lastFocus?: FocusScope;
   /** Exactly the focus block's text. Attempt tracking compares against this. */
@@ -48,8 +51,14 @@ export class EduPeerSidebarProvider implements vscode.WebviewViewProvider {
   /** Last cursor line posted, 1-based. Suppresses repeat cursor messages. */
   private lastCursorLine = 0;
   private focusDebounce?: NodeJS.Timeout;
-  /** Code fingerprints that already went through the explain-first gate. */
-  private seenFingerprints = new Set<string>();
+  /**
+   * Files that have already been through the explain-first gate.
+   *
+   * Keyed on the document, not on a fingerprint of its contents: keyed on
+   * contents, every edit made the file look new and the gate interrupted the
+   * conversation again.
+   */
+  private explainedFiles = new Set<string>();
   /** The ask that is paused behind the explain-first gate. */
   private pendingAsk?: { question: string; code: string; confidence: number };
   /** The snippet awaiting the student's output prediction. */
@@ -254,7 +263,7 @@ export class EduPeerSidebarProvider implements vscode.WebviewViewProvider {
     await this.sendFocus();
     this.post({ type: "externalAsk", question, code });
     // External asks (context menu, reflection toast) bypass the gate.
-    this.seenFingerprints.add(codeFingerprint(code ?? ""));
+    this.explainedFiles.add(this.lastFileKey);
     await this.handleAsk(questionForMode(mode, question), code, mode);
   }
 
@@ -262,7 +271,7 @@ export class EduPeerSidebarProvider implements vscode.WebviewViewProvider {
     // Anything already in flight now belongs to a cleared conversation.
     this.sessionGeneration++;
     this.history = [];
-    this.seenFingerprints.clear();
+    this.explainedFiles.clear();
     this.pendingAsk = undefined;
     this.pendingPredict = undefined;
     this.pendingTrace = undefined;
@@ -406,9 +415,9 @@ export class EduPeerSidebarProvider implements vscode.WebviewViewProvider {
     }
     const filled = questionForMode(mode, question);
     if (mode === "hint") {
-      const fp = codeFingerprint(code ?? "");
-      if (!this.seenFingerprints.has(fp)) {
-        this.seenFingerprints.add(fp);
+      const fileKey = this.lastFileKey;
+      if (!this.explainedFiles.has(fileKey)) {
+        this.explainedFiles.add(fileKey);
         this.pendingAsk = { question: filled, code: code ?? "", confidence };
         this.post({ type: "userMessage", text: filled });
         this.post({ type: "explainFirst", prompt: EXPLAIN_FIRST_PROMPT });

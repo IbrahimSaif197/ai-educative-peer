@@ -375,8 +375,10 @@ describe("the attempt gate", () => {
     );
     mock.window.activeTextEditor = mock.__makeEditor(edited, 1);
     await h.send({ type: "refreshCode" });
-    // Editing produces a new fingerprint, which re-arms the explain-first
-    // gate, so the ask has to be let through a second time.
+    // The explain-first gate already had its turn for this file (via
+    // `askPastTheGate` above), so this second ask goes straight through —
+    // `explainSkip` below is a harmless no-op, kept only in case that ever
+    // changes.
     await h.send({
       type: "askHint",
       question: "now?",
@@ -388,21 +390,6 @@ describe("the attempt gate", () => {
     expect(summary).toContain("- ");
     expect(summary).toContain("+ ");
     expect(summary).toContain("total(n)");
-  });
-
-  it("re-arms the explain-first gate after any edit", async () => {
-    // Documents current behaviour: the gate is keyed on the code fingerprint,
-    // not on the file, so it returns every time the student edits.
-    const h = await build();
-    await askPastTheGate(h);
-    h.posted.length = 0;
-    await h.send({
-      type: "askHint",
-      question: "now?",
-      code: CODE.replace("sum(n)", "total(n)"),
-      mode: "hint",
-    });
-    expect(latest(h.posted, "explainFirst")).toBeDefined();
   });
 
   it("sends no diff when nothing changed", async () => {
@@ -1301,5 +1288,27 @@ describe("answering in chat deepens the hint", () => {
     const gate = h.posted.find((m: any) => m.mode === "attempt-gate");
     expect(gate).toBeDefined();
     expect(hintRequest(h.api).escalate).toBe(false);
+  });
+});
+
+describe("explain-first fires once per file", () => {
+  beforeEach(() => mock.__reset());
+
+  it("does not come back after the student edits the code", async () => {
+    const h = await build();
+    await h.send({ type: "askHint", question: "why is this wrong?", code: CODE, mode: "hint" });
+    expect(latest(h.posted, "explainFirst")).toBeDefined();
+    await h.send({ type: "explainSkip" });
+    h.posted.length = 0;
+
+    // The student edits, then asks again. The gate has already had its turn.
+    await h.send({
+      type: "askHint",
+      question: "still stuck",
+      code: CODE + "\n# tried something\n",
+      mode: "hint",
+    });
+
+    expect(latest(h.posted, "explainFirst")).toBeUndefined();
   });
 });
