@@ -650,7 +650,11 @@ input[type="text"].trace__cell {
   font-size: inherit;
   color: var(--ink);
   background: var(--card);
-  border: 1px solid transparent;
+  /* `.trace` has no background of its own, so these cells sit directly on
+     `--ground`. `--card` against `--ground` is only ~1.08:1 — a border is
+     the only thing that makes the box visible at rest. `--line` against
+     `--ground` computes to ~3.42:1, clearing the 3:1 UI-boundary minimum. */
+  border: 1px solid var(--line);
   border-radius: var(--radius-sm);
   padding: var(--s1) var(--s2);
 }
@@ -830,6 +834,10 @@ textarea::placeholder {
 
 .btn--primary:hover:not(:disabled) {
   background: var(--coral-lit);
+  /* The generic .btn hover rule ((0,3,0)) outranks .btn--primary's own
+     `border-color: transparent` ((0,1,0)), so restate it here or the coral
+     pill picks up a --line ring on hover. */
+  border-color: transparent;
 }
 
 .btn__hint {
@@ -852,6 +860,14 @@ textarea::placeholder {
 .btn--accent {
   background: transparent;
   color: var(--coral);
+  border-color: var(--coral);
+}
+
+/* Same family as .btn--primary's hover fix: the generic .btn hover rule
+   ((0,3,0)) reaches .btn--accent too and has no competing border-color at
+   that specificity, so the accent identity would dim to --line on hover
+   without this. */
+.btn--accent:hover:not(:disabled) {
   border-color: var(--coral);
 }
 
