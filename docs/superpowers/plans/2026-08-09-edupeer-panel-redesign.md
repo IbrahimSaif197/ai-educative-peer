@@ -1208,6 +1208,28 @@ cd extension && unzip -l edupeer-1.3.0.vsix | grep -c "fonts/"
 
 Expected: 4 (two woff2, `OFL.txt`, `LICENSE.md`). Zero means `.vscodeignore` excluded them after all and the panel will render in a fallback face.
 
+- [ ] **Step 2b: Replace the placeholder OFL text**
+
+Task 1 fetched the generic SIL OFL template, which ships with literal unfilled
+placeholders — `<dates>`, `<Copyright Holder> (<URL|email>)`,
+`<Reserved Font Name>`. A licence that never names its copyright holder is weak
+evidence of compliance. Replace it with each project's own OFL, which carries
+the real copyright line:
+
+```bash
+cd extension/media/fonts
+curl -sfL -o OFL-bricolage.txt https://raw.githubusercontent.com/googlefonts/bricolage/main/OFL.txt
+curl -sfL -o OFL-geist.txt https://raw.githubusercontent.com/vercel/geist-font/main/LICENSE.TXT
+head -2 OFL-bricolage.txt OFL-geist.txt
+rm -f OFL.txt
+```
+
+Each file must open with a real `Copyright (c) …` line naming a holder. If
+either URL 404s (`curl -f` fails, so the file will not be created), keep
+`OFL.txt` and report which one — do not ship a half-set.
+
+Update `LICENSE.md` to point at the two files instead of `OFL.txt`.
+
 - [ ] **Step 3: Version and changelog**
 
 Set `"version": "1.3.0"` in `extension/package.json`. Prepend to `extension/CHANGELOG.md`:
