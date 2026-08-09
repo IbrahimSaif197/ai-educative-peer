@@ -73,6 +73,7 @@ export async function activate(context: vscode.ExtensionContext) {
         streakDays: progress.streak_days,
         reviewDue: progress.review_due,
       });
+      provider.postStreak(progress.streak_days);
     } catch {
       /* the status bar is decoration; never surface a failure here */
     }

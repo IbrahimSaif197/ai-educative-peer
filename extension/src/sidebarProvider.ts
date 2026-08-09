@@ -98,6 +98,15 @@ export class EduPeerSidebarProvider implements vscode.WebviewViewProvider {
     this.post({ type: "authTrouble", value: failed });
   }
 
+  /**
+   * Mirror the practice streak into the panel. The value comes from the same
+   * progress call the status bar already makes, so this costs no extra
+   * request.
+   */
+  public postStreak(days: number): void {
+    this.post({ type: "streak", days });
+  }
+
   public resolveWebviewView(webviewView: vscode.WebviewView): void {
     this.view = webviewView;
     // The suppression signature describes what the LAST webview was showing,
@@ -706,6 +715,7 @@ export class EduPeerSidebarProvider implements vscode.WebviewViewProvider {
         <span class="brand__mark" aria-hidden="true"></span>
         <span class="brand__name">EduPeer</span>
       </span>
+      <span id="streakChip" class="streak" hidden><span aria-hidden="true">🔥</span><span id="streakDays">0</span></span>
       <span class="topbar__spacer"></span>
       <span id="accountLabel" class="topbar__account" title="Signed-in account">Not signed in</span>
       <button id="authBtn" class="btn btn--ghost btn--sm">Sign in</button>

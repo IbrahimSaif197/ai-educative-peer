@@ -187,6 +187,19 @@ body {
   letter-spacing: 0.01em;
 }
 
+.streak {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--s2);
+  padding: var(--s1) var(--s3);
+  border-radius: var(--radius-pill);
+  background: var(--card-lit);
+  font-family: var(--display);
+  font-size: var(--t-small);
+  font-weight: 700;
+  color: var(--ink);
+}
+
 .topbar__account {
   font-family: var(--mono);
   font-size: var(--t-micro);

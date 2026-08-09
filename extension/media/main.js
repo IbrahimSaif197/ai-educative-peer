@@ -18,6 +18,8 @@
   const badgesWrapEl = el("badgesWrap");
   const accountLabelEl = el("accountLabel");
   const authBtn = el("authBtn");
+  const streakChipEl = el("streakChip");
+  const streakDaysEl = el("streakDays");
   const reviewBtn = el("reviewBtn");
   const offlineBannerEl = el("offlineBanner");
   const authBannerEl = el("authBanner");
@@ -698,6 +700,13 @@
       case "authTrouble":
         authBannerEl.hidden = !msg.value;
         break;
+
+      case "streak": {
+        const days = Number(msg.days) || 0;
+        streakDaysEl.textContent = String(days);
+        streakChipEl.hidden = days <= 0;
+        break;
+      }
 
       case "badges":
         renderBadges(msg.badges);

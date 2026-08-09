@@ -1084,3 +1084,46 @@ describe("webview — the hint ladder lives in the card", () => {
     expect($("#stepper")).toBeNull();
   });
 });
+
+// As with the sections above, this harness predates `loadWebview()`: there is
+// no `dom` handle to destructure. `post`/`el` already drive and read the one
+// jsdom `document` every test in this file shares, reset by `load()` in
+// `beforeEach`.
+describe("webview — streak chip", () => {
+  it("shows the streak when there is one", () => {
+    post({ type: "streak", days: 4 });
+
+    const chip = el("streakChip");
+    expect(chip.hidden).toBe(false);
+    expect(chip.textContent).toContain("4");
+  });
+
+  it("hides the chip at zero rather than showing a zero", () => {
+    post({ type: "streak", days: 0 });
+
+    expect(el("streakChip").hidden).toBe(true);
+  });
+
+  it("hides the chip when the field is missing", () => {
+    post({ type: "streak" });
+
+    expect(el("streakChip").hidden).toBe(true);
+  });
+
+  it("hides the chip on a non-numeric value rather than showing NaN", () => {
+    post({ type: "streak", days: "not-a-number" });
+
+    expect(el("streakChip").hidden).toBe(true);
+  });
+
+  it("keeps the flame decorative and the count as the chip's real content", () => {
+    post({ type: "streak", days: 6 });
+
+    const chip = el("streakChip");
+    const flame = chip.firstElementChild as HTMLElement;
+    const count = el("streakDays");
+    expect(flame.getAttribute("aria-hidden")).toBe("true");
+    expect(count.textContent).toBe("6");
+    expect(count.hasAttribute("aria-hidden")).toBe(false);
+  });
+});
