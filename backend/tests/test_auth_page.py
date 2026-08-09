@@ -66,3 +66,13 @@ def test_auth_page_labels_every_input():
     assert 'for="email"' in res.text
     assert 'for="password"' in res.text
     assert 'aria-live="polite"' in res.text
+
+
+def test_auth_page_invalid_card_still_shows_without_a_port():
+    res = client.get("/auth/login")
+    # #done and #invalid hide via the native `hidden` attribute rather than a
+    # CSS class, so only one of the three <main> cards is ever visible even
+    # if the page's own stylesheet fails to load.
+    assert 'id="done" hidden' in res.text
+    assert 'id="invalid" hidden' in res.text
+    assert 'document.getElementById("invalid").hidden = false;' in res.text
