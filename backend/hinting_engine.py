@@ -485,10 +485,20 @@ class HintingEngine:
         if not snippet.strip():
             return [], 0, ""
         lang = get_language(language)
-        system = TRACE_TABLE_PROMPT.format(language=lang["display_name"])
+        # Same treatment as `_build_user_message`, `scan_code` and
+        # `generate_line_hint`: a bare ``` fence is closed by the student
+        # typing ```, so the snippet could otherwise reach instruction
+        # position. The snippet here is a selection, so it is entirely
+        # student-chosen text.
+        nonce = secrets.token_hex(8)
+        system = (
+            TRACE_TABLE_PROMPT.format(language=lang["display_name"])
+            + UNTRUSTED_INPUT_RULE
+        )
         user_msg = (
-            f"Snippet to trace:\n```{lang['fence']}\n{snippet.strip()}\n```\n\n"
-            "Respond with JSON only."
+            "Snippet to trace:\n"
+            + self._wrap_untrusted("student_code", nonce, snippet.strip())
+            + "\n\nRespond with JSON only."
         )
         data = self._extract_json(self._chat(system, user_msg, 200))
         if not isinstance(data, dict):
