@@ -2,6 +2,7 @@ import {
   AttemptTracker,
   HINT_COOLDOWN_MS,
   MAX_EDIT_SUMMARY_CHARS,
+  isAttempt,
   nudgeForUnchangedCode,
   summarizeEdit,
 } from "../attemptTracker";
@@ -163,5 +164,42 @@ describe("nudgeForUnchangedCode", () => {
 
   it("rounds part-seconds up", () => {
     expect(nudgeForUnchangedCode(4200)).toContain("5s");
+  });
+});
+
+describe("isAttempt", () => {
+  it("counts anything that engages with the problem", () => {
+    const engaged = [
+      "oh it should be a plus",
+      "maybe because minus takes away instead of combining",
+      "wait is it because - subtracts?",
+      "i tried changing it to += but it broke",
+      "whats an operator",
+      "hmm",
+      "code wont run",
+    ];
+    for (const message of engaged) {
+      expect(isAttempt(message)).toBe(true);
+    }
+  });
+
+  it("does not count giving up", () => {
+    const giveUps = [
+      "i dont know",
+      "i don't know",
+      "idk",
+      "IDK",
+      "  no idea  ",
+      "just tell me the answer",
+      "I really have no idea at all, can you just show me the answer",
+    ];
+    for (const message of giveUps) {
+      expect(isAttempt(message)).toBe(false);
+    }
+  });
+
+  it("does not count an empty message", () => {
+    expect(isAttempt("")).toBe(false);
+    expect(isAttempt("   \n  ")).toBe(false);
   });
 });
