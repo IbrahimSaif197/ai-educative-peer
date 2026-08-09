@@ -743,15 +743,6 @@ export class EduPeerSidebarProvider implements vscode.WebviewViewProvider {
   </div>
 
   <footer class="composer">
-    <div class="stepper" id="stepper" hidden>
-      <span class="stepper__label">Hint depth</span>
-      <ol class="stepper__track" id="stepperTrack">
-        <li class="stepper__step" data-level="1"><span>1</span></li>
-        <li class="stepper__step" data-level="2"><span>2</span></li>
-        <li class="stepper__step" data-level="3"><span>3</span></li>
-      </ol>
-    </div>
-
     <fieldset class="confidence" id="confidence">
       <legend class="confidence__legend">How sure are you?</legend>
       <button type="button" class="conf" data-value="1" aria-pressed="false">No idea</button>

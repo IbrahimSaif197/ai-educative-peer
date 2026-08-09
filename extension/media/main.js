@@ -21,7 +21,6 @@
   const reviewBtn = el("reviewBtn");
   const offlineBannerEl = el("offlineBanner");
   const authBannerEl = el("authBanner");
-  const stepperEl = el("stepper");
   const confidenceEl = el("confidence");
 
   const DEFAULT_PLACEHOLDER = "Describe your error or ask a question…";
@@ -140,6 +139,24 @@
       wrap.appendChild(eyebrow);
     }
 
+    // The depth belongs with the hint it describes. It used to sit pinned
+    // above the composer, describing a hint that could be several turns up.
+    if (turn.level >= 1) {
+      const ladder = document.createElement("div");
+      ladder.className = "ladder";
+      const label = document.createElement("span");
+      label.className = "ladder__label";
+      label.textContent = `hint ${turn.level}`;
+      ladder.appendChild(label);
+      for (let i = 1; i <= 3; i++) {
+        const dot = document.createElement("span");
+        dot.className = i <= turn.level ? "ladder__dot is-on" : "ladder__dot";
+        dot.style.setProperty("--dot-index", String(i - 1));
+        ladder.appendChild(dot);
+      }
+      wrap.appendChild(ladder);
+    }
+
     const body = document.createElement("div");
     body.className = "turn__body";
     if (turn.role === "student") {
@@ -203,30 +220,6 @@
     }
     chatEl.appendChild(row);
     scrollToEnd();
-  }
-
-  // --------------------------------------------------------------- stepper
-
-  function setLevel(level) {
-    if (!level || level < 1) {
-      stepperEl.hidden = true;
-      return;
-    }
-    stepperEl.hidden = false;
-    stepperEl.classList.remove("is-held");
-    stepperEl
-      .querySelectorAll(".stepper__step")
-      .forEach((step) =>
-        step.classList.toggle("is-on", Number(step.dataset.level) <= level)
-      );
-  }
-
-  function holdLevel() {
-    if (stepperEl.hidden) return;
-    stepperEl.classList.remove("is-held");
-    // Reflow so the animation restarts even on consecutive holds.
-    void stepperEl.offsetWidth;
-    stepperEl.classList.add("is-held");
   }
 
   // ------------------------------------------------------------ confidence
@@ -486,16 +479,11 @@
     const mode = msg.mode || "hint";
     const level = Number(msg.hint_level) || 0;
 
-    if (mode === "hint") {
-      setLevel(level);
-    } else if (mode === "attempt-gate") {
-      holdLevel();
-    }
-
     addTurn({
       role: "tutor",
       text: msg.hint,
-      eyebrow: mode === "hint" ? `Hint ${level}` : MODE_LABEL[mode] || mode,
+      eyebrow: mode === "hint" ? undefined : MODE_LABEL[mode] || mode,
+      level: mode === "hint" ? level : 0,
       tags: msg.concept_tags || [],
       flagged: FLAGGED_MODES.has(mode),
     });
@@ -718,7 +706,6 @@
         clearChat();
         setComposerMode("hint");
         setConfidence(0);
-        setLevel(0);
         expectReflectAnswer = false;
         if (msg.summary) {
           addTurn({ role: "tutor", text: msg.summary, eyebrow: "What you learned" });

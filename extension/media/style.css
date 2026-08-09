@@ -639,70 +639,6 @@ body {
   background: var(--surface);
 }
 
-/*
- * The signature element: hint depth.
- *
- * Depth is what EduPeer is about — how much help you have spent on this
- * problem. Segments fill as the level climbs and the fill walks from the
- * theme's accent toward its warning colour, because a level-3 hint is
- * pseudocode and that is as close to the answer as the tutor will go.
- */
-.stepper {
-  display: flex;
-  align-items: center;
-  gap: var(--s4);
-}
-
-.stepper__label {
-  font-family: var(--mono);
-  font-size: var(--t-micro);
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
-  color: var(--ink-dim);
-}
-
-.stepper__track {
-  display: flex;
-  gap: var(--s2);
-  margin: 0;
-  padding: 0;
-  list-style: none;
-  flex: 1;
-}
-
-.stepper__step {
-  flex: 1;
-  height: 3px;
-  border-radius: 2px;
-  background: var(--line-soft);
-  transition: background-color 220ms ease;
-}
-
-.stepper__step span {
-  position: absolute;
-  width: 1px;
-  height: 1px;
-  overflow: hidden;
-  clip-path: inset(50%);
-}
-
-.stepper__step.is-on[data-level="1"] {
-  background: var(--accent);
-}
-
-.stepper__step.is-on[data-level="2"] {
-  background: color-mix(in srgb, var(--accent) 45%, var(--warn));
-}
-
-.stepper__step.is-on[data-level="3"] {
-  background: var(--warn);
-}
-
-/* Asked again without editing: the meter reports, it does not advance. */
-.stepper.is-held .stepper__step.is-on {
-  animation: held 700ms ease;
-}
-
 /* ------------------------------------------------------------- confidence */
 
 .confidence {
@@ -867,12 +803,6 @@ textarea:focus {
   }
 }
 
-@keyframes held {
-  50% {
-    opacity: 0.3;
-  }
-}
-
 @keyframes turn-in {
   from {
     opacity: 0;
@@ -918,4 +848,47 @@ textarea:focus {
 .signin p {
   margin: 0;
   color: var(--ink-dim);
+}
+
+/* The signature element: the product's own mechanic, on screen constantly. */
+.ladder {
+  display: flex;
+  align-items: center;
+  gap: var(--s2);
+  margin-bottom: var(--s4);
+}
+
+.ladder__label {
+  margin-right: var(--s2);
+  font-family: var(--display);
+  font-size: var(--t-small);
+  font-weight: 700;
+  color: var(--muted);
+}
+
+.ladder__dot {
+  width: 7px;
+  height: 7px;
+  border-radius: var(--radius-pill);
+  background: var(--line-soft);
+  transition: background-color var(--t-standard) var(--ease-signature);
+}
+
+.ladder__dot.is-on {
+  background: var(--coral);
+  animation: dot-fill 220ms var(--ease-signature) both;
+  /* Left to right, 40ms apart: a micro cascade well inside the 200ms budget. */
+  animation-delay: calc(var(--dot-index, 0) * 40ms);
+}
+
+@keyframes dot-fill {
+  from {
+    transform: scale(0.6);
+  }
+  60% {
+    transform: scale(1.15);
+  }
+  to {
+    transform: scale(1);
+  }
 }
