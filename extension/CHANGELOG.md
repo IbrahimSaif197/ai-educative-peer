@@ -1,5 +1,20 @@
 # Changelog
 
+## 1.3.0
+
+- The tutor panel has been rebuilt. It has its own look now instead of
+  borrowing the editor's, replies arrive in cards rather than as plain text,
+  and your own messages sit in their own bubble.
+- The hint depth meter moved out of the bottom of the panel and into the hint
+  it describes, so you can see at a glance how deep any answer went.
+- Your practice streak shows at the top, and the panel marks the moment a file
+  stops being flagged.
+- Everything moves now: replies rise into place, the depth dots fill as the
+  tutor goes deeper, and the marker follows your cursor. If you have "reduce
+  motion" turned on, the panel respects it.
+- Note: this panel no longer follows your VS Code colour theme, including the
+  high-contrast themes.
+
 ## 1.2.0
 
 - Fix the bug in a practice file and the `# bug:` note describing it now
