@@ -1126,4 +1126,12 @@ describe("webview — streak chip", () => {
     expect(count.textContent).toBe("6");
     expect(count.hasAttribute("aria-hidden")).toBe(false);
   });
+
+  // Without this, a screen reader concatenates the chip's children and reads
+  // a bare "4" — the number with no word saying what it counts.
+  it("announces what the number means, not just the number", () => {
+    post({ type: "streak", days: 4 });
+
+    expect(el("streakChip").getAttribute("aria-label")).toBe("4 day practice streak");
+  });
 });

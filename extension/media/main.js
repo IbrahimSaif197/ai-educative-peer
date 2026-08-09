@@ -704,6 +704,7 @@
       case "streak": {
         const days = Number(msg.days) || 0;
         streakDaysEl.textContent = String(days);
+        streakChipEl.setAttribute("aria-label", `${days} day practice streak`);
         streakChipEl.hidden = days <= 0;
         break;
       }

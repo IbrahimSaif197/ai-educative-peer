@@ -1127,6 +1127,52 @@ describe("EduPeerSidebarProvider — focus scoping", () => {
   });
 });
 
+describe("EduPeerSidebarProvider — streak chip", () => {
+  /** One webview host, with its own message log and its own `ready` channel. */
+  function makeView(posted: any[]) {
+    let receive: ((msg: any) => Promise<void>) | undefined;
+    const view = {
+      webview: {
+        options: {},
+        html: "",
+        cspSource: "vscode-webview:",
+        asWebviewUri: (u: any) => u,
+        postMessage: (msg: any) => {
+          posted.push(msg);
+          return Promise.resolve(true);
+        },
+        onDidReceiveMessage: (fn: any) => {
+          receive = fn;
+          return { dispose: jest.fn() };
+        },
+      },
+      show: jest.fn(),
+      onDidDispose: jest.fn(() => ({ dispose: jest.fn() })),
+    } as any;
+    return { view, send: (msg: any) => receive!(msg) };
+  }
+
+  it("re-posts the last streak when the sidebar is closed and reopened", async () => {
+    const h = await build();
+    h.provider.postStreak(4);
+
+    // VS Code re-resolves the view whenever the sidebar host is recreated
+    // (closing and reopening the sidebar does it — see the comment on
+    // `onDidDispose` in resolveWebviewView). `post` is a no-op while there is
+    // no view, so the streak pushed above never reached this new webview; it
+    // must be re-sent from cached provider state on "ready", the same way
+    // `postOffline`/`postAuthTrouble` re-derive from live `api` state there.
+    const reopened: any[] = [];
+    const second = makeView(reopened);
+    h.provider.resolveWebviewView(second.view);
+    await second.send({ type: "ready" });
+
+    const streak = latest(reopened, "streak");
+    expect(streak).toBeDefined();
+    expect(streak.days).toBe(4);
+  });
+});
+
 describe("EduPeerSidebarProvider — webview CSP", () => {
   it("allows fonts from the extension, and nothing else", async () => {
     const { html } = await setupProvider(); // returns the resolved webview html

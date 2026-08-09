@@ -74,6 +74,12 @@ export class EduPeerSidebarProvider implements vscode.WebviewViewProvider {
   /** Current hint level, mirrored to the status bar. */
   private readonly levelEmitter = new vscode.EventEmitter<number>();
   readonly onDidChangeHintLevel = this.levelEmitter.event;
+  /**
+   * Last streak pushed. `post` is a no-op while the view does not exist, so a
+   * webview resolved after that push (the panel is opened on demand, not at
+   * startup) would otherwise never learn the streak. Re-read on "ready".
+   */
+  private lastStreakDays = 0;
 
   constructor(
     private readonly extensionUri: vscode.Uri,
@@ -104,6 +110,7 @@ export class EduPeerSidebarProvider implements vscode.WebviewViewProvider {
    * request.
    */
   public postStreak(days: number): void {
+    this.lastStreakDays = days;
     this.post({ type: "streak", days });
   }
 
@@ -133,6 +140,7 @@ export class EduPeerSidebarProvider implements vscode.WebviewViewProvider {
           await this.sendBadges();
           this.postOffline(!this.api.isAvailable);
           this.postAuthTrouble(this.api.isAuthHealthy === false);
+          this.postStreak(this.lastStreakDays);
           void this.checkReviewDue();
           return;
         case "persistChat":
