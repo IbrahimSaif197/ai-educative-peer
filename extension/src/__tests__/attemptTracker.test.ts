@@ -210,3 +210,46 @@ describe("isAttempt", () => {
     expect(isAttempt("im not sure but maybe it subtracts")).toBe(true);
   });
 });
+
+describe("AttemptTracker — answering counts as trying", () => {
+  const CODE = "x = 1";
+
+  it("escalates on an answer even though the code is untouched", () => {
+    const tracker = new AttemptTracker();
+    tracker.record("file", CODE, 1000);
+
+    const result = tracker.evaluate("file", CODE, 1100, true);
+
+    expect(result.signal).toBe("answered");
+    expect(result.escalate).toBe(true);
+    expect(result.editSummary).toBe("");
+    expect(result.cooldownRemainingMs).toBe(0);
+  });
+
+  it("still holds when they did not answer and did not edit", () => {
+    const tracker = new AttemptTracker();
+    tracker.record("file", CODE, 1000);
+
+    expect(tracker.evaluate("file", CODE, 1100, false).signal).toBe("unchanged");
+  });
+
+  it("prefers the real edit over the answer, so the diff survives", () => {
+    const tracker = new AttemptTracker();
+    tracker.record("file", CODE, 1000);
+
+    const result = tracker.evaluate("file", "x = 2", 1100, true);
+
+    expect(result.signal).toBe("changed");
+    expect(result.editSummary).toBe("1 - x = 1\n1 + x = 2");
+  });
+
+  it("lets three answers reach the top of the ladder", () => {
+    const tracker = new AttemptTracker();
+    tracker.record("file", CODE, 1000);
+
+    for (const at of [1100, 1200, 1300]) {
+      expect(tracker.evaluate("file", CODE, at, true).escalate).toBe(true);
+      tracker.record("file", CODE, at);
+    }
+  });
+});

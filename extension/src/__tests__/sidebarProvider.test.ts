@@ -320,9 +320,12 @@ describe("the attempt gate", () => {
   });
 
   it("refuses to escalate when nothing changed", async () => {
+    // "idk" is on the give-up list (see attemptTracker.ts), so it does not
+    // count as answering — this test is about the code being untouched, not
+    // about what was typed.
     const h = await build();
     await askPastTheGate(h);
-    await h.send({ type: "askHint", question: "still stuck", code: CODE, mode: "hint" });
+    await h.send({ type: "askHint", question: "idk", code: CODE, mode: "hint" });
     expect(hintRequest(h.api).escalate).toBe(false);
   });
 
@@ -330,7 +333,7 @@ describe("the attempt gate", () => {
     const h = await build();
     await askPastTheGate(h);
     h.posted.length = 0;
-    await h.send({ type: "askHint", question: "still stuck", code: CODE, mode: "hint" });
+    await h.send({ type: "askHint", question: "idk", code: CODE, mode: "hint" });
     const gate = h.posted.find((m) => m.type === "hint" && m.mode === "attempt-gate");
     expect(gate.hint).toContain("haven't changed anything");
     expect(gate.hint_level).toBe(0);
@@ -1270,5 +1273,33 @@ describe("the seeded bug marker never reaches the tutor", () => {
 
     const focus = latest(posted, "focus");
     expect(focus.focusCode).toContain("# bug: subtracts instead of adds");
+  });
+});
+
+describe("answering in chat deepens the hint", () => {
+  beforeEach(() => mock.__reset());
+
+  it("does not show the same-depth block after a real answer", async () => {
+    const h = await build();
+    await askPastTheGate(h);
+    h.posted.length = 0;
+
+    await h.send({ type: "askHint", question: "oh it should be a plus", code: CODE, mode: "hint" });
+
+    const gate = h.posted.find((m: any) => m.mode === "attempt-gate");
+    expect(gate).toBeUndefined();
+    expect(hintRequest(h.api).escalate).toBe(true);
+  });
+
+  it("still shows it when they gave up instead", async () => {
+    const h = await build();
+    await askPastTheGate(h);
+    h.posted.length = 0;
+
+    await h.send({ type: "askHint", question: "i dont know", code: CODE, mode: "hint" });
+
+    const gate = h.posted.find((m: any) => m.mode === "attempt-gate");
+    expect(gate).toBeDefined();
+    expect(hintRequest(h.api).escalate).toBe(false);
   });
 });

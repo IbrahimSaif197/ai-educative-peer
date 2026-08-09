@@ -23,6 +23,8 @@ export type AttemptSignal =
   | "first"
   /** The student edited the code since the last hint. */
   | "changed"
+  /** The code is untouched, but they reasoned about it in the chat. */
+  | "answered"
   /** Nothing changed, but they have been sitting with it a while. */
   | "stalled"
   /** Nothing changed and they asked again immediately. */
@@ -125,8 +127,17 @@ export class AttemptTracker {
   /**
    * Decide how to treat the next hint request for `key` (one document).
    * Read-only: call `record` once the hint is actually delivered.
+   *
+   * `answered` is the student having reasoned in the chat since the last hint.
+   * It escalates like an edit does, because a student working out a concept
+   * out loud is trying - the old rule pinned them at hint 1 for talking.
    */
-  evaluate(key: string, code: string, now: number = Date.now()): AttemptEvaluation {
+  evaluate(
+    key: string,
+    code: string,
+    now: number = Date.now(),
+    answered = false
+  ): AttemptEvaluation {
     const previous = this.attempts.get(key);
     if (!previous) {
       return { signal: "first", escalate: true, editSummary: "", cooldownRemainingMs: 0 };
@@ -138,6 +149,11 @@ export class AttemptTracker {
         editSummary: summarizeEdit(previous.code, code),
         cooldownRemainingMs: 0,
       };
+    }
+    // Checked after the edit case on purpose: a real edit carries a diff the
+    // tutor answers follow-ups against, and an answer has none to offer.
+    if (answered) {
+      return { signal: "answered", escalate: true, editSummary: "", cooldownRemainingMs: 0 };
     }
     const elapsed = now - previous.at;
     if (elapsed < this.cooldownMs) {

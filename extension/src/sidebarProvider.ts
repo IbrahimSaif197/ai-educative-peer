@@ -1,7 +1,7 @@
 import * as crypto from "crypto";
 import * as vscode from "vscode";
 import { ApiClient, AuthError, ChatTurn, RateLimitError } from "./apiClient";
-import { AttemptTracker, nudgeForUnchangedCode } from "./attemptTracker";
+import { AttemptTracker, isAttempt, nudgeForUnchangedCode } from "./attemptTracker";
 import { AuthManager } from "./authManager";
 import { stripBugMarkers } from "./bugMarkers";
 import { FirebaseClient } from "./firebaseClient";
@@ -504,7 +504,12 @@ export class EduPeerSidebarProvider implements vscode.WebviewViewProvider {
     // Only progressive hints are gated on having actually tried something.
     const attempt =
       mode === "hint"
-        ? this.attempts.evaluate(this.lastDocumentKey, attemptCode)
+        ? this.attempts.evaluate(
+            this.lastDocumentKey,
+            attemptCode,
+            Date.now(),
+            isAttempt(question)
+          )
         : undefined;
     if (attempt?.signal === "unchanged") {
       this.post({
