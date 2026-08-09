@@ -1104,7 +1104,47 @@ input[type="text"]:focus {
 }
 ```
 
-Update `.chip`, `.tag`, `.badge`, `.filecard` and `.trace` to use `--card`, `--card-lit`, `--line-soft` and `--muted` in place of the removed theme tokens. Every removed token must have a replacement: grep for `--vscode-` in `style.css` afterwards and confirm the only remaining uses are `--vscode-font-size`, `--vscode-font-family` and `--vscode-editor-font-family`.
+### Migrate every remaining retired token
+
+Task 1 replaced the `:root` block, which retired `--surface`, `--surface-raised`,
+`--surface-sunken`, `--accent` and `--ink-dim`. **45 references to those tokens
+survive elsewhere in the file and currently resolve to nothing**, so the panel is
+visually incoherent from Task 1 until this task finishes. That is expected on
+this branch and must not ship.
+
+Apply this mapping throughout `extension/media/style.css`:
+
+| Retired | Replacement |
+|---|---|
+| `var(--surface)` | `var(--ground)` |
+| `var(--surface-raised)` | `var(--card)` |
+| `var(--surface-sunken)` | `var(--card-lit)` |
+| `var(--ink-dim)` | `var(--muted)` |
+| `var(--accent)` | `var(--coral)` |
+
+Where a retired token sits as the *fallback* of a workbench token, the workbench
+token goes too — this panel no longer follows the theme:
+
+| Before | After |
+|---|---|
+| `var(--vscode-badge-background, var(--surface-sunken))` | `var(--card-lit)` |
+| `var(--vscode-button-background, var(--accent))` | `var(--coral)` |
+| `var(--vscode-focusBorder, var(--accent))` | `var(--coral)` |
+| `var(--vscode-input-placeholderForeground, var(--ink-dim))` | `var(--muted)` |
+
+The selectors carrying them, so none is missed: `.visually-hidden`,
+`.brand__mark`, `.topbar__account`, `.badges__summary`, `.badge`,
+`.filecard__name`, `.filecard__code`, `.filecard__range`, `.chip`, `.ln__no`,
+`.ln.is-cursor`, `.empty`, `.turn__eyebrow`, `.turn--student .turn__body`,
+`.turn__body code`, `.turn__body pre`, `.tag`, `.caret`, `.trace__prompt`,
+`.trace__grid th`, `.trace__step`, `.trace__cell`, `.thinking`,
+`.thinking__dots i`, `.composer`, and the input, button and confidence rules
+below line 686.
+
+`.stepper__*` rules are deleted outright — Task 4 removed the element.
+
+`color-mix(in srgb, var(--accent) 45%, var(--warn))` becomes
+`color-mix(in srgb, var(--coral) 45%, var(--warn))`.
 
 - [ ] **Step 2: Verify no orphan tokens**
 
@@ -1112,7 +1152,20 @@ Update `.chip`, `.tag`, `.badge`, `.filecard` and `.trace` to use `--card`, `--c
 cd extension && grep -o -- "--vscode-[a-zA-Z-]*" media/style.css | sort -u
 ```
 
-Expected: exactly `--vscode-editor-font-family`, `--vscode-font-family`, `--vscode-font-size`. Anything else is a token that no longer resolves and will render as a browser default.
+Also confirm the retired brand tokens are gone:
+
+```bash
+cd extension && grep -c -- "var(--surface\|var(--accent)\|var(--ink-dim" media/style.css
+```
+
+Expected: `--vscode-` yields exactly `--vscode-editor-font-family`,
+`--vscode-font-family`, `--vscode-font-size`; the retired-token count is **0**.
+
+This is the gate for the whole plan. A custom property with no definition and no
+fallback makes its declaration invalid at computed-value time, so the property
+silently falls back to its inherited or initial value — grey text on a
+transparent background, with nothing in the console to say so. The test suite
+cannot catch it and no agent here has a renderer.
 
 - [ ] **Step 3: Run the suite and commit**
 
