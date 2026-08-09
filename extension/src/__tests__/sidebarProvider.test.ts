@@ -1185,3 +1185,64 @@ describe("EduPeerSidebarProvider — webview CSP", () => {
     expect(csp).toContain("default-src 'none'");
   });
 });
+
+/**
+ * Neither fixture reuses the default `setupProvider` path with a cursor line
+ * another test in this file already resolved at that same path: `resolveFocus`
+ * memoises on uri+version+cursor in a cache nothing here resets (see the
+ * comment on "EduPeerSidebarProvider — focus scoping" above), so a collision
+ * would silently hand back another test's cached scope.
+ */
+describe("EduPeerSidebarProvider — cursor vs focus", () => {
+  beforeEach(() => mock.__reset());
+
+  /** A 2-line function: the enclosing block is the same wherever the cursor lands in it. */
+  const TWO_LINE_BLOCK = "def f():\n    return 1";
+
+  const TWO_FUNCTIONS = [
+    "def first():",
+    "    return 1",
+    "",
+    "",
+    "def second():",
+    "    return 2",
+  ].join("\n");
+
+  /** Move the cursor within the already-open document, the way an arrow key would. */
+  function moveCursor(doc: any, line: number) {
+    mock.window.activeTextEditor = mock.__makeEditor(doc, line);
+  }
+
+  it("posts cursor, not focus, when only the cursor line moved", async () => {
+    // Same document, same version, same block: the focus signature is
+    // unchanged, so the panel would otherwise never learn the cursor moved.
+    const { provider, posted, doc } = await setupProvider(
+      TWO_LINE_BLOCK,
+      0,
+      "/tmp/cursor-vs-focus/two-line.py"
+    );
+    await provider["sendFocus"]();
+    posted.length = 0;
+
+    moveCursor(doc, 1);
+    await provider["sendFocus"]();
+
+    expect(posted.map((m: any) => m.type)).toEqual(["cursor"]);
+    expect(posted[0].cursorLine).toBe(2);
+  });
+
+  it("posts focus when the block changed", async () => {
+    const { provider, posted, doc } = await setupProvider(
+      TWO_FUNCTIONS,
+      1,
+      "/tmp/cursor-vs-focus/two-functions.py"
+    );
+    await provider["sendFocus"]();
+    posted.length = 0;
+
+    moveCursor(doc, 5);
+    await provider["sendFocus"]();
+
+    expect(posted.map((m: any) => m.type)).toContain("focus");
+  });
+});

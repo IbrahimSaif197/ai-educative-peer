@@ -323,6 +323,9 @@ body {
 
 /* Line numbers are real DOM content now (`.ln__no`), not a CSS counter, so
    the preview's gutter always matches the editor's. */
+/* The one thing that moves when the cursor moves inside a block. Everything
+   else holds still: this fires on every keystroke and a panel that redraws
+   itself that often is a panel nobody can read. */
 .ln {
   display: grid;
   /* Fixed, not auto: each row is its own grid, so an auto column would size
@@ -331,6 +334,23 @@ body {
      files run past the two digits the old 2.5ch fit. */
   grid-template-columns: 4ch 1fr;
   gap: var(--s4);
+  position: relative;
+  transition: background-color var(--t-quick) linear;
+}
+
+.ln::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  width: 2px;
+  height: 100%;
+  background: var(--coral);
+  opacity: 0;
+  transition: opacity 180ms var(--ease-signature);
+}
+
+.ln.is-cursor::before {
+  opacity: 1;
 }
 
 /* The "No file open" and "… N more lines" rows are a single line of text,

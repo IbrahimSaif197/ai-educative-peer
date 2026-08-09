@@ -44,6 +44,8 @@ export class EduPeerSidebarProvider implements vscode.WebviewViewProvider {
   private lastFullCode = "";
   /** Suppresses a re-post when nothing the student can see has changed. */
   private lastFocusSignature = "";
+  /** Last cursor line posted, 1-based. Suppresses repeat cursor messages. */
+  private lastCursorLine = 0;
   private focusDebounce?: NodeJS.Timeout;
   /** Code fingerprints that already went through the explain-first gate. */
   private seenFingerprints = new Set<string>();
@@ -127,6 +129,7 @@ export class EduPeerSidebarProvider implements vscode.WebviewViewProvider {
     // empty `currentCode` and a Refresh button that routes back through the
     // same suppressed path.
     this.lastFocusSignature = "";
+    this.lastCursorLine = 0;
     webviewView.webview.options = {
       enableScripts: true,
       localResourceRoots: [vscode.Uri.joinPath(this.extensionUri, "media")],
@@ -624,6 +627,7 @@ export class EduPeerSidebarProvider implements vscode.WebviewViewProvider {
       this.lastFocusCode = "";
       this.lastFullCode = "";
       this.lastFocusSignature = "";
+      this.lastCursorLine = 0;
       this.lastDocumentKey = "";
       this.post({ type: "focus", focusCode: "", fileName: "", language: "", totalLines: 0 });
       return;
@@ -640,7 +644,19 @@ export class EduPeerSidebarProvider implements vscode.WebviewViewProvider {
     const signature = `${doc.uri.toString()}:${focus.startLine}:${focus.endLine}:${focusCode}`;
     // The old code posted the whole document on every keystroke; most of those
     // posts said nothing new.
-    if (!opts.force && signature === this.lastFocusSignature) return;
+    if (!opts.force && signature === this.lastFocusSignature) {
+      // The block is unchanged, so the panel does not need re-rendering — but
+      // the cursor may still have moved inside it, and the marker has to
+      // follow. A full focus post here would put the whole file back on the
+      // wire on every keystroke, which is what the signature exists to stop.
+      const cursorLine = editor.selection.active.line + 1;
+      if (cursorLine !== this.lastCursorLine) {
+        this.lastCursorLine = cursorLine;
+        this.post({ type: "cursor", cursorLine });
+      }
+      return;
+    }
+    this.lastCursorLine = editor.selection.active.line + 1;
     this.lastFocusSignature = signature;
 
     this.lastFocus = focus;

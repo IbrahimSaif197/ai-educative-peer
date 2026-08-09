@@ -1151,3 +1151,31 @@ describe("webview — clean scan celebration", () => {
     jest.useRealTimers();
   });
 });
+
+// As with the sections above, this harness predates `loadWebview()` (there is
+// no `dom` handle to destructure, and no `{ post, dom }` return value): `post`
+// and `$$` already drive and read the one jsdom `document` every test in this
+// file shares, reset by `load()` in `beforeEach`.
+describe("webview — cursor moves without re-rendering", () => {
+  it("moves the marker and leaves the code rows alone", () => {
+    post({
+      type: "focus",
+      focusCode: "a\nb\nc",
+      breadcrumb: "demo.py › f",
+      startLine: 1,
+      endLine: 3,
+      cursorLine: 1,
+      fileName: "/tmp/demo.py",
+      language: "Python",
+      totalLines: 3,
+    });
+    const before = $$(".ln")[0];
+
+    post({ type: "cursor", cursorLine: 3 });
+
+    expect($$(".ln.is-cursor")).toHaveLength(1);
+    expect($$(".ln.is-cursor")[0].textContent).toContain("c");
+    // Same node: the rows were not rebuilt.
+    expect($$(".ln")[0]).toBe(before);
+  });
+});

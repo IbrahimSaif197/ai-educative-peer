@@ -586,6 +586,17 @@
         langChipEl.hidden = !msg.language;
         break;
 
+      case "cursor": {
+        const line = Number(msg.cursorLine) || 0;
+        cursorLine = line;
+        const rows = codeEl.querySelectorAll(".ln");
+        rows.forEach((row) => {
+          const no = row.querySelector(".ln__no");
+          row.classList.toggle("is-cursor", !!no && Number(no.textContent) === line);
+        });
+        break;
+      }
+
       case "fullFile":
         // A reply can arrive after the student has already toggled back to
         // the focus block (e.g. a quick on/off); without this guard it would
