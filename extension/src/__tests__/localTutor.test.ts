@@ -116,10 +116,10 @@ describe("offlineTutorReply", () => {
     expect(() => offlineTutorReply("import os", "python", -3)).not.toThrow();
   });
 
-  it("always ends with the tutor's closing question", () => {
-    expect(offlineTutorReply("x = 1", "python").trim()).toMatch(
-      /What do you think should happen next\?$/
-    );
+  it("closes on its own question rather than a stock sentence", () => {
+    const reply = offlineTutorReply("x = 1", "python").trim();
+    expect(reply).not.toContain("What do you think should happen next?");
+    expect(reply.endsWith("?")).toBe(true);
   });
 
   it("handles empty code", () => {

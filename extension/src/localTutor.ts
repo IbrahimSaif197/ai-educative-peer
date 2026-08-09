@@ -348,9 +348,9 @@ export function offlineTutorReply(code: string, languageId: string, seed = 0): s
   for (const line of lines) {
     const rule = matchLocalRule(line, languageId);
     if (rule) {
-      return `${OFFLINE_PREFIX}\n\n${rule.question}\n\nWhat do you think should happen next?`;
+      return `${OFFLINE_PREFIX}\n\n${rule.question}`;
     }
   }
   const generic = OFFLINE_GENERIC[Math.abs(seed) % OFFLINE_GENERIC.length];
-  return `${OFFLINE_PREFIX}\n\n${generic}\n\nWhat do you think should happen next?`;
+  return `${OFFLINE_PREFIX}\n\n${generic}`;
 }
