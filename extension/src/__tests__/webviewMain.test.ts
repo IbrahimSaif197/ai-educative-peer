@@ -124,8 +124,21 @@ describe("restoring a transcript", () => {
   });
 
   it("falls back to the empty state when there is nothing stored", () => {
+    post({ type: "authState", signedIn: true, label: "sam@school.edu" });
     post({ type: "restoreChat", messages: [] });
     expect($(".empty")).not.toBeNull();
+  });
+
+  // signedIn defaults to false until an "authState" message says otherwise,
+  // and the real provider always posts "restoreChat" before "authState" (see
+  // sidebarProvider.ts's "ready" handler) — so a signed-out reload hits this
+  // case with the default. This is the "restoreChat" half of Task 12's
+  // refreshPlaceholder(): a signed-out student with no history gets the
+  // sign-in invitation here too, not just from an explicit "authState".
+  it("invites a signed-out student instead, when there is nothing stored", () => {
+    post({ type: "restoreChat", messages: [] });
+    expect($(".signin")).not.toBeNull();
+    expect($(".empty")).toBeNull();
   });
 
   it("drops the empty state once a turn arrives", () => {
@@ -938,5 +951,44 @@ describe("webview — focus panel", () => {
     expect((el("scopeRow") as HTMLElement).hidden).toBe(true);
     button.click();
     expect((el("scopeRow") as HTMLElement).hidden).toBe(false);
+  });
+});
+
+// As with "webview — focus panel" above, this harness predates `loadWebview()`:
+// there is no `dom` handle or per-test webview instance to destructure. Every
+// test in this file shares the same jsdom `document`, reset by `load()` in
+// `beforeEach`, and drives it through the module-level `post`/`$`/`$$`/`sent`
+// helpers already defined at the top of this file.
+describe("webview — signed-out state", () => {
+  it("invites a signed-out student to sign in", () => {
+    post({ type: "authState", signedIn: false, label: "Not signed in" });
+
+    const card = $(".signin");
+    expect(card).not.toBeNull();
+    expect(card!.textContent).toContain("Ready to get unstuck?");
+  });
+
+  it("sends the sign-in message from the card", () => {
+    post({ type: "authState", signedIn: false, label: "Not signed in" });
+
+    ($(".signin button") as HTMLButtonElement).click();
+
+    expect(sent).toContainEqual({ type: "signIn" });
+  });
+
+  it("replaces the card with the normal empty state once signed in", () => {
+    post({ type: "authState", signedIn: false, label: "Not signed in" });
+    post({ type: "authState", signedIn: true, label: "sam@school.edu" });
+
+    expect($(".signin")).toBeNull();
+    expect($(".empty")).not.toBeNull();
+  });
+
+  it("leaves an existing conversation alone", () => {
+    post({ type: "userMessage", text: "why is this failing?" });
+    post({ type: "authState", signedIn: false, label: "Not signed in" });
+
+    expect($(".signin")).toBeNull();
+    expect(document.body.textContent).toContain("why is this failing?");
   });
 });

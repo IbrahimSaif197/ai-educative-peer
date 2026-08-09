@@ -828,3 +828,24 @@ textarea:focus {
     opacity: 1;
   }
 }
+
+/* ----------------------------------------------------------------- signin */
+
+.signin {
+  display: grid;
+  gap: var(--s4);
+  justify-items: start;
+  padding: var(--s6);
+  background: var(--surface-raised);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+}
+
+.signin strong {
+  font-size: var(--t-body);
+}
+
+.signin p {
+  margin: 0;
+  color: var(--ink-dim);
+}

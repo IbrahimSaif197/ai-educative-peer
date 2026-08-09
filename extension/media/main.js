@@ -95,6 +95,36 @@
     if (empty) empty.remove();
   }
 
+  /**
+   * The signed-out invitation. Same words as the sign-in page, because this is
+   * the click that opens it — but the panel's own theme colours, since the
+   * webview follows the workbench and the hosted page does not.
+   */
+  function showSignInState() {
+    clearChat();
+    const wrap = document.createElement("div");
+    wrap.className = "signin";
+    const title = document.createElement("strong");
+    title.textContent = "Ready to get unstuck?";
+    const sub = document.createElement("p");
+    sub.textContent = "Sign in to keep your hints, badges and progress.";
+    const button = document.createElement("button");
+    button.className = "btn btn--primary";
+    button.textContent = "Sign in";
+    button.addEventListener("click", () => vscode.postMessage({ type: "signIn" }));
+    wrap.appendChild(title);
+    wrap.appendChild(sub);
+    wrap.appendChild(button);
+    chatEl.appendChild(wrap);
+  }
+
+  /** Only swap the placeholder — never a conversation the student is reading. */
+  function refreshPlaceholder() {
+    if (turns.length) return;
+    if (signedIn) showEmptyState();
+    else showSignInState();
+  }
+
   function buildTurn(turn) {
     dropEmptyState();
     const wrap = document.createElement("div");
@@ -524,7 +554,7 @@
           buildTurn(turn);
           turns.push(turn);
         }
-        if (!turns.length) showEmptyState();
+        refreshPlaceholder();
         break;
       }
 
@@ -675,6 +705,7 @@
         accountLabelEl.textContent = msg.label;
         accountLabelEl.title = msg.label;
         authBtn.textContent = signedIn ? "Sign out" : "Sign in";
+        refreshPlaceholder();
         break;
 
       case "reviewDue":
