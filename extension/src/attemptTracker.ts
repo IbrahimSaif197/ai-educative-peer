@@ -192,7 +192,6 @@ const GIVE_UP = [
   "idk",
   "dunno",
   "no idea",
-  "not sure",
   "just tell me",
   "tell me the answer",
   "give me the answer",

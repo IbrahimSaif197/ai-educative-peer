@@ -202,4 +202,11 @@ describe("isAttempt", () => {
     expect(isAttempt("")).toBe(false);
     expect(isAttempt("   \n  ")).toBe(false);
   });
+
+  it("counts a hedged guess, which is still a guess", () => {
+    // The give-up list is matched as a substring, so a phrase that commonly
+    // opens a real attempt must not be on it.
+    expect(isAttempt("not sure if it's + or -, but I'll guess +")).toBe(true);
+    expect(isAttempt("im not sure but maybe it subtracts")).toBe(true);
+  });
 });
