@@ -70,6 +70,18 @@
   --display: "Bricolage Grotesque", var(--vscode-font-family), sans-serif;
   --sans: "Geist", var(--vscode-font-family), sans-serif;
   --mono: var(--vscode-editor-font-family, ui-monospace, "Cascadia Mono", Consolas, monospace);
+
+  /* Motion. One signature curve carries about 80% of the panel; the overshoot
+     is small enough to read as warm rather than as a toy in a tool you stare
+     at all day. Amplitude is governed by frequency, not by importance: the
+     rare rewarding moments get overshoot, anything that fires on a keystroke
+     does not. */
+  --ease-signature: cubic-bezier(0.34, 1.26, 0.64, 1);
+  --ease-exit: cubic-bezier(0.3, 0, 1, 1);
+  --ease-loop: cubic-bezier(0.4, 0, 0.6, 1);
+  --t-quick: 140ms;
+  --t-standard: 240ms;
+  --t-slow: 420ms;
 }
 
 * {
@@ -364,6 +376,7 @@ body {
   flex-direction: column;
   gap: var(--s2);
   max-width: 100%;
+  animation: turn-in var(--t-standard) var(--ease-signature) both;
 }
 
 /* The tutor speaks from the margin: a rule, not a bubble. Prose gets the
@@ -836,18 +849,25 @@ textarea:focus {
   }
 }
 
+@keyframes turn-in {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+}
+
 @media (prefers-reduced-motion: reduce) {
+  /* Reduced motion means no movement, not no feedback: the ladder dots still
+     fill, the sweep still tints, banners still appear. Durations collapse
+     rather than animations being removed, so `animationend` handlers still
+     fire and nothing waits forever on an event that never arrives. */
   *,
   *::before,
   *::after {
-    animation-duration: 0.001ms !important;
+    animation-duration: 0.01ms !important;
     animation-iteration-count: 1 !important;
-    transition-duration: 0.001ms !important;
-  }
-
-  .caret {
-    animation: none;
-    opacity: 1;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
   }
 }
 
