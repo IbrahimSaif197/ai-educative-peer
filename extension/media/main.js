@@ -787,11 +787,18 @@
   });
 
   // Paint something immediately from webview state, then let the extension
-  // replace it with the durable copy once it answers "ready".
+  // replace it with the durable copy once it answers "ready". getState() is
+  // synchronous and local, so this runs on every webview init — sidebar
+  // hidden/shown, moved to another container, extension host reload — not
+  // just the "restoreChat" round-trip above. Same flag, same reason: without
+  // it every card here would fire its entrance and every ladder would
+  // re-fire dot-fill/dot-ring all at once.
   const saved = vscode.getState();
   if (saved && Array.isArray(saved.turns) && saved.turns.length) {
     turns = saved.turns;
+    isRestoring = true;
     for (const turn of turns) buildTurn(turn);
+    isRestoring = false;
   } else {
     showEmptyState();
   }
