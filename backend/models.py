@@ -1,3 +1,5 @@
+import re
+
 from pydantic import BaseModel, Field, field_validator
 from typing import List, Literal, Optional
 
@@ -27,6 +29,14 @@ MAX_PROBLEM_KEY_CHARS = 512
 
 
 MAX_FOCUS_LABEL_CHARS = 120
+
+# What a symbol name is allowed to look like. The label is the one client-
+# supplied string that reaches the prompt OUTSIDE the <student_code-NONCE>
+# wrapper, so it is checked against a shape rather than merely tidied:
+# collapsing whitespace never stopped an instruction, it only put it on one
+# line. Identifier characters plus the punctuation real symbol names carry
+# (`Stats.average`, `impl<T>`, `arr[0]`, `ns::fn`, `$scope`, `read-file`).
+_SAFE_FOCUS_LABEL_RE = re.compile(rf"^[\w.$:<>\[\] -]{{0,{MAX_FOCUS_LABEL_CHARS}}}$")
 
 
 class FocusRange(BaseModel):
@@ -61,11 +71,17 @@ class FocusRange(BaseModel):
     @field_validator("label")
     @classmethod
     def _single_line(cls, value: str) -> str:
-        # The label lands in the prompt outside the untrusted-input wrapper, so
-        # it must not be able to carry its own instructions on a new line.
-        # Truncating rather than rejecting keeps a long symbol name from
-        # costing the student their hint.
-        return " ".join(value.split())[:MAX_FOCUS_LABEL_CHARS]
+        # Anything that is not shaped like a symbol name is dropped outright
+        # rather than truncated: a truncated instruction is still an
+        # instruction, and the label travels outside the untrusted-input
+        # wrapper. Dropping it costs nothing — `focus_instruction` then names
+        # the lines without a name, and the student still gets their hint.
+        #
+        # `fullmatch`, not `match`: Python's `$` also matches just before a
+        # trailing newline, which is exactly the character this must reject.
+        if not _SAFE_FOCUS_LABEL_RE.fullmatch(value):
+            return ""
+        return " ".join(value.split())
 
 
 class HintRequest(BaseModel):

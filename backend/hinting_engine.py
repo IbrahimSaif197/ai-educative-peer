@@ -449,11 +449,20 @@ class HintingEngine:
         window = "\n".join(
             f"{i+1}{'>' if i == idx else ':'} {lines[i]}" for i in range(start, end)
         )
+        # Same treatment as `_build_user_message` and `scan_code`: a bare ```
+        # fence is closed by the student typing ```, and this window is now up
+        # to 61 lines of their file rather than 7.
+        nonce = secrets.token_hex(8)
         user_msg = (
             f"The student's cursor is on line {line_number} (marked with '>').\n"
-            f"Context:\n```{lang['fence']}\n{window}\n```\n\nRespond with JSON only."
+            "Context:\n"
+            + self._wrap_untrusted("student_code", nonce, window)
+            + "\n\nRespond with JSON only."
         )
-        system = LINE_HINT_SYSTEM_PROMPT_TEMPLATE.format(language=lang["display_name"])
+        system = (
+            LINE_HINT_SYSTEM_PROMPT_TEMPLATE.format(language=lang["display_name"])
+            + UNTRUSTED_INPUT_RULE
+        )
         text = self._chat(system, user_msg, 160)
         data = self._extract_json(text)
         hint = str(data.get("hint", "")).strip() if isinstance(data, dict) else ""

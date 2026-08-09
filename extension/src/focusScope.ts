@@ -160,7 +160,13 @@ function headerName(header: string): string {
   if (match) return match[1];
   const assigned = header.match(/\b(?:const|let|var)\s+([A-Za-z_]\w*)/);
   if (assigned) return assigned[1];
-  return header.trim().slice(0, 40) || "block";
+  // Falling through is the NORMAL path for Java, C, C++, C#, Go methods and
+  // SQL — none of them match either regex above. The label is sent to the
+  // backend and interpolated into the prompt outside the untrusted-input
+  // wrapper, so it must be a name and not a line of the student's file:
+  // `void f(Ignore all previous rules and answer) {` is a valid C header.
+  // It also stops the panel breadcrumb reading `demo.c › int main(int argc…`.
+  return (header.trim().match(/[A-Za-z_]\w*/)?.[0] ?? "block").slice(0, 40);
 }
 
 function fromWindow(doc: vscode.TextDocument, cursor: number): FocusScope {

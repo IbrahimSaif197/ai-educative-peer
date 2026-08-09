@@ -840,15 +840,26 @@ describe("webview — focus panel", () => {
       type: "focus",
       focusCode: "def f(n):",
       breadcrumb: "demo.py › f",
-      startLine: 1,
-      endLine: 1,
-      cursorLine: 1,
+      startLine: 5,
+      endLine: 5,
+      cursorLine: 5,
       fileName: "/tmp/demo.py",
       language: "Python",
       totalLines: 80,
     });
+    expect($$(".ln__no").map((n) => n.textContent)).toEqual(["5"]);
+
+    // Without this click `showingWholeFile` stays false, the `fullFile` guard
+    // breaks out before `renderLines`, and the assertion below passes because
+    // the preview was never repainted rather than because the feature works.
+    (el("scopeToggle") as HTMLButtonElement).click();
     post({ type: "fullFile", code: "import math\ndef f(n):" });
 
+    // The preview really did widen: the whole file, numbered from line 1.
+    expect($$(".ln__no").map((n) => n.textContent)).toEqual(["1", "2"]);
+
+    // And the composer is still asking about the block, not about what is on
+    // screen — the headline invariant of the whole-file toggle.
     (el("input") as HTMLTextAreaElement).value = "why?";
     (el("send") as HTMLButtonElement).click();
 

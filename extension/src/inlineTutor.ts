@@ -363,29 +363,58 @@ export class InlineTutor {
       if (opts.force) this.setLensState(doc, line, state);
     };
 
+    // `line` is captured here and the round trip below takes seconds, during
+    // which `applyChanges` runs on every keystroke — sliding entries down,
+    // dropping the ones the student edited — and `clearLine` runs on a
+    // dismissal. Both bump the store's revision, so a moved revision means
+    // this answer is about a line that no longer exists at this index.
+    // Dropping it is the same trade the spec already makes for flags: a
+    // missing hint comes back on the next ask, a hint on the wrong line
+    // teaches the wrong thing.
+    const revision = store.revision;
+    const isCurrent = () => store.revision === revision;
+
     // Fired before anything is awaited, so the student sees the click land.
     showState({ kind: "loading" });
     if (opts.force) this.onThinkingChange(true);
     try {
       // The same block the sidebar is showing, so both surfaces agree on
-      // what "the code you're working on" means.
+      // what "the code you're working on" means. That includes a live
+      // selection: `resolveFocus` ranks one above everything, so a synthetic
+      // empty selection here would make the lens resolve the enclosing symbol
+      // while the panel resolves the selection — the two disagreeing in
+      // exactly the case this comment claims they agree.
+      const active = vscode.window.activeTextEditor;
       const at = new vscode.Position(line, 0);
-      const focus = await resolveFocus(doc, new vscode.Selection(at, at));
+      const selection =
+        active?.document === doc &&
+        !active.selection.isEmpty &&
+        active.selection.active.line === line
+          ? active.selection
+          : new vscode.Selection(at, at);
+      const focus = await resolveFocus(doc, selection);
       const res = await this.api.getLineHint(doc.getText(), line + 1, doc.languageId, {
         start_line: focus.startLine + 1,
         end_line: focus.endLine + 1,
         label: focus.label,
       });
+      if (!isCurrent()) return;
       if (res.hint) {
         store.setHint(line, { hint: res.hint, concept: res.concept });
         showState({ kind: "ready", hint: res.hint });
       } else {
+        // The lens is about to say there is nothing to flag here, so the hint
+        // beside it has to go too — spec A4: the two surfaces never disagree.
+        store.clearHint(line);
         showState({ kind: "empty" });
       }
     } catch (err) {
       if (err instanceof RateLimitError) {
+        // Back-off is global, not per line, so it is recorded even when the
+        // answer itself is stale.
         this.quietUntil = Date.now() + err.retryAfterSeconds * 1000;
       }
+      if (!isCurrent()) return;
       // The local rule is still worth showing; the lens says where it came from.
       const local = localLineHint(lineText, doc.languageId);
       if (!this.api.isAvailable && local.hint) {
@@ -396,7 +425,7 @@ export class InlineTutor {
       }
     } finally {
       if (opts.force) this.onThinkingChange(false);
-      this.renderActiveLineIfMatches(doc, line);
+      if (isCurrent()) this.renderActiveLineIfMatches(doc, line);
     }
   }
 
@@ -696,9 +725,16 @@ export class InlineTutor {
     pos: vscode.Position
   ): vscode.Hover | undefined {
     if (!this.isSupported(doc)) return undefined;
-    const { flag, hint } = this.storeFor(doc.uri).annotationsAt(pos.line);
+    const store = this.storeFor(doc.uri);
+    const { flag, hint } = store.annotationsAt(pos.line);
+    // Spec A4: the hover reflects `loading` and `error` too, so hovering a
+    // line mid-request no longer says nothing while the lens says ⏳.
+    // `lensTitle` is reused so the two surfaces cannot drift apart in wording.
+    const state = store.lensStateAt(pos.line);
+    const status =
+      state.kind === "loading" || state.kind === "error" ? lensTitle(state, "") : "";
 
-    if (!flag && !hint) return undefined;
+    if (!flag && !hint && !status) return undefined;
     const md = new vscode.MarkdownString(undefined, true);
     // Model-authored text (scan questions, line hints) is appended below, and
     // a blanket-trusted MarkdownString renders ANY command: link in it as
@@ -706,6 +742,7 @@ export class InlineTutor {
     // steers the model into emitting a command link cannot run anything else.
     md.isTrusted = { enabledCommands: ["edupeer.nudgeLine", "edupeer.explainSelection"] };
     md.appendMarkdown("**EduPeer**\n\n");
+    if (status) md.appendMarkdown(`${status}\n\n`);
     if (hint?.hint) md.appendMarkdown(`💡 ${hint.hint}\n\n`);
     if (flag) md.appendMarkdown(`${flagEmoji(flag)} ${flag.question}\n\n_concept: ${flag.concept}_\n\n`);
     md.appendMarkdown(

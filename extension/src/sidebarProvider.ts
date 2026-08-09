@@ -100,6 +100,12 @@ export class EduPeerSidebarProvider implements vscode.WebviewViewProvider {
 
   public resolveWebviewView(webviewView: vscode.WebviewView): void {
     this.view = webviewView;
+    // The suppression signature describes what the LAST webview was showing,
+    // and this one is showing nothing at all. Carrying it across leaves a
+    // reopened sidebar stuck on "No active file" with an empty preview, an
+    // empty `currentCode` and a Refresh button that routes back through the
+    // same suppressed path.
+    this.lastFocusSignature = "";
     webviewView.webview.options = {
       enableScripts: true,
       localResourceRoots: [vscode.Uri.joinPath(this.extensionUri, "media")],
@@ -156,7 +162,10 @@ export class EduPeerSidebarProvider implements vscode.WebviewViewProvider {
           await this.resetSession();
           return;
         case "refreshCode":
-          await this.sendFocus();
+          // Refresh is the student saying "I don't trust what I'm looking
+          // at". Answering with silence because nothing changed is the one
+          // reply it must never give.
+          await this.sendFocus({ force: true });
           return;
         case "requestFullFile":
           this.post({ type: "fullFile", code: this.lastFullCode });
@@ -580,8 +589,13 @@ export class EduPeerSidebarProvider implements vscode.WebviewViewProvider {
     this.post({ type: "error", message });
   }
 
-  /** Resolve the focus block and push it to the panel, if it moved. */
-  private async sendFocus() {
+  /**
+   * Resolve the focus block and push it to the panel, if it moved.
+   *
+   * `force` skips the suppression check for the callers that are answering a
+   * request rather than reacting to an edit.
+   */
+  private async sendFocus(opts: { force?: boolean } = {}) {
     const editor = vscode.window.activeTextEditor;
     if (!editor) {
       this.lastFocus = undefined;
@@ -604,7 +618,7 @@ export class EduPeerSidebarProvider implements vscode.WebviewViewProvider {
     const signature = `${doc.uri.toString()}:${focus.startLine}:${focus.endLine}:${focusCode}`;
     // The old code posted the whole document on every keystroke; most of those
     // posts said nothing new.
-    if (signature === this.lastFocusSignature) return;
+    if (!opts.force && signature === this.lastFocusSignature) return;
     this.lastFocusSignature = signature;
 
     this.lastFocus = focus;
@@ -613,7 +627,14 @@ export class EduPeerSidebarProvider implements vscode.WebviewViewProvider {
     // The ladder is per problem, and a different function is a different
     // problem — being stuck on `main` should not start at hint 3 because you
     // were stuck on `parse` a minute ago.
-    this.lastDocumentKey = `${doc.uri.toString()}#${focus.label}`;
+    //
+    // A positional label changes every time the cursor moves, which would make
+    // every ask a brand-new problem and pin the ladder at hint 1. Only a named
+    // block is stable enough to key on.
+    this.lastDocumentKey =
+      focus.kind === "symbol" || focus.kind === "heuristic"
+        ? `${doc.uri.toString()}#${focus.label}`
+        : doc.uri.toString();
 
     this.post({
       type: "focus",

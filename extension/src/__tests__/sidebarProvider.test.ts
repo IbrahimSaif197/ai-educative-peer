@@ -112,7 +112,8 @@ async function build(
  */
 async function setupProvider(
   source: string,
-  cursorLine: number
+  cursorLine: number,
+  path = "/tmp/focus/demo.py"
 ): Promise<{ provider: EduPeerSidebarProvider; posted: any[]; api: any; doc: any }> {
   const posted: any[] = [];
   const state = new Map<string, any>();
@@ -130,7 +131,7 @@ async function setupProvider(
   } as any;
   const queue = { enqueue: jest.fn(async () => undefined) } as any;
 
-  const doc = mock.__makeDocument(source, "python", "/tmp/focus/demo.py");
+  const doc = mock.__makeDocument(source, "python", path);
   mock.window.activeTextEditor = mock.__makeEditor(doc, cursorLine);
   // No document symbol provider in this harness: resolveFocus must fall
   // through to the heuristic path rather than hang on a real provider.
@@ -910,9 +911,65 @@ describe("the webview document", () => {
   });
 });
 
+/**
+ * `resolveFocus` memoises on uri + version + cursor in a module-level cache
+ * that nothing resets between tests — not `jest.resetModules()`, not the
+ * vscode mock's `__reset()`. Tests in here must therefore pick path/cursor
+ * combinations that collide with no other test in this file, or they will
+ * silently read another test's answer. That has already produced two defects
+ * (Task 3 and Task 9); `setupProvider`'s per-call path is the mitigation.
+ */
 describe("EduPeerSidebarProvider — focus scoping", () => {
   const vscode = require("vscode");
   beforeEach(() => vscode.__reset());
+
+  /** One webview host, with its own message log and its own `ready` channel. */
+  function makeView(posted: any[]) {
+    let receive: ((msg: any) => Promise<void>) | undefined;
+    const view = {
+      webview: {
+        options: {},
+        html: "",
+        cspSource: "vscode-webview:",
+        asWebviewUri: (u: any) => u,
+        postMessage: (msg: any) => {
+          posted.push(msg);
+          return Promise.resolve(true);
+        },
+        onDidReceiveMessage: (fn: any) => {
+          receive = fn;
+          return { dispose: jest.fn() };
+        },
+      },
+      show: jest.fn(),
+      onDidDispose: jest.fn(() => ({ dispose: jest.fn() })),
+    } as any;
+    return { view, send: (msg: any) => receive!(msg) };
+  }
+
+  it("re-posts the focus block when the sidebar is closed and reopened", async () => {
+    const h = await build();
+
+    // VS Code re-resolves the view whenever the sidebar host is recreated.
+    // The reloaded webview asks for its state and must actually get it —
+    // `lastFocusSignature` is provider state and outlives the webview.
+    const reopened: any[] = [];
+    const second = makeView(reopened);
+    h.provider.resolveWebviewView(second.view);
+    await second.send({ type: "ready" });
+
+    const focus = latest(reopened, "focus");
+    expect(focus).toBeDefined();
+    expect(focus.focusCode).toContain("def average");
+  });
+
+  it("re-reads the active file when Refresh is pressed, unchanged or not", async () => {
+    const h = await build();
+
+    await h.send({ type: "refreshCode" });
+
+    expect(latest(h.posted, "focus")).toBeDefined();
+  });
 
   const SOURCE = [
     "import math",
@@ -971,6 +1028,51 @@ describe("EduPeerSidebarProvider — focus scoping", () => {
     await provider["sendFocus"]();
 
     expect(provider["lastDocumentKey"]).toBe("");
+  });
+
+  it("keeps one problem key while the cursor moves over top-level code", async () => {
+    // No def, no class: the heuristic finds no block and `fromWindow` labels
+    // the scope "lines N-M" around the cursor. That label churns per line, and
+    // keying the ladder on it made every ask a first ask — hint_level pinned
+    // at 1 and the "you haven't changed anything" gate never firing, for
+    // exactly the beginner writing top-level script code.
+    const TOP_LEVEL = Array.from({ length: 60 }, (_, i) => `value_${i} = ${i} * 2`).join("\n");
+    const { provider, posted, doc } = await setupProvider(TOP_LEVEL, 5, "/tmp/top-level/demo.py");
+
+    await provider["sendFocus"]();
+    const firstKey = provider["lastDocumentKey"];
+    const firstFocus = latest(posted, "focus");
+
+    vscode.window.activeTextEditor = vscode.__makeEditor(doc, 40);
+    await provider["sendFocus"]();
+    const secondFocus = latest(posted, "focus");
+
+    expect(provider["lastDocumentKey"]).toBe(firstKey);
+    // The descriptive label still travels in `focus` — the prompt wants it.
+    // It is only the ladder key that stops following it.
+    expect(secondFocus.breadcrumb).not.toBe(firstFocus.breadcrumb);
+    expect(secondFocus.breadcrumb).toContain("lines");
+  });
+
+  it("still gives two functions in one file two different problem keys", async () => {
+    const TWO_FUNCTIONS = [
+      "def first():",
+      "    return 1",
+      "",
+      "",
+      "def second():",
+      "    return 2",
+    ].join("\n");
+    const { provider, doc } = await setupProvider(TWO_FUNCTIONS, 1, "/tmp/two-keys/demo.py");
+
+    await provider["sendFocus"]();
+    const firstKey = provider["lastDocumentKey"];
+
+    vscode.window.activeTextEditor = vscode.__makeEditor(doc, 5);
+    await provider["sendFocus"]();
+
+    expect(firstKey).toContain("#first");
+    expect(provider["lastDocumentKey"]).toContain("#second");
   });
 
   it("lets a move to a different function in the same document through the suppression guard", async () => {

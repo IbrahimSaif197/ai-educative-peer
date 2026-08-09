@@ -147,3 +147,57 @@ describe("AnnotationStore lookups", () => {
     expect(store.flags()[0].line).toBe(5);
   });
 });
+
+describe("AnnotationStore.revision", () => {
+  it("starts at zero and is unmoved by writes that invalidate nothing", () => {
+    const store = new AnnotationStore();
+    const start = store.revision;
+
+    store.setFlags([flag(3, 3)]);
+    store.setHint(2, { hint: "off by one?", concept: "loops" });
+    store.setLensState(2, { kind: "loading" });
+    store.clearHint(2);
+
+    expect(store.revision).toBe(start);
+  });
+
+  it("moves when an edit ages the annotations", () => {
+    const store = new AnnotationStore();
+    const start = store.revision;
+
+    store.applyChanges([change(0, 0, 2)]);
+
+    expect(store.revision).toBeGreaterThan(start);
+  });
+
+  it("does not move for an empty change batch, matching the early return", () => {
+    const store = new AnnotationStore();
+    const start = store.revision;
+
+    store.applyChanges([]);
+
+    expect(store.revision).toBe(start);
+  });
+
+  it("moves when the student dismisses a line", () => {
+    const store = new AnnotationStore();
+    const start = store.revision;
+
+    store.clearLine(4);
+
+    expect(store.revision).toBeGreaterThan(start);
+  });
+});
+
+describe("AnnotationStore.clearHint", () => {
+  it("forgets the hint and leaves the lens state alone", () => {
+    const store = new AnnotationStore();
+    store.setHint(4, { hint: "off by one?", concept: "loops" });
+    store.setLensState(4, { kind: "empty" });
+
+    store.clearHint(4);
+
+    expect(store.annotationsAt(4).hint).toBeUndefined();
+    expect(store.lensStateAt(4)).toEqual({ kind: "empty" });
+  });
+});

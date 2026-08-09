@@ -63,6 +63,19 @@ export class AnnotationStore {
   private storedFlags: StoredFlag[] = [];
   private hints = new Map<number, LineHint>();
   private lensStates = new Map<number, LensState>();
+  private rev = 0;
+
+  /**
+   * Bumped whenever an edit or a dismissal invalidates what a caller captured.
+   *
+   * A line hint takes seconds to come back, and the line number it was asked
+   * about is captured before the first await. Anything that shifts or drops
+   * entries in the meantime makes that number a lie, so callers snapshot this
+   * before awaiting and drop their answer if it moved.
+   */
+  get revision(): number {
+    return this.rev;
+  }
 
   /** Replace the flag set wholesale, as a fresh scan does. */
   setFlags(flags: LineFlag[]): void {
@@ -113,8 +126,20 @@ export class AnnotationStore {
 
   /** Forget everything EduPeer said about one line: the student dismissed it. */
   clearLine(line: number): void {
+    this.rev++;
     this.hints.delete(line);
     this.lensStates.delete(line);
+  }
+
+  /**
+   * Forget a cached hint without invalidating anything in flight.
+   *
+   * Distinct from `clearLine`: this is the tutor deciding it has nothing to
+   * say about the line, not the student throwing away what it said. Nothing a
+   * caller captured before its own await has been made stale by it.
+   */
+  clearHint(line: number): void {
+    this.hints.delete(line);
   }
 
   annotationsAt(line: number): { flag?: LineFlag; hint?: LineHint } {
@@ -123,12 +148,6 @@ export class AnnotationStore {
       flag: stored ? this.toWireFlag(stored) : undefined,
       hint: this.hints.get(line),
     };
-  }
-
-  clear(): void {
-    this.storedFlags = [];
-    this.hints.clear();
-    this.lensStates.clear();
   }
 
   /**
@@ -145,6 +164,7 @@ export class AnnotationStore {
    */
   applyChanges(changes: readonly ContentChange[]): void {
     if (changes.length === 0) return;
+    this.rev++;
 
     const intersects = (span: LineSpan) =>
       changes.some((c) => c.startLine <= span.end && c.endLine >= span.start);
