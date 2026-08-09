@@ -363,12 +363,15 @@ body {
   line-height: 1.6;
 }
 
-.empty strong {
+.empty strong,
+.signin strong {
   display: block;
+  font-family: var(--display);
+  font-size: var(--t-display);
+  font-weight: 700;
+  line-height: 1.15;
+  letter-spacing: -0.02em;
   color: var(--ink);
-  font-size: var(--t-body);
-  font-weight: 600;
-  margin-bottom: var(--s3);
 }
 
 .turn {
@@ -379,11 +382,22 @@ body {
   animation: turn-in var(--t-standard) var(--ease-signature) both;
 }
 
-/* The tutor speaks from the margin: a rule, not a bubble. Prose gets the
-   full width, which matters a lot at sidebar sizes. */
+/* The tutor speaks from a card now, not a margin rule. The old treatment was
+   the single biggest reason the panel read as chrome. */
 .turn--tutor {
-  border-left: 2px solid var(--line);
-  padding-left: var(--s5);
+  background: var(--card);
+  border: 1px solid var(--line-soft);
+  border-radius: var(--radius-lg);
+  padding: var(--s5);
+  box-shadow: 0 1px 0 rgba(0, 0, 0, 0.4);
+  /* The shadow arrives after the card lands, which is what stops the entrance
+     reading as a single flat slab moving. */
+  transition: box-shadow var(--t-standard) var(--ease-signature) 60ms,
+    border-color var(--t-quick) linear;
+}
+
+.turn--tutor:hover {
+  border-color: var(--line);
 }
 
 .turn--tutor.is-flagged {
@@ -429,8 +443,8 @@ body {
 }
 
 .turn--student .turn__body {
-  background: var(--vscode-button-background, var(--surface-sunken));
-  color: var(--vscode-button-foreground, var(--ink));
+  background: var(--coral);
+  color: var(--coral-ink);
   padding: var(--s3) var(--s5);
   border-radius: var(--radius-lg) var(--radius-lg) var(--radius-sm) var(--radius-lg);
   white-space: pre-wrap;
@@ -881,11 +895,6 @@ textarea:focus {
   background: var(--surface-raised);
   border: 1px solid var(--line);
   border-radius: var(--radius-md);
-}
-
-.signin strong {
-  font-size: var(--t-body);
-  font-weight: 600;
 }
 
 .signin p {
