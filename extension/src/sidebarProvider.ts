@@ -680,7 +680,7 @@ export class EduPeerSidebarProvider implements vscode.WebviewViewProvider {
     const asset = (name: string) =>
       webview.asWebviewUri(vscode.Uri.joinPath(this.extensionUri, "media", name));
     const nonce = getNonce();
-    const csp = `default-src 'none'; style-src ${webview.cspSource}; script-src 'nonce-${nonce}'; img-src ${webview.cspSource} data:;`;
+    const csp = `default-src 'none'; style-src ${webview.cspSource}; font-src ${webview.cspSource}; script-src 'nonce-${nonce}'; img-src ${webview.cspSource} data:;`;
     return `<!DOCTYPE html>
 <html lang="en">
 <head>

@@ -111,11 +111,11 @@ async function build(
  * test's document.
  */
 async function setupProvider(
-  source: string,
-  cursorLine: number,
+  source: string = CODE,
+  cursorLine = 0,
   path = "/tmp/focus/demo.py",
   languageId = "python"
-): Promise<{ provider: EduPeerSidebarProvider; posted: any[]; api: any; doc: any }> {
+): Promise<{ provider: EduPeerSidebarProvider; posted: any[]; api: any; doc: any; html: string }> {
   const posted: any[] = [];
   const state = new Map<string, any>();
   const api = makeApi();
@@ -165,7 +165,7 @@ async function setupProvider(
 
   provider.resolveWebviewView(view);
 
-  return { provider, posted, api, doc };
+  return { provider, posted, api, doc, html: view.webview.html };
 }
 
 const latest = (posted: any[], type: string) =>
@@ -1124,5 +1124,18 @@ describe("EduPeerSidebarProvider — focus scoping", () => {
 
     expect(second.startLine).not.toBe(first.startLine);
     expect(second.breadcrumb).not.toBe(first.breadcrumb);
+  });
+});
+
+describe("EduPeerSidebarProvider — webview CSP", () => {
+  it("allows fonts from the extension, and nothing else", async () => {
+    const { html } = await setupProvider(); // returns the resolved webview html
+    const csp = /content="([^"]*)"/.exec(html)![1];
+
+    expect(csp).toContain("font-src");
+    // Scoped to the extension's own directory, never a CDN.
+    expect(csp).not.toContain("https://fonts.gstatic.com");
+    expect(csp).not.toContain("https://fonts.googleapis.com");
+    expect(csp).toContain("default-src 'none'");
   });
 });

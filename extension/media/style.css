@@ -1,32 +1,50 @@
 /* EduPeer sidebar.
  *
- * Everything is derived from VS Code theme tokens so the panel is correct in
- * light, dark and high-contrast themes without a single hard-coded colour
- * decision of our own. Fallbacks exist only for themes that omit a token.
+ * This panel has its own identity rather than deriving from the workbench
+ * theme, so it matches the hosted sign-in page. The consequence is recorded
+ * in the spec: VS Code's high-contrast themes no longer affect this panel.
  *
- * Two typefaces, both the user's own: the workbench UI face carries prose,
- * the editor's monospace face carries every label, tag and numeral. Everything
- * numeric in this panel is about code, so it is set in the code face.
+ * The one exception is the code preview, which keeps the editor's own
+ * monospace face. It shows the student's code; rendering that in a UI face
+ * would be worse, not braver.
  */
 
+@font-face {
+  font-family: "Bricolage Grotesque";
+  src: url("fonts/bricolage-grotesque-700-latin.woff2") format("woff2");
+  font-weight: 700;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: "Geist";
+  src: url("fonts/geist-latin.woff2") format("woff2");
+  font-weight: 400 600;
+  font-display: swap;
+}
+
 :root {
-  color-scheme: light dark;
+  color-scheme: dark;
 
   /* Surfaces */
-  --surface: var(--vscode-sideBar-background, var(--vscode-editor-background));
-  --surface-raised: var(--vscode-input-background, rgba(127, 127, 127, 0.08));
-  --surface-sunken: var(--vscode-editorWidget-background, rgba(127, 127, 127, 0.12));
+  --ground: #12101B;
+  --card: #1B1826;
+  --card-lit: #221E30;
 
   /* Lines */
-  --line: var(--vscode-panel-border, rgba(127, 127, 127, 0.28));
-  --line-soft: rgba(127, 127, 127, 0.18);
+  --line: #6D6198;
+  --line-soft: #2E2940;
 
   /* Ink */
-  --ink: var(--vscode-foreground);
-  --ink-dim: var(--vscode-descriptionForeground, var(--vscode-foreground));
-  --accent: var(--vscode-textLink-foreground, var(--vscode-progressBar-background, #3794ff));
-  --warn: var(--vscode-editorWarning-foreground, #cca700);
-  --danger: var(--vscode-errorForeground, #f48771);
+  --ink: #F2EFFA;
+  --muted: #9C93B8;
+  --coral: #FF6B4A;
+  --coral-lit: #FF8366;
+  /* Foreground for text sitting on --coral. */
+  --coral-ink: #1A0A05;
+  --mint: #7CE0D3;
+  --warn: #FFC46B;
+  --danger: #FF8E7A;
 
   /* Space — a 4px rhythm */
   --s1: 2px;
@@ -42,11 +60,15 @@
   --t-small: calc(var(--vscode-font-size, 13px) * 0.82);
   --t-body: calc(var(--vscode-font-size, 13px) * 0.94);
   --t-lead: var(--vscode-font-size, 13px);
+  --t-display: calc(var(--vscode-font-size, 13px) * 1.7);
 
   --radius-sm: 3px;
   --radius-md: 6px;
   --radius-lg: 10px;
+  --radius-pill: 999px;
 
+  --display: "Bricolage Grotesque", var(--vscode-font-family), sans-serif;
+  --sans: "Geist", var(--vscode-font-family), sans-serif;
   --mono: var(--vscode-editor-font-family, ui-monospace, "Cascadia Mono", Consolas, monospace);
 }
 
@@ -56,11 +78,11 @@
 
 body {
   margin: 0;
-  font-family: var(--vscode-font-family);
+  font-family: var(--sans);
   font-size: var(--t-body);
   line-height: 1.5;
   color: var(--ink);
-  background: var(--surface);
+  background: var(--ground);
   display: flex;
   flex-direction: column;
   height: 100vh;
