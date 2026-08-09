@@ -184,8 +184,11 @@ async function askPastTheGate(h: Harness, question = "why does it crash?", extra
 describe("startup", () => {
   beforeEach(() => mock.__reset());
 
-  it("restores the persisted transcript, the file, badges, auth and offline state", async () => {
+  it("starts with an empty transcript, and restores the file, badges, auth and offline state", async () => {
     const posted: any[] = [];
+    // A leftover value under the old persistence key. The transcript now
+    // lives in an in-memory map keyed like the hint ladder, not here, so a
+    // fresh provider must never resurrect it.
     const state = new Map<string, any>([["edupeer.chatHistory", [{ role: "tutor", text: "hi" }]]]);
     let receive: any;
     const context = {
@@ -221,7 +224,7 @@ describe("startup", () => {
     } as any);
     await receive({ type: "ready" });
 
-    expect(latest(posted, "restoreChat").messages).toHaveLength(1);
+    expect(latest(posted, "restoreChat").messages).toEqual([]);
     expect(latest(posted, "focus").language).toBe("Python");
     expect(latest(posted, "badges")).toBeDefined();
     expect(latest(posted, "authState").signedIn).toBe(false);
@@ -741,11 +744,18 @@ describe("session reset", () => {
     expect(latest(h.posted, "resetDone").summary).toBe("you practised loops");
   });
 
-  it("clears the persisted transcript", async () => {
+  it("clears the transcript for the block in focus", async () => {
     const h = await build();
-    h.state.set("edupeer.chatHistory", [{ role: "tutor", text: "old" }]);
+    const key = h.provider["lastDocumentKey"];
+    h.provider["threads"].set(key, {
+      history: [],
+      bubbles: [{ role: "tutor", text: "old" }],
+    });
+
     await h.send({ type: "reset" });
-    expect(h.state.get("edupeer.chatHistory")).toEqual([]);
+    await h.send({ type: "ready" });
+
+    expect(latest(h.posted, "restoreChat").messages).toEqual([]);
   });
 
   it("re-arms the explain-first gate", async () => {
@@ -783,17 +793,17 @@ describe("session reset", () => {
 describe("persistence and plumbing", () => {
   beforeEach(() => mock.__reset());
 
-  it("stores the transcript the webview sends", async () => {
+  it("stores the transcript the webview sends on the current thread", async () => {
     const h = await build();
     await h.send({ type: "persistChat", messages: [{ role: "tutor", text: "a" }] });
-    expect(h.state.get("edupeer.chatHistory")).toHaveLength(1);
+    expect(h.provider["thread"].bubbles).toHaveLength(1);
   });
 
   it("keeps only the newest fifty turns", async () => {
     const h = await build();
     const many = Array.from({ length: 80 }, (_, i) => ({ role: "tutor", text: `t${i}` }));
     await h.send({ type: "persistChat", messages: many });
-    const stored = h.state.get("edupeer.chatHistory");
+    const stored = h.provider["thread"].bubbles as Array<{ text: string }>;
     expect(stored).toHaveLength(50);
     expect(stored[49].text).toBe("t79");
   });
@@ -801,7 +811,7 @@ describe("persistence and plumbing", () => {
   it("tolerates a persist message with no payload", async () => {
     const h = await build();
     await h.send({ type: "persistChat" });
-    expect(h.state.get("edupeer.chatHistory")).toEqual([]);
+    expect(h.provider["thread"].bubbles).toEqual([]);
   });
 
   it("routes sign-in and sign-out to the commands", async () => {
@@ -1310,5 +1320,62 @@ describe("explain-first fires once per file", () => {
     });
 
     expect(latest(h.posted, "explainFirst")).toBeUndefined();
+  });
+});
+
+describe("one chat thread per function", () => {
+  beforeEach(() => mock.__reset());
+
+  const TWO_FUNCS = [
+    "def first():",
+    "    return 1",
+    "",
+    "",
+    "def second():",
+    "    return 2",
+  ].join("\n");
+
+  it("swaps the transcript when the cursor moves to another function", async () => {
+    const { provider, posted, doc } = await setupProvider(TWO_FUNCS, 1, "/tmp/threads/a.py");
+    await provider["sendFocus"]();
+    provider["threads"].set(provider["lastDocumentKey"], {
+      history: [],
+      bubbles: [{ role: "tutor", text: "about first" }],
+    });
+    posted.length = 0;
+
+    mock.window.activeTextEditor = mock.__makeEditor(doc, 5);
+    await provider["sendFocus"]();
+
+    const restored = latest(posted, "restoreChat");
+    expect(restored).toBeDefined();
+    expect(restored.messages).toEqual([]);
+  });
+
+  it("brings the first thread back when the cursor returns", async () => {
+    const { provider, posted, doc } = await setupProvider(TWO_FUNCS, 1, "/tmp/threads/b.py");
+    await provider["sendFocus"]();
+    const firstKey = provider["lastDocumentKey"];
+    provider["threads"].set(firstKey, {
+      history: [],
+      bubbles: [{ role: "tutor", text: "about first" }],
+    });
+
+    mock.window.activeTextEditor = mock.__makeEditor(doc, 5);
+    await provider["sendFocus"]();
+    mock.window.activeTextEditor = mock.__makeEditor(doc, 1);
+    posted.length = 0;
+    await provider["sendFocus"]();
+
+    expect(latest(posted, "restoreChat").messages).toEqual([
+      { role: "tutor", text: "about first" },
+    ]);
+  });
+
+  it("keeps nothing in globalState", async () => {
+    const h = await build();
+    await askPastTheGate(h);
+
+    expect(h.state.get("edupeer.chatHistory")).toBeUndefined();
   });
 });

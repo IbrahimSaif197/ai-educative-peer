@@ -24,15 +24,31 @@ import { OfflineQueue } from "./offlineQueue";
 // again on its side).
 const MAX_HISTORY_TURNS = 6;
 
-/** Chat bubbles kept across window reloads. */
-const CHAT_STATE_KEY = "edupeer.chatHistory";
+/** Cap on one thread's rendered bubbles, so a long session cannot grow forever. */
 const MAX_PERSISTED_BUBBLES = 50;
 
 export class EduPeerSidebarProvider implements vscode.WebviewViewProvider {
   public static readonly viewType = "edupeer.sidebar";
 
   private view?: vscode.WebviewView;
-  private history: ChatTurn[] = [];
+  /**
+   * One conversation per problem, keyed exactly as the hint ladder is.
+   *
+   * The ladder was already per function while the transcript was one global
+   * list, so the transcript on screen and the level beside it described
+   * different things. In memory rather than `globalState` because a
+   * conversation belongs to the session that had it.
+   */
+  private threads = new Map<string, { history: ChatTurn[]; bubbles: unknown[] }>();
+  /** The thread for the block the cursor is in, created on first use. */
+  private get thread(): { history: ChatTurn[]; bubbles: unknown[] } {
+    let thread = this.threads.get(this.lastDocumentKey);
+    if (!thread) {
+      thread = { history: [], bubbles: [] };
+      this.threads.set(this.lastDocumentKey, thread);
+    }
+    return thread;
+  }
   private lastLanguageId = "python";
   /** Identifies the document the attempt tracker is following. */
   private lastDocumentKey = "";
@@ -150,10 +166,7 @@ export class EduPeerSidebarProvider implements vscode.WebviewViewProvider {
       switch (msg.type) {
         case "ready":
           this.postAuthState();
-          this.post({
-            type: "restoreChat",
-            messages: this.context.globalState.get<unknown[]>(CHAT_STATE_KEY, []),
-          });
+          this.post({ type: "restoreChat", messages: this.thread.bubbles });
           await this.sendFocus();
           await this.sendBadges();
           this.postOffline(!this.api.isAvailable);
@@ -162,10 +175,8 @@ export class EduPeerSidebarProvider implements vscode.WebviewViewProvider {
           void this.checkReviewDue();
           return;
         case "persistChat":
-          await this.context.globalState.update(
-            CHAT_STATE_KEY,
-            (msg.messages as unknown[] | undefined)?.slice(-MAX_PERSISTED_BUBBLES) ?? []
-          );
+          this.thread.bubbles =
+            (msg.messages as unknown[] | undefined)?.slice(-MAX_PERSISTED_BUBBLES) ?? [];
           return;
         case "startReview":
           await this.startReview();
@@ -270,7 +281,7 @@ export class EduPeerSidebarProvider implements vscode.WebviewViewProvider {
   public async resetSession() {
     // Anything already in flight now belongs to a cleared conversation.
     this.sessionGeneration++;
-    this.history = [];
+    this.threads.delete(this.lastDocumentKey);
     this.explainedFiles.clear();
     this.pendingAsk = undefined;
     this.pendingPredict = undefined;
@@ -278,7 +289,6 @@ export class EduPeerSidebarProvider implements vscode.WebviewViewProvider {
     this.pendingReview = undefined;
     this.attempts.clear();
     this.levelEmitter.fire(0);
-    await this.context.globalState.update(CHAT_STATE_KEY, []);
     let summary = "";
     try {
       summary = await this.api.resetSession();
@@ -311,7 +321,7 @@ export class EduPeerSidebarProvider implements vscode.WebviewViewProvider {
         });
         return;
       }
-      this.history.push({ role: "tutor", content: res.exercise });
+      this.thread.history.push({ role: "tutor", content: res.exercise });
       // Remembered so the student's answer is marked against the exercise,
       // not against whatever file is open in the editor.
       this.pendingReview = res.exercise;
@@ -544,7 +554,7 @@ export class EduPeerSidebarProvider implements vscode.WebviewViewProvider {
         problem_key: this.lastDocumentKey,
         language: this.lastLanguageId,
         mode,
-        history: this.history.slice(-MAX_HISTORY_TURNS),
+        history: this.thread.history.slice(-MAX_HISTORY_TURNS),
         escalate: attempt ? attempt.escalate : true,
         edit_summary: attempt?.editSummary ?? "",
         confidence: Math.max(0, Math.min(3, Math.trunc(opts.confidence ?? 0))),
@@ -581,8 +591,8 @@ export class EduPeerSidebarProvider implements vscode.WebviewViewProvider {
         this.attempts.record(this.lastDocumentKey, attemptCode);
         this.levelEmitter.fire(res.hint_level);
       }
-      this.history.push({ role: "student", content: question });
-      this.history.push({ role: "tutor", content: res.hint });
+      this.thread.history.push({ role: "student", content: question });
+      this.thread.history.push({ role: "tutor", content: res.hint });
       this.post({
         type: "hint",
         seq,
@@ -692,10 +702,17 @@ export class EduPeerSidebarProvider implements vscode.WebviewViewProvider {
     // A positional label changes every time the cursor moves, which would make
     // every ask a brand-new problem and pin the ladder at hint 1. Only a named
     // block is stable enough to key on.
+    const previousKey = this.lastDocumentKey;
     this.lastDocumentKey =
       focus.kind === "symbol" || focus.kind === "heuristic"
         ? `${doc.uri.toString()}#${focus.label}`
         : doc.uri.toString();
+    // A different block is a different conversation. Swap the transcript so
+    // the student is never reading one function's thread beside another
+    // function's hint level.
+    if (this.lastDocumentKey !== previousKey) {
+      this.post({ type: "restoreChat", messages: this.thread.bubbles });
+    }
 
     this.post({
       type: "focus",
