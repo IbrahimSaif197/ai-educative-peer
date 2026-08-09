@@ -59,7 +59,7 @@ describe("streamHint", () => {
   });
 
   it("reports the level from meta, not the level the client asked with", async () => {
-    // The status bar and the hint-depth stepper both read this; taking the
+    // The status bar and the webview's hint ladder both read this; taking the
     // request's level would show 1 for every hint no matter how deep it went.
     stubStream([
       frame({ type: "meta", hint_level: 3 }),

@@ -316,9 +316,12 @@ describe("modes that withhold", () => {
     post({ type: "hint", hint: "h", hint_level: 1, concept_tags: [], mode: "hint" });
     post({ type: "hint", hint: "not yet", hint_level: 0, concept_tags: [], mode: "attempt-gate" });
     expect(lastTurn().classList.contains("is-flagged")).toBe(true);
-    // There is no longer one persistent meter to pulse: the gate turn simply
-    // carries no ladder of its own, so the only depth reading on screen is
-    // still the earlier hint's — neither reset nor advanced by the gate.
+    // The gate turn carries no ladder of its own, so the only depth reading
+    // on screen is still the earlier hint's — the level is neither reset nor
+    // advanced by the gate. That refusal is not silent, though: the earlier
+    // ladder picks up an `is-held` class (see "marks the ladder held when
+    // the tutor refuses to go deeper" below), the same signal the old
+    // composer stepper gave.
     expect(lastTurn().querySelector(".ladder")).toBeNull();
     const ladders = $$(".ladder");
     expect(ladders).toHaveLength(1);
@@ -1069,11 +1072,12 @@ describe("webview — the hint ladder lives in the card", () => {
   });
 
   it("marks the ladder held when the tutor refuses to go deeper", () => {
-    post({ type: "hint", hint: "same depth", hint_level: 0, concept_tags: [], mode: "attempt-gate" });
     post({ type: "hint", hint: "why empty?", hint_level: 1, concept_tags: [], mode: "hint" });
+    post({ type: "hint", hint: "same depth", hint_level: 0, concept_tags: [], mode: "attempt-gate" });
 
-    // The gate turn carries no ladder; the hint that follows does.
-    expect($$(".ladder")).toHaveLength(1);
+    const ladders = $$(".ladder");
+    expect(ladders).toHaveLength(1);
+    expect(ladders[0].classList.contains("is-held")).toBe(true);
   });
 
   it("no longer has a stepper above the composer", () => {

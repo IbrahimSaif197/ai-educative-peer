@@ -867,11 +867,11 @@ textarea:focus {
 }
 
 .ladder__dot {
+  position: relative;
   width: 7px;
   height: 7px;
   border-radius: var(--radius-pill);
   background: var(--line-soft);
-  transition: background-color var(--t-standard) var(--ease-signature);
 }
 
 .ladder__dot.is-on {
@@ -881,14 +881,49 @@ textarea:focus {
   animation-delay: calc(var(--dot-index, 0) * 40ms);
 }
 
+.ladder__dot.is-on::after {
+  content: "";
+  position: absolute;
+  inset: -3px;
+  border-radius: var(--radius-pill);
+  border: 1px solid var(--coral);
+  animation: dot-ring 320ms var(--ease-signature) both;
+  animation-delay: calc(var(--dot-index, 0) * 40ms);
+  pointer-events: none;
+}
+
 @keyframes dot-fill {
   from {
     transform: scale(0.6);
+    background: var(--line-soft);
   }
   60% {
     transform: scale(1.15);
   }
   to {
     transform: scale(1);
+    background: var(--coral);
+  }
+}
+
+@keyframes dot-ring {
+  from {
+    opacity: 0.9;
+    transform: scale(0.6);
+  }
+  to {
+    opacity: 0;
+    transform: scale(1.6);
+  }
+}
+
+/* Asked again without editing: the ladder reports, it does not advance. */
+.ladder.is-held .ladder__dot.is-on {
+  animation: dot-held var(--t-slow) var(--ease-signature);
+}
+
+@keyframes dot-held {
+  50% {
+    transform: scale(1.25);
   }
 }

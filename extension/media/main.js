@@ -488,6 +488,20 @@
       flagged: FLAGGED_MODES.has(mode),
     });
 
+    if (mode === "attempt-gate") {
+      // Asked again without editing. The ladder reports that it is holding
+      // rather than advancing — the same signal the old composer stepper gave,
+      // now on the card that owns the depth.
+      const ladders = chatEl.querySelectorAll(".ladder");
+      const last = ladders[ladders.length - 1];
+      if (last) {
+        last.classList.remove("is-held");
+        // Reflow so the animation restarts on consecutive holds.
+        void last.offsetWidth;
+        last.classList.add("is-held");
+      }
+    }
+
     if (mode === "hint" && level === 3) {
       addActionRow([
         {
