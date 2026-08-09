@@ -113,7 +113,8 @@ async function build(
 async function setupProvider(
   source: string,
   cursorLine: number,
-  path = "/tmp/focus/demo.py"
+  path = "/tmp/focus/demo.py",
+  languageId = "python"
 ): Promise<{ provider: EduPeerSidebarProvider; posted: any[]; api: any; doc: any }> {
   const posted: any[] = [];
   const state = new Map<string, any>();
@@ -131,7 +132,7 @@ async function setupProvider(
   } as any;
   const queue = { enqueue: jest.fn(async () => undefined) } as any;
 
-  const doc = mock.__makeDocument(source, "python", path);
+  const doc = mock.__makeDocument(source, languageId, path);
   mock.window.activeTextEditor = mock.__makeEditor(doc, cursorLine);
   // No document symbol provider in this harness: resolveFocus must fall
   // through to the heuristic path rather than hang on a real provider.
@@ -1073,6 +1074,33 @@ describe("EduPeerSidebarProvider — focus scoping", () => {
 
     expect(firstKey).toContain("#first");
     expect(provider["lastDocumentKey"]).toContain("#second");
+  });
+
+  it("gives two C functions in one file two different problem keys", async () => {
+    // Labelling on the leading identifier made both of these `int`, so they
+    // shared a problem_key — and the attempt tracker is keyed on it too, with
+    // the focus block as its payload. Moving the cursor between them then read
+    // as "the student changed the code" and walked the ladder 1→2→3 with no
+    // edit at all, which is the abuse path the tracker exists to close.
+    const C = [
+      "int main(int argc, char **argv) {",
+      "    return helper(1);",
+      "}",
+      "",
+      "int helper(int n) {",
+      "    return n + 1;",
+      "}",
+    ].join("\n");
+    const { provider, doc } = await setupProvider(C, 1, "/tmp/c-keys/demo.c", "c");
+
+    await provider["sendFocus"]();
+    const firstKey = provider["lastDocumentKey"];
+
+    vscode.window.activeTextEditor = vscode.__makeEditor(doc, 5);
+    await provider["sendFocus"]();
+
+    expect(firstKey).toContain("#main");
+    expect(provider["lastDocumentKey"]).toContain("#helper");
   });
 
   it("lets a move to a different function in the same document through the suppression guard", async () => {

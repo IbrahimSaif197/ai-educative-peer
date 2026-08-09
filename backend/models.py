@@ -36,7 +36,13 @@ MAX_FOCUS_LABEL_CHARS = 120
 # collapsing whitespace never stopped an instruction, it only put it on one
 # line. Identifier characters plus the punctuation real symbol names carry
 # (`Stats.average`, `impl<T>`, `arr[0]`, `ns::fn`, `$scope`, `read-file`).
-_SAFE_FOCUS_LABEL_RE = re.compile(rf"^[\w.$:<>\[\] -]{{0,{MAX_FOCUS_LABEL_CHARS}}}$")
+#
+# No space, deliberately. A real label is one token — `selection`,
+# `calculate_average` — and excluding the space is what rejects prose, which
+# is the whole shape of an injected instruction. The only label that loses is
+# the window fallback's `lines 4-19`, and that costs nothing: focus_instruction
+# already prints the same range itself, from start_line/end_line.
+_SAFE_FOCUS_LABEL_RE = re.compile(rf"^[\w.$:<>\[\]-]{{0,{MAX_FOCUS_LABEL_CHARS}}}$")
 
 
 class FocusRange(BaseModel):
@@ -79,9 +85,7 @@ class FocusRange(BaseModel):
         #
         # `fullmatch`, not `match`: Python's `$` also matches just before a
         # trailing newline, which is exactly the character this must reject.
-        if not _SAFE_FOCUS_LABEL_RE.fullmatch(value):
-            return ""
-        return " ".join(value.split())
+        return value if _SAFE_FOCUS_LABEL_RE.fullmatch(value) else ""
 
 
 class HintRequest(BaseModel):

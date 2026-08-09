@@ -186,8 +186,47 @@ describe("resolveFocus", () => {
     const focus = await resolveFocus(doc, selectionAt(1));
 
     expect(focus.kind).toBe("heuristic");
-    expect(focus.label).toBe("void");
-    expect(focus.breadcrumb).toBe("demo.c › void");
+    expect(focus.label).toBe("f");
+    expect(focus.breadcrumb).toBe("demo.c › f");
+  });
+
+  // The declared name is glued to its parameter list; the LEADING identifier is
+  // the return type or an access modifier. Labelling on that collapses every
+  // function in a file onto one label — and so onto one problem_key and one
+  // attempt-tracker entry.
+  it.each([
+    ["c", "demo.c", "int main(int argc, char **argv) {", "main"],
+    ["java", "Demo.java", "public static void calculate(int x) {", "calculate"],
+    ["go", "demo.go", "func (s *Stats) Average() float64 {", "Average"],
+    ["cpp", "demo.cpp", "std::string Stats::name() {", "name"],
+  ])(
+    "names the function rather than its leading keyword (%s)",
+    async (languageId, basename, header, expected) => {
+      const source = [header, "    return 0;", "}"].join("\n");
+      const doc = docFor(`declared-${languageId}`, source, languageId, basename);
+      vscode.commands.executeCommand.mockResolvedValue(undefined);
+
+      const focus = await resolveFocus(doc, selectionAt(1));
+
+      expect(focus.kind).toBe("heuristic");
+      expect(focus.label).toBe(expected);
+    }
+  );
+
+  it("reduces a symbol name that carries its signature", async () => {
+    // clangd and the C# provider return `calculate(int)`, which the backend's
+    // label rule rejects outright — so the prompt would lose the name entirely.
+    const doc = docFor("symbol-signature");
+    vscode.commands.executeCommand.mockResolvedValue([
+      symbol("calculate(int)", vscode.SymbolKind.Function, 2, 6),
+    ]);
+
+    const focus = await resolveFocus(doc, selectionAt(5));
+
+    expect(focus.label).toBe("calculate");
+    // The breadcrumb is display-only and never leaves the extension, so it
+    // keeps the provider's own text.
+    expect(focus.breadcrumb).toBe("demo.py › calculate(int)");
   });
 
   it("resolves once per document version and cursor", async () => {

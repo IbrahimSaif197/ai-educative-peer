@@ -808,9 +808,32 @@ describe("InlineTutor — the lens is the feedback channel", () => {
 
     await vscode.__runCommand("edupeer.nudgeLine", doc.uri, 1);
 
-    expect(hoverProvider().provideHover(doc, new vscode.Position(1, 0)).contents.value).toContain(
-      "⚠️ The tutor couldn't answer that"
-    );
+    const value = hoverProvider().provideHover(doc, new vscode.Position(1, 0)).contents.value;
+    expect(value).toContain("⚠️ The tutor couldn't answer that");
+    // The lens's trailing action clause does not belong here: the hover has
+    // nothing to click.
+    expect(value).not.toContain("click to retry");
+  });
+
+  it("never offers the hover a sign-in click it cannot deliver", async () => {
+    const api = {
+      isAvailable: true,
+      getLineHint: jest.fn().mockRejectedValue(new AuthError("no token", 401)),
+    };
+    const { doc } = setup(api, "/tmp/hover-auth/demo.py");
+
+    await vscode.__runCommand("edupeer.nudgeLine", doc.uri, 1);
+
+    const hover = hoverProvider().provideHover(doc, new vscode.Position(1, 0));
+    expect(hover.contents.value).toContain("⚠️ Sign in to get hints");
+    expect(hover.contents.value).not.toContain("click to sign in");
+    // Widening the allow-list to make that clause true would widen it for the
+    // model-authored text appended below it as well.
+    expect(hover.contents.isTrusted).toEqual({
+      enabledCommands: ["edupeer.nudgeLine", "edupeer.explainSelection"],
+    });
+    // The lens is where the action lives, and it is unchanged.
+    expect(lensTitles(doc)).toContain("⚠️ Sign in to get hints — click to sign in");
   });
 
   it("asks about the student's live selection, the same block the panel resolves", async () => {
@@ -906,6 +929,27 @@ describe("InlineTutor — the lens is the feedback channel", () => {
 
       expect(lensTitles(doc).join(" ")).not.toContain("what is n here?");
       expect(editor.setDecorations.mock.calls.at(-1)[1]).toEqual([]);
+    });
+
+    it("never strands a ⏳ lens that nothing will ever resolve", async () => {
+      const { api, releases } = pendingApi();
+      const { doc } = setup(api, "/tmp/stale-below/demo.py");
+
+      const pending = vscode.__runCommand("edupeer.nudgeLine", doc.uri, 1);
+      await flush();
+      expect(lensTitles(doc)).toContain("⏳ EduPeer is thinking…");
+
+      // An edit BELOW the line. `applyChanges` correctly leaves the loading
+      // state exactly where it was — but the revision guard is store-wide, so
+      // the answer it is waiting for is dropped all the same. The lens has to
+      // go with it, or it waits forever while the status bar spinner clears.
+      edit(doc, [{ range: new vscode.Range(3, 0, 3, 0), text: "\n" }]);
+
+      releases[0]({ hint: "what is n here?", concept: "division" });
+      await pending;
+
+      expect(lensTitles(doc)).not.toContain("⏳ EduPeer is thinking…");
+      expect(lensTitles(doc).join(" ")).not.toContain("what is n here?");
     });
 
     it("does not undo a dismissal with an unforced reply that was already in flight", async () => {

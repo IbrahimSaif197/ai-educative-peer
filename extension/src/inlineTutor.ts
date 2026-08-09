@@ -39,11 +39,14 @@ export function errorStateFor(err: unknown, apiAvailable: boolean): LensState {
   return { kind: "error", reason: "unknown", message: "That didn't work" };
 }
 
+/** One home for the "working on it" wording, shared by the lens and the hover. */
+export const THINKING_LABEL = "⏳ EduPeer is thinking…";
+
 /** What the lens says. `fallback` is the idle title for this line. */
 export function lensTitle(state: LensState, fallback: string): string {
   switch (state.kind) {
     case "loading":
-      return "⏳ EduPeer is thinking…";
+      return THINKING_LABEL;
     case "ready":
       return `💡 ${state.hint}`;
     case "empty":
@@ -729,10 +732,19 @@ export class InlineTutor {
     const { flag, hint } = store.annotationsAt(pos.line);
     // Spec A4: the hover reflects `loading` and `error` too, so hovering a
     // line mid-request no longer says nothing while the lens says ⏳.
-    // `lensTitle` is reused so the two surfaces cannot drift apart in wording.
+    //
+    // The condition only, never the lens's trailing "— click to retry" /
+    // "— click to sign in": the hover has nothing to click. Its `isTrusted`
+    // allow-list is deliberately just `nudgeLine` and `explainSelection`, and
+    // widening it to carry a sign-in link would widen it for the
+    // model-authored text appended below as well. The action stays on the lens.
     const state = store.lensStateAt(pos.line);
     const status =
-      state.kind === "loading" || state.kind === "error" ? lensTitle(state, "") : "";
+      state.kind === "loading"
+        ? THINKING_LABEL
+        : state.kind === "error"
+        ? `⚠️ ${state.message}`
+        : "";
 
     if (!flag && !hint && !status) return undefined;
     const md = new vscode.MarkdownString(undefined, true);

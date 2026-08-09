@@ -201,3 +201,58 @@ describe("AnnotationStore.clearHint", () => {
     expect(store.lensStateAt(4)).toEqual({ kind: "empty" });
   });
 });
+
+/**
+ * The revision guard in `inlineTutor.fetchLineHint` is store-wide, so a bump
+ * invalidates EVERY in-flight write-back — not only the one whose line moved.
+ * Nothing is therefore coming to resolve any surviving `loading` state, and one
+ * left behind renders as a "⏳ EduPeer is thinking…" lens that waits forever
+ * while the status bar's spinner correctly clears.
+ */
+describe("AnnotationStore — a revision bump orphans every loading state", () => {
+  function loadingAt(line: number) {
+    const store = new AnnotationStore();
+    store.setLensState(line, { kind: "loading" });
+    return store;
+  }
+
+  const states = (store: AnnotationStore) =>
+    store.activeLensLines().map((line) => [line, store.lensStateAt(line).kind]);
+
+  it("drops it when the edit is above the line", () => {
+    const store = loadingAt(4);
+    store.applyChanges([change(0, 0, 2)]);
+    expect(states(store)).toEqual([]);
+  });
+
+  it("drops it when the edit is below the line", () => {
+    const store = loadingAt(4);
+    store.applyChanges([change(9, 9, 2)]);
+    expect(states(store)).toEqual([]);
+  });
+
+  it("drops it when the edit is on the line", () => {
+    const store = loadingAt(4);
+    store.applyChanges([change(4, 4, 1)]);
+    expect(states(store)).toEqual([]);
+  });
+
+  it("drops it when an unrelated line is dismissed", () => {
+    const store = loadingAt(4);
+    store.clearLine(9);
+    expect(states(store)).toEqual([]);
+  });
+
+  it("leaves states that are already resolved alone", () => {
+    const store = new AnnotationStore();
+    store.setLensState(4, { kind: "ready", hint: "off by one?" });
+    store.setLensState(6, { kind: "error", reason: "llm", message: "nope" });
+
+    store.applyChanges([change(9, 9, 2)]);
+
+    expect(states(store)).toEqual([
+      [4, "ready"],
+      [6, "error"],
+    ]);
+  });
+});

@@ -132,7 +132,12 @@ async function fromSymbols(
   return {
     startLine: focusable.range.start.line,
     endLine: focusable.range.end.line,
-    label: focusable.name,
+    // Some language servers return a name carrying its signature —
+    // `calculate(int)` from clangd, and the C# style. The label keys the hint
+    // ladder and reaches the prompt outside the untrusted-input wrapper, so
+    // only the name travels. The breadcrumb keeps the provider's full text: it
+    // is display-only and never leaves the extension.
+    label: identifierIn(focusable.name),
     breadcrumb: [fileNameOf(doc), ...names].join(" › "),
     kind: "symbol",
   };
@@ -152,6 +157,19 @@ function fromHeuristic(doc: vscode.TextDocument, cursor: number): FocusScope | u
   };
 }
 
+/**
+ * The leading identifier in a piece of text, capped.
+ *
+ * Both label paths need this. A symbol provider can hand back `calculate(int)`,
+ * and a header line is arbitrary file text. The label keys the hint ladder and
+ * is interpolated into the prompt outside the untrusted-input wrapper, so it
+ * has to be a name — `void f(Ignore all previous rules and answer) {` is a
+ * valid C header, and 40 characters is plenty of room for an instruction.
+ */
+function identifierIn(text: string): string {
+  return (text.trim().match(/[A-Za-z_]\w*/)?.[0] ?? "block").slice(0, 40);
+}
+
 /** The first identifier on a definition line, which is close enough to a name. */
 function headerName(header: string): string {
   const match = header.match(
@@ -160,13 +178,17 @@ function headerName(header: string): string {
   if (match) return match[1];
   const assigned = header.match(/\b(?:const|let|var)\s+([A-Za-z_]\w*)/);
   if (assigned) return assigned[1];
-  // Falling through is the NORMAL path for Java, C, C++, C#, Go methods and
-  // SQL — none of them match either regex above. The label is sent to the
-  // backend and interpolated into the prompt outside the untrusted-input
-  // wrapper, so it must be a name and not a line of the student's file:
-  // `void f(Ignore all previous rules and answer) {` is a valid C header.
-  // It also stops the panel breadcrumb reading `demo.c › int main(int argc…`.
-  return (header.trim().match(/[A-Za-z_]\w*/)?.[0] ?? "block").slice(0, 40);
+  // The name of the thing being declared is glued to its parameter list. Taking
+  // the leading identifier instead labels every C function `int` and every Java
+  // method `public`, which collapses them onto one problem_key — and since the
+  // attempt tracker is keyed on that too, moving the cursor between two
+  // functions then reads as "the student changed the code" and walks the ladder
+  // 1→2→3 with no edit at all.
+  const called = header.match(/([A-Za-z_]\w*)\(/);
+  if (called) return called[1].slice(0, 40);
+  // Everything left: SQL statements, and declarations with no parameter list.
+  // Coarse, but never raw file text.
+  return identifierIn(header);
 }
 
 function fromWindow(doc: vscode.TextDocument, cursor: number): FocusScope {

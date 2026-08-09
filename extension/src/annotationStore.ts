@@ -72,9 +72,28 @@ export class AnnotationStore {
    * about is captured before the first await. Anything that shifts or drops
    * entries in the meantime makes that number a lie, so callers snapshot this
    * before awaiting and drop their answer if it moved.
+   *
+   * The guard is store-wide, so the invariant is store-wide too: **a bump
+   * invalidates every in-flight write-back, so no `loading` state can survive
+   * one and still be resolved.** Both places that bump therefore drop them.
    */
   get revision(): number {
     return this.rev;
+  }
+
+  /**
+   * Forget every `loading` state, because nothing is coming to resolve them.
+   *
+   * Always paired with a `rev` bump. A surviving `loading` renders as a
+   * "⏳ EduPeer is thinking…" lens that waits forever, while the status bar's
+   * spinner correctly clears — the two surfaces disagreeing, which spec A4
+   * forbids, and the "clicking does nothing" symptom this branch exists to
+   * kill. Dropping it returns the line to its idle offer, which is clickable.
+   */
+  private dropLoadingStates(): void {
+    for (const [line, state] of this.lensStates) {
+      if (state.kind === "loading") this.lensStates.delete(line);
+    }
   }
 
   /** Replace the flag set wholesale, as a fresh scan does. */
@@ -129,6 +148,7 @@ export class AnnotationStore {
     this.rev++;
     this.hints.delete(line);
     this.lensStates.delete(line);
+    this.dropLoadingStates();
   }
 
   /**
@@ -183,6 +203,10 @@ export class AnnotationStore {
 
     this.hints = this.remapByLine(this.hints, intersects, shiftFor);
     this.lensStates = this.remapByLine(this.lensStates, intersects, shiftFor);
+    // An edit below the annotation, or one that does not touch it at all,
+    // leaves its state exactly where it was — but the answer it is waiting for
+    // has still been invalidated by the bump above.
+    this.dropLoadingStates();
   }
 
   private remapByLine<T>(
