@@ -940,3 +940,44 @@ textarea:focus {
     transform: scale(1.25);
   }
 }
+
+/* The payoff. Three layers: a mint band travelling the top edge, the streak
+   chip popping as the band passes it, and the ground lifting briefly. Once,
+   then gone. */
+body.is-celebrating::before {
+  content: "";
+  position: fixed;
+  inset: 0 0 auto 0;
+  height: 2px;
+  background: linear-gradient(90deg, transparent, var(--mint), transparent);
+  transform: translateX(-100%);
+  animation: sweep 600ms var(--ease-loop) both;
+  pointer-events: none;
+  z-index: 10;
+}
+
+body.is-celebrating {
+  animation: ground-lift 400ms var(--ease-loop) both;
+}
+
+body.is-celebrating .streak {
+  animation: chip-pop 300ms var(--ease-signature) 200ms both;
+}
+
+@keyframes sweep {
+  to {
+    transform: translateX(100%);
+  }
+}
+
+@keyframes ground-lift {
+  50% {
+    background: var(--card);
+  }
+}
+
+@keyframes chip-pop {
+  50% {
+    transform: scale(1.12);
+  }
+}

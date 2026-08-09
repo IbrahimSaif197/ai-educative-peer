@@ -92,6 +92,13 @@ export class InlineTutor {
   private readonly inFlightFingerprints = new Map<string, string>();
   private readonly disposables: vscode.Disposable[] = [];
   private readonly emitter = new vscode.EventEmitter<void>();
+  /**
+   * Fires when a file goes from flagged to clean. The sidebar is a different
+   * object and the two do not talk, so this follows the same pattern the
+   * sidebar already uses for the hint level.
+   */
+  private readonly cleanEmitter = new vscode.EventEmitter<void>();
+  readonly onDidScanClean = this.cleanEmitter.event;
 
   private debounceHandle: NodeJS.Timeout | undefined;
   private scanHandle: NodeJS.Timeout | undefined;
@@ -140,6 +147,7 @@ export class InlineTutor {
     this.disposables.push(this.flagGutterWarn);
     this.disposables.push(this.diagnostics);
     this.disposables.push(this.emitter);
+    this.disposables.push(this.cleanEmitter);
 
     const selector = SUPPORTED_LANGUAGE_IDS.map((language) => ({ language }));
 
@@ -586,6 +594,7 @@ export class InlineTutor {
     // Ahead of the reflection gate on purpose: the markers describe code that
     // is already fixed whether or not this fingerprint has been quizzed.
     void this.removeFixedBugMarkers(doc);
+    this.cleanEmitter.fire();
     const fp = fingerprintCode(code);
     if (this.reflectOffered.has(fp)) return;
     this.reflectOffered.add(fp);

@@ -1127,4 +1127,17 @@ describe("InlineTutor — stripping fixed bug markers", () => {
     expect(mock.workspace.applyEdit).toHaveBeenCalledTimes(2);
     expect(mock.window.showInformationMessage).toHaveBeenCalledTimes(1);
   });
+
+  it("announces the clean scan exactly once per transition", async () => {
+    const api = makeApi({ scanCode: flaggedThenClean() });
+    const { tutor } = setupMarked(api);
+    let announced = 0;
+    tutor.onDidScanClean(() => announced++);
+
+    await mock.__runCommand("edupeer.scanFile");
+    expect(announced).toBe(0); // still flagged
+
+    await mock.__runCommand("edupeer.scanFile");
+    expect(announced).toBe(1);
+  });
 });

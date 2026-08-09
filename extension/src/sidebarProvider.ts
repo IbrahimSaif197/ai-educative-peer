@@ -114,6 +114,11 @@ export class EduPeerSidebarProvider implements vscode.WebviewViewProvider {
     this.post({ type: "streak", days });
   }
 
+  /** A file just went clean. The panel marks the moment. */
+  public postScanClean(): void {
+    this.post({ type: "scanClean" });
+  }
+
   public resolveWebviewView(webviewView: vscode.WebviewView): void {
     this.view = webviewView;
     // The suppression signature describes what the LAST webview was showing,

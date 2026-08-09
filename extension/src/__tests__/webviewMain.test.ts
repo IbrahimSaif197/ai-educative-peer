@@ -1135,3 +1135,19 @@ describe("webview — streak chip", () => {
     expect(el("streakChip").getAttribute("aria-label")).toBe("4 day practice streak");
   });
 });
+
+// As with the sections above, this harness predates `loadWebview()`: there is
+// no `dom` handle to destructure. `post` already drives the one jsdom
+// `document` every test in this file shares, reset by `load()` in `beforeEach`.
+describe("webview — clean scan celebration", () => {
+  it("adds the celebration class and then takes it off again", () => {
+    jest.useFakeTimers();
+
+    post({ type: "scanClean" });
+    expect(document.body.classList.contains("is-celebrating")).toBe(true);
+
+    jest.advanceTimersByTime(1000);
+    expect(document.body.classList.contains("is-celebrating")).toBe(false);
+    jest.useRealTimers();
+  });
+});

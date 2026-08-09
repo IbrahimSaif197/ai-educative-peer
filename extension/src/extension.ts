@@ -94,6 +94,7 @@ export async function activate(context: vscode.ExtensionContext) {
   const tutor = new InlineTutor(context, api, (thinking) => statusBar.update({ thinking }));
   tutor.activate();
   context.subscriptions.push({ dispose: () => tutor.dispose() });
+  context.subscriptions.push(tutor.onDidScanClean(() => provider.postScanClean()));
 
   // Retry any migration that failed on a previous run.
   void auth.runPendingMigration();

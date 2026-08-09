@@ -713,6 +713,11 @@
         renderBadges(msg.badges);
         break;
 
+      case "scanClean":
+        document.body.classList.add("is-celebrating");
+        setTimeout(() => document.body.classList.remove("is-celebrating"), 900);
+        break;
+
       case "authState":
         signedIn = !!msg.signedIn;
         accountLabelEl.textContent = msg.label;
