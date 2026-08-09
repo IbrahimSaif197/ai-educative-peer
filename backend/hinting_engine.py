@@ -6,6 +6,7 @@ from typing import List, Optional, Tuple
 from groq import Groq
 
 from languages import concepts_for, get_language
+from models import MAX_FOCUS_LABEL_CHARS
 
 # Appended to every system prompt. The student's file and message are data the
 # tutor discusses, not instructions it follows — without this, a "```" in the
@@ -215,6 +216,31 @@ MODEL_NAME = "llama-3.3-70b-versatile"
 MAX_HISTORY_TURNS = 6
 
 
+def focus_instruction(focus: Optional[dict]) -> str:
+    """Tell the model which lines to answer about.
+
+    Returns "" for a missing or nonsensical focus, so an older extension — or
+    a file where the block could not be resolved — behaves exactly as before.
+    """
+    if not focus:
+        return ""
+    try:
+        start = int(focus.get("start_line", 0))
+        end = int(focus.get("end_line", 0))
+    except (TypeError, ValueError):
+        return ""
+    if start < 1 or end < start:
+        return ""
+    label = " ".join(str(focus.get("label", "")).split())[:MAX_FOCUS_LABEL_CHARS]
+    where = f"lines {start}-{end}" if end > start else f"line {start}"
+    named = f" ({label})" if label else ""
+    return (
+        f"The student is working on {where}{named}. Everything else in the file "
+        "is background context. Answer about that block, and cite real line "
+        "numbers when you point at code.\n\n"
+    )
+
+
 class HintingEngine:
     def __init__(self, api_key: str):
         self.client = Groq(api_key=api_key)
@@ -251,7 +277,7 @@ class HintingEngine:
 
     def _build_user_message(
         self, code: str, question: str, hint_level: int, language: str,
-        mode: str = "hint", edit_summary: str = "",
+        mode: str = "hint", edit_summary: str = "", focus: Optional[dict] = None,
     ) -> str:
         lang = get_language(language)
         nonce = secrets.token_hex(8)
@@ -269,11 +295,13 @@ class HintingEngine:
             if edit_summary.strip()
             else ""
         )
+        where = focus_instruction(focus)
         if mode != "hint":
-            return f"{code_part}\n\n{edits}{question_part}"
+            return f"{code_part}\n\n{where}{edits}{question_part}"
         return (
             f"hint_level: {hint_level}\n\n"
             f"{code_part}\n\n"
+            f"{where}"
             f"{edits}"
             f"{question_part}\n\n"
             "Respond according to the STRICT RULES for the given hint_level."
@@ -398,23 +426,43 @@ class HintingEngine:
         return cleaned
 
     def generate_line_hint(
-        self, code: str, line_number: int, language: str = "python"
+        self, code: str, line_number: int, language: str = "python",
+        focus: Optional[dict] = None,
     ) -> Tuple[str, str]:
         lines = code.splitlines()
         if not lines or line_number < 1 or line_number > len(lines):
             return "", "general"
         lang = get_language(language)
         idx = line_number - 1
-        start = max(0, idx - 3)
-        end = min(len(lines), idx + 4)
+        # A resolved focus block is a better window than a fixed ±3, but it is
+        # capped so a 200-line function does not become the whole prompt.
+        start, end = max(0, idx - 3), min(len(lines), idx + 4)
+        if focus:
+            try:
+                f_start = int(focus.get("start_line", 0)) - 1
+                f_end = int(focus.get("end_line", 0))
+            except (TypeError, ValueError):
+                f_start, f_end = -1, -1
+            if 0 <= f_start < f_end <= len(lines) and f_start <= idx < f_end:
+                start = max(f_start, idx - 30)
+                end = min(f_end, idx + 31)
         window = "\n".join(
             f"{i+1}{'>' if i == idx else ':'} {lines[i]}" for i in range(start, end)
         )
+        # Same treatment as `_build_user_message` and `scan_code`: a bare ```
+        # fence is closed by the student typing ```, and this window is now up
+        # to 61 lines of their file rather than 7.
+        nonce = secrets.token_hex(8)
         user_msg = (
             f"The student's cursor is on line {line_number} (marked with '>').\n"
-            f"Context:\n```{lang['fence']}\n{window}\n```\n\nRespond with JSON only."
+            "Context:\n"
+            + self._wrap_untrusted("student_code", nonce, window)
+            + "\n\nRespond with JSON only."
         )
-        system = LINE_HINT_SYSTEM_PROMPT_TEMPLATE.format(language=lang["display_name"])
+        system = (
+            LINE_HINT_SYSTEM_PROMPT_TEMPLATE.format(language=lang["display_name"])
+            + UNTRUSTED_INPUT_RULE
+        )
         text = self._chat(system, user_msg, 160)
         data = self._extract_json(text)
         hint = str(data.get("hint", "")).strip() if isinstance(data, dict) else ""
@@ -509,6 +557,7 @@ class HintingEngine:
         mode: str,
         pacing: str,
         edit_summary: str = "",
+        focus: Optional[dict] = None,
     ) -> Tuple[List[dict], str]:
         level = max(1, min(3, int(hint_level)))
         if mode not in MODE_SYSTEM_TEMPLATES:
@@ -538,7 +587,7 @@ class HintingEngine:
             {
                 "role": "user",
                 "content": self._build_user_message(
-                    code, question, level, language, mode, edit_summary
+                    code, question, level, language, mode, edit_summary, focus
                 ),
             }
         )
@@ -566,9 +615,10 @@ class HintingEngine:
         mode: str = "hint",
         pacing: str = "",
         edit_summary: str = "",
+        focus: Optional[dict] = None,
     ) -> Tuple[str, List[str]]:
         messages, mode = self._prepare_hint_messages(
-            code, question, hint_level, language, history, mode, pacing, edit_summary
+            code, question, hint_level, language, history, mode, pacing, edit_summary, focus
         )
         raw_text = self._chat_messages(messages, 400)
         return self._finalize_hint(raw_text, code, question, language, mode)
@@ -587,11 +637,12 @@ class HintingEngine:
         mode: str = "hint",
         pacing: str = "",
         edit_summary: str = "",
+        focus: Optional[dict] = None,
     ):
         """Yield {"type": "delta", "text"} events followed by one
         {"type": "done", "hint", "concept_tags"} event."""
         messages, mode = self._prepare_hint_messages(
-            code, question, hint_level, language, history, mode, pacing, edit_summary
+            code, question, hint_level, language, history, mode, pacing, edit_summary, focus
         )
         stream = self.client.chat.completions.create(
             model=MODEL_NAME,

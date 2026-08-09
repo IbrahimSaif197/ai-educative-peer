@@ -2,7 +2,7 @@
   "name": "edupeer",
   "displayName": "EduPeer",
   "description": "A Socratic AI tutor for novice programmers (Python, JavaScript, TypeScript, Java, C, C++, C#, Go, Rust, SQL).",
-  "version": "1.0.1",
+  "version": "1.1.0",
   "publisher": "edupeer",
   "license": "GPL-3.0-or-later",
   "icon": "media/icon.png",
@@ -116,6 +116,14 @@
       {
         "command": "edupeer.signOut",
         "title": "EduPeer: Sign Out"
+      },
+      {
+        "command": "edupeer.deepenLine",
+        "title": "EduPeer: Go Deeper on This Line"
+      },
+      {
+        "command": "edupeer.dismissLine",
+        "title": "EduPeer: Dismiss This Line Hint"
       }
     ],
     "menus": {
@@ -159,6 +167,14 @@
       "commandPalette": [
         {
           "command": "edupeer.discussLines",
+          "when": "false"
+        },
+        {
+          "command": "edupeer.deepenLine",
+          "when": "false"
+        },
+        {
+          "command": "edupeer.dismissLine",
           "when": "false"
         }
       ]
@@ -224,6 +240,19 @@
           "type": "boolean",
           "default": true,
           "description": "Show inline Socratic hints beside the line you're editing."
+        },
+        "edupeer.lensMode": {
+          "type": "string",
+          "enum": [
+            "all",
+            "flagged"
+          ],
+          "enumDescriptions": [
+            "Offer a hint on every function and class, and show flagged lines.",
+            "Only show lines EduPeer has actually flagged."
+          ],
+          "default": "all",
+          "description": "Which CodeLens entries EduPeer shows above your code. Set edupeer.inlineHints to false to turn the inline surface off entirely."
         },
         "edupeer.autoScan": {
           "type": "boolean",

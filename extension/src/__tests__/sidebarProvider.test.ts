@@ -102,6 +102,72 @@ async function build(
   return { provider, posted, send, api, state, html: view.webview.html };
 }
 
+/**
+ * A provider wired to a single document, without spending the first
+ * `sendFocus` resolve on a "ready" burst — these tests call `sendFocus` and
+ * `handleAsk` directly and need that first call to be the one under test.
+ * A distinct path per call keeps `resolveFocus`'s memo cache (keyed on
+ * uri+version+cursor, see focusScope.ts) from ever answering with another
+ * test's document.
+ */
+async function setupProvider(
+  source: string,
+  cursorLine: number,
+  path = "/tmp/focus/demo.py",
+  languageId = "python"
+): Promise<{ provider: EduPeerSidebarProvider; posted: any[]; api: any; doc: any }> {
+  const posted: any[] = [];
+  const state = new Map<string, any>();
+  const api = makeApi();
+  const context = {
+    globalState: {
+      get: (key: string, fallback: any) => (state.has(key) ? state.get(key) : fallback),
+      update: async (key: string, value: any) => void state.set(key, value),
+    },
+  } as any;
+  const firebase = { getBadges: jest.fn(async () => []) } as any;
+  const auth = {
+    getSession: () => ({ uid: "u1", isAnonymous: true, refreshToken: "r" }),
+    onDidChange: jest.fn(),
+  } as any;
+  const queue = { enqueue: jest.fn(async () => undefined) } as any;
+
+  const doc = mock.__makeDocument(source, languageId, path);
+  mock.window.activeTextEditor = mock.__makeEditor(doc, cursorLine);
+  // No document symbol provider in this harness: resolveFocus must fall
+  // through to the heuristic path rather than hang on a real provider.
+  mock.commands.executeCommand.mockResolvedValue(undefined);
+
+  const provider = new EduPeerSidebarProvider(
+    mock.Uri.file("/ext"),
+    context,
+    api as any,
+    firebase,
+    auth,
+    queue
+  );
+
+  const view = {
+    webview: {
+      options: {},
+      html: "",
+      cspSource: "vscode-webview:",
+      asWebviewUri: (u: any) => u,
+      postMessage: (msg: any) => {
+        posted.push(msg);
+        return Promise.resolve(true);
+      },
+      onDidReceiveMessage: () => ({ dispose: jest.fn() }),
+    },
+    show: jest.fn(),
+    onDidDispose: jest.fn(() => ({ dispose: jest.fn() })),
+  } as any;
+
+  provider.resolveWebviewView(view);
+
+  return { provider, posted, api, doc };
+}
+
 const latest = (posted: any[], type: string) =>
   [...posted].reverse().find((m) => m.type === type);
 
@@ -156,10 +222,27 @@ describe("startup", () => {
     await receive({ type: "ready" });
 
     expect(latest(posted, "restoreChat").messages).toHaveLength(1);
-    expect(latest(posted, "activeCode").language).toBe("Python");
+    expect(latest(posted, "focus").language).toBe("Python");
     expect(latest(posted, "badges")).toBeDefined();
     expect(latest(posted, "authState").signedIn).toBe(false);
     expect(latest(posted, "offline").value).toBe(false);
+  });
+
+  // The webview's placeholder (Task 12) reads `signedIn` at the moment
+  // "restoreChat" arrives with no stored messages, defaulting to signed-out
+  // until "authState" says otherwise. `sendBadges` sits between the two posts
+  // below and makes a real network call in production, so if "restoreChat"
+  // led, a signed-in student with no history would see "sign in" for as long
+  // as that call takes — not a same-tick flicker. `authState` must lead.
+  it("posts auth state before the restored chat, so a reload never tells a signed-in student to sign in", async () => {
+    const h = await build();
+    await h.send({ type: "ready" });
+
+    const authIndex = h.posted.findIndex((m) => m.type === "authState");
+    const restoreIndex = h.posted.findIndex((m) => m.type === "restoreChat");
+    expect(authIndex).toBeGreaterThanOrEqual(0);
+    expect(restoreIndex).toBeGreaterThanOrEqual(0);
+    expect(authIndex).toBeLessThan(restoreIndex);
   });
 
   it("labels an anonymous session as not signed in", async () => {
@@ -268,6 +351,27 @@ describe("the attempt gate", () => {
   it("sends a diff of what changed", async () => {
     const h = await build();
     await askPastTheGate(h);
+    // The attempt tracker now compares the focus block `sendFocus` last
+    // resolved, not the webview's postMessage `code` field, so simulating an
+    // edit means mutating the tracked editor and forcing a resolve — the way
+    // a real edit plus the debounced document-change listener would in
+    // production — not just sending a different `code` alongside the ask.
+    // Same path as `build()`'s document — this is simulating an edit to the
+    // same open file, and `lastDocumentKey` (what the attempt tracker keys
+    // on) is uri-based, so a different path would make this look like an
+    // unrelated, never-seen-before problem instead of an edit to this one.
+    // But resolveFocus memoises on uri+version+cursor (see focusScope.ts),
+    // and the mock always stamps version 1, so reusing the exact same cursor
+    // too would hand back `build()`'s already-cached, pre-edit scope instead
+    // of resolving the edited text. Line 1 is still inside `average`'s body,
+    // so the resolved block is unchanged — only the cache key is.
+    const edited = mock.__makeDocument(
+      CODE.replace("sum(n)", "total(n)"),
+      "python",
+      "/tmp/demo.py"
+    );
+    mock.window.activeTextEditor = mock.__makeEditor(edited, 1);
+    await h.send({ type: "refreshCode" });
     // Editing produces a new fingerprint, which re-arms the explain-first
     // gate, so the ask has to be let through a second time.
     await h.send({
@@ -720,8 +824,14 @@ describe("persistence and plumbing", () => {
 
   it("re-reads the active file on request", async () => {
     const h = await build();
+    // Switch the active file first: the focus block hasn't changed since
+    // `build()`'s own "ready" call, and re-posting the same block for the
+    // same reason `refreshCode` exists to avoid is exactly what the
+    // "nothing the student can see has changed" guard suppresses.
+    const other = mock.__makeDocument("def other(n):\n    return n * 2\n", "python", "/tmp/other.py");
+    mock.window.activeTextEditor = mock.__makeEditor(other);
     await h.send({ type: "refreshCode" });
-    expect(latest(h.posted, "activeCode").code).toBe(CODE);
+    expect(latest(h.posted, "focus").focusCode).toBe("def other(n):\n    return n * 2");
   });
 
   it("ignores an unknown message type", async () => {
@@ -730,9 +840,11 @@ describe("persistence and plumbing", () => {
   });
 
   it("reports an unsupported language as no language", async () => {
-    const h = await build({}, "# notes\n", "markdown");
+    const h = await build();
+    const notes = mock.__makeDocument("# notes\n", "markdown", "/tmp/notes.md");
+    mock.window.activeTextEditor = mock.__makeEditor(notes);
     await h.send({ type: "refreshCode" });
-    expect(latest(h.posted, "activeCode").language).toBe("");
+    expect(latest(h.posted, "focus").language).toBe("");
   });
 });
 
@@ -797,5 +909,220 @@ describe("the webview document", () => {
     } as any);
     expect(options.enableScripts).toBe(true);
     expect(String(options.localResourceRoots[0])).toContain("media");
+  });
+});
+
+/**
+ * `resolveFocus` memoises on uri + version + cursor in a module-level cache
+ * that nothing resets between tests — not `jest.resetModules()`, not the
+ * vscode mock's `__reset()`. Tests in here must therefore pick path/cursor
+ * combinations that collide with no other test in this file, or they will
+ * silently read another test's answer. That has already produced two defects
+ * (Task 3 and Task 9); `setupProvider`'s per-call path is the mitigation.
+ */
+describe("EduPeerSidebarProvider — focus scoping", () => {
+  const vscode = require("vscode");
+  beforeEach(() => vscode.__reset());
+
+  /** One webview host, with its own message log and its own `ready` channel. */
+  function makeView(posted: any[]) {
+    let receive: ((msg: any) => Promise<void>) | undefined;
+    const view = {
+      webview: {
+        options: {},
+        html: "",
+        cspSource: "vscode-webview:",
+        asWebviewUri: (u: any) => u,
+        postMessage: (msg: any) => {
+          posted.push(msg);
+          return Promise.resolve(true);
+        },
+        onDidReceiveMessage: (fn: any) => {
+          receive = fn;
+          return { dispose: jest.fn() };
+        },
+      },
+      show: jest.fn(),
+      onDidDispose: jest.fn(() => ({ dispose: jest.fn() })),
+    } as any;
+    return { view, send: (msg: any) => receive!(msg) };
+  }
+
+  it("re-posts the focus block when the sidebar is closed and reopened", async () => {
+    const h = await build();
+
+    // VS Code re-resolves the view whenever the sidebar host is recreated.
+    // The reloaded webview asks for its state and must actually get it —
+    // `lastFocusSignature` is provider state and outlives the webview.
+    const reopened: any[] = [];
+    const second = makeView(reopened);
+    h.provider.resolveWebviewView(second.view);
+    await second.send({ type: "ready" });
+
+    const focus = latest(reopened, "focus");
+    expect(focus).toBeDefined();
+    expect(focus.focusCode).toContain("def average");
+  });
+
+  it("re-reads the active file when Refresh is pressed, unchanged or not", async () => {
+    const h = await build();
+
+    await h.send({ type: "refreshCode" });
+
+    expect(latest(h.posted, "focus")).toBeDefined();
+  });
+
+  const SOURCE = [
+    "import math",
+    "",
+    "def calculate_average(numbers):",
+    "    total = 0",
+    "    return total / len(numbers)",
+  ].join("\n");
+
+  it("posts the focus block, not the whole file", async () => {
+    // Uses whatever setup helper this file already defines to build a
+    // provider and resolve its webview; `posted` collects postMessage calls.
+    const { provider, posted, doc } = await setupProvider(SOURCE, 4);
+
+    await provider["sendFocus"]();
+
+    const focusMsg = posted.find((m: any) => m.type === "focus");
+    expect(focusMsg.focusCode).toBe(
+      ["def calculate_average(numbers):", "    total = 0", "    return total / len(numbers)"].join("\n")
+    );
+    expect(focusMsg.focusCode).not.toContain("import math");
+    expect(focusMsg.startLine).toBe(3); // 1-based
+    expect(focusMsg.endLine).toBe(5);
+    expect(focusMsg.breadcrumb).toContain("calculate_average");
+    expect(focusMsg.totalLines).toBe(doc.lineCount);
+  });
+
+  it("keys the hint ladder on the function, not the file", async () => {
+    const { provider } = await setupProvider(SOURCE, 4);
+    await provider["sendFocus"]();
+
+    expect(provider["lastDocumentKey"]).toContain("#calculate_average");
+  });
+
+  it("sends the whole file as code and the block as focus", async () => {
+    const { provider, api } = await setupProvider(SOURCE, 4);
+    await provider["sendFocus"]();
+
+    await provider["handleAsk"]("why is it dividing by zero?", "focus block text", "hint");
+
+    const request = api.streamHint.mock.calls[0][0];
+    expect(request.code).toContain("import math");
+    expect(request.focus).toEqual({
+      start_line: 3,
+      end_line: 5,
+      label: "calculate_average",
+    });
+  });
+
+  it("forgets the problem key when there is no active editor", async () => {
+    const { provider } = await setupProvider(SOURCE, 4);
+    await provider["sendFocus"]();
+    expect(provider["lastDocumentKey"]).toContain("#");
+
+    vscode.window.activeTextEditor = undefined;
+    await provider["sendFocus"]();
+
+    expect(provider["lastDocumentKey"]).toBe("");
+  });
+
+  it("keeps one problem key while the cursor moves over top-level code", async () => {
+    // No def, no class: the heuristic finds no block and `fromWindow` labels
+    // the scope "lines N-M" around the cursor. That label churns per line, and
+    // keying the ladder on it made every ask a first ask — hint_level pinned
+    // at 1 and the "you haven't changed anything" gate never firing, for
+    // exactly the beginner writing top-level script code.
+    const TOP_LEVEL = Array.from({ length: 60 }, (_, i) => `value_${i} = ${i} * 2`).join("\n");
+    const { provider, posted, doc } = await setupProvider(TOP_LEVEL, 5, "/tmp/top-level/demo.py");
+
+    await provider["sendFocus"]();
+    const firstKey = provider["lastDocumentKey"];
+    const firstFocus = latest(posted, "focus");
+
+    vscode.window.activeTextEditor = vscode.__makeEditor(doc, 40);
+    await provider["sendFocus"]();
+    const secondFocus = latest(posted, "focus");
+
+    expect(provider["lastDocumentKey"]).toBe(firstKey);
+    // The descriptive label still travels in `focus` — the prompt wants it.
+    // It is only the ladder key that stops following it.
+    expect(secondFocus.breadcrumb).not.toBe(firstFocus.breadcrumb);
+    expect(secondFocus.breadcrumb).toContain("lines");
+  });
+
+  it("still gives two functions in one file two different problem keys", async () => {
+    const TWO_FUNCTIONS = [
+      "def first():",
+      "    return 1",
+      "",
+      "",
+      "def second():",
+      "    return 2",
+    ].join("\n");
+    const { provider, doc } = await setupProvider(TWO_FUNCTIONS, 1, "/tmp/two-keys/demo.py");
+
+    await provider["sendFocus"]();
+    const firstKey = provider["lastDocumentKey"];
+
+    vscode.window.activeTextEditor = vscode.__makeEditor(doc, 5);
+    await provider["sendFocus"]();
+
+    expect(firstKey).toContain("#first");
+    expect(provider["lastDocumentKey"]).toContain("#second");
+  });
+
+  it("gives two C functions in one file two different problem keys", async () => {
+    // Labelling on the leading identifier made both of these `int`, so they
+    // shared a problem_key — and the attempt tracker is keyed on it too, with
+    // the focus block as its payload. Moving the cursor between them then read
+    // as "the student changed the code" and walked the ladder 1→2→3 with no
+    // edit at all, which is the abuse path the tracker exists to close.
+    const C = [
+      "int main(int argc, char **argv) {",
+      "    return helper(1);",
+      "}",
+      "",
+      "int helper(int n) {",
+      "    return n + 1;",
+      "}",
+    ].join("\n");
+    const { provider, doc } = await setupProvider(C, 1, "/tmp/c-keys/demo.c", "c");
+
+    await provider["sendFocus"]();
+    const firstKey = provider["lastDocumentKey"];
+
+    vscode.window.activeTextEditor = vscode.__makeEditor(doc, 5);
+    await provider["sendFocus"]();
+
+    expect(firstKey).toContain("#main");
+    expect(provider["lastDocumentKey"]).toContain("#helper");
+  });
+
+  it("lets a move to a different function in the same document through the suppression guard", async () => {
+    const TWO_FUNCTIONS = [
+      "def first():",
+      "    return 1",
+      "",
+      "",
+      "def second():",
+      "    return 2",
+    ].join("\n");
+    const { provider, posted, doc } = await setupProvider(TWO_FUNCTIONS, 1);
+
+    await provider["sendFocus"]();
+    const first = latest(posted, "focus");
+
+    // Same document, same version — only the cursor moves.
+    vscode.window.activeTextEditor = vscode.__makeEditor(doc, 5);
+    await provider["sendFocus"]();
+    const second = latest(posted, "focus");
+
+    expect(second.startLine).not.toBe(first.startLine);
+    expect(second.breadcrumb).not.toBe(first.breadcrumb);
   });
 });

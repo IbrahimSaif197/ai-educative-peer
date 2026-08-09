@@ -137,13 +137,18 @@ const ofType = (posted: any[], type: string) => posted.filter((m) => m.type === 
 beforeEach(() => mock.__reset());
 
 describe("the hint ladder is keyed on the problem", () => {
-  it("sends the document uri as problem_key", async () => {
+  it("keys problem_key on the document uri plus the focused symbol", async () => {
     const h = build();
     await h.send({ type: "ready" });
     await h.send({ type: "askHint", question: "help", code: CODE, mode: "hint" });
     await h.send({ type: "explainSkip" });
     const req = h.api.streamHint.mock.calls[0][0];
-    expect(req.problem_key).toBe(mock.window.activeTextEditor.document.uri.toString());
+    // A different function is a different problem: being stuck on `main`
+    // should not start at hint 3 because you were stuck on `parse` a minute
+    // ago, so the key carries the resolved symbol, not just the file.
+    expect(req.problem_key).toBe(
+      `${mock.window.activeTextEditor.document.uri.toString()}#average`
+    );
   });
 });
 
@@ -333,6 +338,10 @@ describe("a failed scan is retried", () => {
 
 describe("per-file state is released when a document closes", () => {
   it("forgets the file's scan state and diagnostics", async () => {
+    // FileState (a single per-file blob) was replaced by three maps: the
+    // AnnotationStore itself plus the two fingerprints that de-dupe scans.
+    // All three must be released together, or a closed document's identity
+    // (its URI) keeps a slot in one of them for the rest of the session.
     const scanCode = jest.fn().mockResolvedValue({ flags: [] });
     const api = { isAvailable: true, scanCode, getLineHint: jest.fn() } as any;
     const doc = mock.__makeDocument("x = 1", "python", "/tmp/a.py");
@@ -340,10 +349,13 @@ describe("per-file state is released when a document closes", () => {
 
     const tutor = makeTutor(api);
     await (tutor as any).runScan(doc);
-    expect((tutor as any).fileStates.size).toBe(1);
+    expect((tutor as any).stores.size).toBe(1);
+    expect((tutor as any).scanFingerprints.size).toBe(1);
 
     for (const fn of mock.__state.listeners.closeTextDocument) fn(doc);
-    expect((tutor as any).fileStates.size).toBe(0);
+    expect((tutor as any).stores.size).toBe(0);
+    expect((tutor as any).scanFingerprints.size).toBe(0);
+    expect((tutor as any).inFlightFingerprints.size).toBe(0);
     tutor.dispose();
   });
 });

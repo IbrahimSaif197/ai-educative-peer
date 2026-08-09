@@ -4,6 +4,7 @@ import { ApiClient, AuthError, ChatTurn, RateLimitError } from "./apiClient";
 import { AttemptTracker, nudgeForUnchangedCode } from "./attemptTracker";
 import { AuthManager } from "./authManager";
 import { FirebaseClient } from "./firebaseClient";
+import { FocusScope, focusText, resolveFocus } from "./focusScope";
 import { isSupportedLanguage, languageLabel } from "./languages";
 import { offlineTutorReply } from "./localTutor";
 import {
@@ -35,6 +36,15 @@ export class EduPeerSidebarProvider implements vscode.WebviewViewProvider {
   private lastLanguageId = "python";
   /** Identifies the document the attempt tracker is following. */
   private lastDocumentKey = "";
+  /** The block the student is working on; drives the panel and every ask. */
+  private lastFocus?: FocusScope;
+  /** Exactly the focus block's text. Attempt tracking compares against this. */
+  private lastFocusCode = "";
+  /** The full document, still sent as `code` so the model keeps its context. */
+  private lastFullCode = "";
+  /** Suppresses a re-post when nothing the student can see has changed. */
+  private lastFocusSignature = "";
+  private focusDebounce?: NodeJS.Timeout;
   /** Code fingerprints that already went through the explain-first gate. */
   private seenFingerprints = new Set<string>();
   /** The ask that is paused behind the explain-first gate. */
@@ -90,6 +100,12 @@ export class EduPeerSidebarProvider implements vscode.WebviewViewProvider {
 
   public resolveWebviewView(webviewView: vscode.WebviewView): void {
     this.view = webviewView;
+    // The suppression signature describes what the LAST webview was showing,
+    // and this one is showing nothing at all. Carrying it across leaves a
+    // reopened sidebar stuck on "No active file" with an empty preview, an
+    // empty `currentCode` and a Refresh button that routes back through the
+    // same suppressed path.
+    this.lastFocusSignature = "";
     webviewView.webview.options = {
       enableScripts: true,
       localResourceRoots: [vscode.Uri.joinPath(this.extensionUri, "media")],
@@ -99,13 +115,13 @@ export class EduPeerSidebarProvider implements vscode.WebviewViewProvider {
     webviewView.webview.onDidReceiveMessage(async (msg) => {
       switch (msg.type) {
         case "ready":
+          this.postAuthState();
           this.post({
             type: "restoreChat",
             messages: this.context.globalState.get<unknown[]>(CHAT_STATE_KEY, []),
           });
-          await this.sendActiveCode();
+          await this.sendFocus();
           await this.sendBadges();
-          this.postAuthState();
           this.postOffline(!this.api.isAvailable);
           this.postAuthTrouble(this.api.isAuthHealthy === false);
           void this.checkReviewDue();
@@ -146,7 +162,13 @@ export class EduPeerSidebarProvider implements vscode.WebviewViewProvider {
           await this.resetSession();
           return;
         case "refreshCode":
-          await this.sendActiveCode();
+          // Refresh is the student saying "I don't trust what I'm looking
+          // at". Answering with silence because nothing changed is the one
+          // reply it must never give.
+          await this.sendFocus({ force: true });
+          return;
+        case "requestFullFile":
+          this.post({ type: "fullFile", code: this.lastFullCode });
           return;
         case "signIn":
           await vscode.commands.executeCommand("edupeer.signIn");
@@ -162,15 +184,16 @@ export class EduPeerSidebarProvider implements vscode.WebviewViewProvider {
     // recreation stacked another set of listeners on events that fire per
     // keystroke, and every one of them posted the whole document.
     const subs: vscode.Disposable[] = [
-      vscode.window.onDidChangeActiveTextEditor(() => this.sendActiveCode()),
+      vscode.window.onDidChangeActiveTextEditor(() => this.scheduleFocus()),
       vscode.workspace.onDidChangeTextDocument((e) => {
         if (
           vscode.window.activeTextEditor &&
           e.document === vscode.window.activeTextEditor.document
         ) {
-          this.sendActiveCode();
+          this.scheduleFocus();
         }
       }),
+      vscode.window.onDidChangeTextEditorSelection(() => this.scheduleFocus()),
       this.auth.onDidChange(() => {
         this.postAuthState();
         void this.sendBadges();
@@ -182,6 +205,7 @@ export class EduPeerSidebarProvider implements vscode.WebviewViewProvider {
         d.dispose();
       }
       subs.length = 0;
+      if (this.focusDebounce) clearTimeout(this.focusDebounce);
       if (this.view === webviewView) {
         this.view = undefined;
       }
@@ -199,6 +223,9 @@ export class EduPeerSidebarProvider implements vscode.WebviewViewProvider {
 
   public async askExternal(question: string, code: string, mode: TutorMode = "hint") {
     this.reveal();
+    // Re-resolving here is what makes a context-menu command on a selection
+    // focus on that selection: `resolveFocus` ranks an explicit selection first.
+    await this.sendFocus();
     this.post({ type: "externalAsk", question, code });
     // External asks (context menu, reflection toast) bypass the gate.
     this.seenFingerprints.add(codeFingerprint(code ?? ""));
@@ -308,7 +335,7 @@ export class EduPeerSidebarProvider implements vscode.WebviewViewProvider {
       frameTraceTable(pending.snippet, pending.variables, filled),
       pending.code,
       "trace-check",
-      { echoUser: false }
+      { echoUser: false, aboutOpenFile: false }
     );
   }
 
@@ -323,7 +350,7 @@ export class EduPeerSidebarProvider implements vscode.WebviewViewProvider {
       // concept from days ago, and the editor is usually on something else.
       exercise,
       "review-exercise",
-      { echoUser: false }
+      { echoUser: false, aboutOpenFile: false }
     );
   }
 
@@ -336,7 +363,7 @@ export class EduPeerSidebarProvider implements vscode.WebviewViewProvider {
       framePrediction(pending.snippet, prediction),
       pending.code,
       "predict-output",
-      { echoUser: false }
+      { echoUser: false, aboutOpenFile: false }
     );
   }
 
@@ -400,7 +427,18 @@ export class EduPeerSidebarProvider implements vscode.WebviewViewProvider {
     question: string,
     code: string,
     mode: TutorMode = "hint",
-    opts: { echoUser?: boolean; confidence?: number } = {}
+    opts: {
+      echoUser?: boolean;
+      confidence?: number;
+      /**
+       * When false, `code` is sent verbatim and no focus is attached: the
+       * caller has already chosen the subject. A review exercise is about a
+       * concept from days ago; a prediction or a trace is about the snapshot
+       * its exercise started from. The editor's current focus is not what any
+       * of them is asking about.
+       */
+      aboutOpenFile?: boolean;
+    } = {}
   ) {
     if (!question || !question.trim()) {
       return;
@@ -423,10 +461,16 @@ export class EduPeerSidebarProvider implements vscode.WebviewViewProvider {
       this.post({ type: "userMessage", text: question });
     }
 
+    const aboutOpenFile = opts.aboutOpenFile !== false;
+    // The whole file, so a hint about one function still sees its imports and
+    // its callers. `focus` narrows attention; it does not replace context.
+    const requestCode = aboutOpenFile ? this.lastFullCode || code || "" : code || "";
+    const attemptCode = aboutOpenFile ? this.lastFocusCode || code || "" : code || "";
+
     // Only progressive hints are gated on having actually tried something.
     const attempt =
       mode === "hint"
-        ? this.attempts.evaluate(this.lastDocumentKey, code ?? "")
+        ? this.attempts.evaluate(this.lastDocumentKey, attemptCode)
         : undefined;
     if (attempt?.signal === "unchanged") {
       this.post({
@@ -444,7 +488,7 @@ export class EduPeerSidebarProvider implements vscode.WebviewViewProvider {
     this.post({ type: "loading", value: true });
     try {
       const request = {
-        code: code ?? "",
+        code: requestCode,
         question,
         hint_level: 1,
         // The ladder is keyed on the problem, not the bytes, so editing the
@@ -456,6 +500,15 @@ export class EduPeerSidebarProvider implements vscode.WebviewViewProvider {
         escalate: attempt ? attempt.escalate : true,
         edit_summary: attempt?.editSummary ?? "",
         confidence: Math.max(0, Math.min(3, Math.trunc(opts.confidence ?? 0))),
+        ...(aboutOpenFile && this.lastFocus
+          ? {
+              focus: {
+                start_line: this.lastFocus.startLine + 1,
+                end_line: this.lastFocus.endLine + 1,
+                label: this.lastFocus.label,
+              },
+            }
+          : {}),
       };
       let res;
       try {
@@ -477,7 +530,7 @@ export class EduPeerSidebarProvider implements vscode.WebviewViewProvider {
         return;
       }
       if (mode === "hint") {
-        this.attempts.record(this.lastDocumentKey, code ?? "");
+        this.attempts.record(this.lastDocumentKey, attemptCode);
         this.levelEmitter.fire(res.hint_level);
       }
       this.history.push({ role: "student", content: question });
@@ -536,21 +589,72 @@ export class EduPeerSidebarProvider implements vscode.WebviewViewProvider {
     this.post({ type: "error", message });
   }
 
-  private async sendActiveCode() {
+  /**
+   * Resolve the focus block and push it to the panel, if it moved.
+   *
+   * `force` skips the suppression check for the callers that are answering a
+   * request rather than reacting to an edit.
+   */
+  private async sendFocus(opts: { force?: boolean } = {}) {
     const editor = vscode.window.activeTextEditor;
-    const code = editor?.document?.getText() ?? "";
-    const fileName = editor?.document?.fileName ?? "";
-    const languageId = editor?.document?.languageId ?? "";
+    if (!editor) {
+      this.lastFocus = undefined;
+      this.lastFocusCode = "";
+      this.lastFullCode = "";
+      this.lastFocusSignature = "";
+      this.lastDocumentKey = "";
+      this.post({ type: "focus", focusCode: "", fileName: "", language: "", totalLines: 0 });
+      return;
+    }
+
+    const doc = editor.document;
+    const languageId = doc.languageId;
     if (isSupportedLanguage(languageId)) {
       this.lastLanguageId = languageId;
     }
-    this.lastDocumentKey = editor?.document?.uri?.toString() ?? "";
+
+    const focus = await resolveFocus(doc, editor.selection);
+    const focusCode = focusText(doc, focus);
+    const signature = `${doc.uri.toString()}:${focus.startLine}:${focus.endLine}:${focusCode}`;
+    // The old code posted the whole document on every keystroke; most of those
+    // posts said nothing new.
+    if (!opts.force && signature === this.lastFocusSignature) return;
+    this.lastFocusSignature = signature;
+
+    this.lastFocus = focus;
+    this.lastFocusCode = focusCode;
+    this.lastFullCode = doc.getText();
+    // The ladder is per problem, and a different function is a different
+    // problem — being stuck on `main` should not start at hint 3 because you
+    // were stuck on `parse` a minute ago.
+    //
+    // A positional label changes every time the cursor moves, which would make
+    // every ask a brand-new problem and pin the ladder at hint 1. Only a named
+    // block is stable enough to key on.
+    this.lastDocumentKey =
+      focus.kind === "symbol" || focus.kind === "heuristic"
+        ? `${doc.uri.toString()}#${focus.label}`
+        : doc.uri.toString();
+
     this.post({
-      type: "activeCode",
-      code,
-      fileName,
+      type: "focus",
+      focusCode,
+      breadcrumb: focus.breadcrumb,
+      startLine: focus.startLine + 1,
+      endLine: focus.endLine + 1,
+      cursorLine: editor.selection.active.line + 1,
+      fileName: doc.fileName,
       language: isSupportedLanguage(languageId) ? languageLabel(languageId) : "",
+      totalLines: doc.lineCount,
     });
+  }
+
+  /** Coalesce the keystroke storm into one resolve. */
+  private scheduleFocus() {
+    if (this.focusDebounce) clearTimeout(this.focusDebounce);
+    this.focusDebounce = setTimeout(() => {
+      void this.sendFocus();
+    }, 150);
   }
 
   private async sendBadges() {
@@ -622,6 +726,11 @@ export class EduPeerSidebarProvider implements vscode.WebviewViewProvider {
       <button id="reviewBtn" class="btn btn--accent btn--sm" hidden title="A spaced-review exercise is ready">Review</button>
       <button id="collapseCode" class="btn btn--ghost btn--sm" title="Show or hide the code preview" aria-expanded="true">Hide</button>
       <button id="refreshCode" class="btn btn--ghost btn--sm" title="Re-read the active file">Refresh</button>
+    </div>
+    <div class="filecard__scope" id="scopeRow">
+      <span id="focusRange" class="filecard__range"></span>
+      <span class="topbar__spacer"></span>
+      <button id="scopeToggle" class="btn btn--ghost btn--sm" aria-pressed="false" hidden>Whole file</button>
     </div>
     <pre id="codeSnippet" class="filecard__code" tabindex="0"></pre>
   </section>

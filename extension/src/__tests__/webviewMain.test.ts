@@ -123,9 +123,39 @@ describe("restoring a transcript", () => {
     expect($(".turn--student")!.textContent).toContain("why does it crash?");
   });
 
-  it("falls back to the empty state when there is nothing stored", () => {
+  // Mirrors "leaves an existing conversation alone" in the signed-out-state
+  // tests below, for the other call site refreshPlaceholder() guards.
+  // signedIn is left at its default (false) deliberately: this is the case
+  // where, without the `turns.length` guard, the sign-in card would have the
+  // most reason to leak in.
+  it("shows neither placeholder once a non-empty transcript is restored", () => {
+    post({
+      type: "restoreChat",
+      messages: [{ role: "student", text: "why does it crash?" }],
+    });
+    expect($(".empty")).toBeNull();
+    expect($(".signin")).toBeNull();
+  });
+
+  it("falls back to the empty state when there is nothing stored and the student is signed in", () => {
+    post({ type: "authState", signedIn: true, label: "sam@school.edu" });
     post({ type: "restoreChat", messages: [] });
     expect($(".empty")).not.toBeNull();
+  });
+
+  // signedIn defaults to false until an "authState" message says otherwise.
+  // The provider now posts authState before restoreChat on every "ready"
+  // (sidebarProvider.ts), so this ordering should not occur in the running
+  // extension — but main.js has no way to enforce that from its side, and
+  // restoreChat is reachable without ever having received an authState (this
+  // test included). This is the "restoreChat" half of Task 12's
+  // refreshPlaceholder(): with signedIn at its default, a student with no
+  // history gets the sign-in invitation here too, not just from an explicit
+  // "authState".
+  it("falls back to the sign-in invitation when there is nothing stored and the student is signed out", () => {
+    post({ type: "restoreChat", messages: [] });
+    expect($(".signin")).not.toBeNull();
+    expect($(".empty")).toBeNull();
   });
 
   it("drops the empty state once a turn arrives", () => {
@@ -136,29 +166,74 @@ describe("restoring a transcript", () => {
 
 describe("the code preview", () => {
   it("renders one numbered row per line", () => {
-    post({ type: "activeCode", code: "a = 1\nb = 2\n", fileName: "/tmp/demo.py", language: "Python" });
+    post({
+      type: "focus",
+      focusCode: "a = 1\nb = 2\n",
+      startLine: 1,
+      endLine: 3,
+      cursorLine: 1,
+      fileName: "/tmp/demo.py",
+      language: "Python",
+      totalLines: 3,
+    });
     expect($$("#codeSnippet .ln")).toHaveLength(3);
   });
 
   it("shows the file name without its directory", () => {
-    post({ type: "activeCode", code: "x", fileName: "/home/me/demo.py", language: "Python" });
+    post({
+      type: "focus",
+      focusCode: "x",
+      startLine: 1,
+      endLine: 1,
+      cursorLine: 1,
+      fileName: "/home/me/demo.py",
+      language: "Python",
+      totalLines: 1,
+    });
     expect(el("fileName").textContent).toBe("demo.py");
   });
 
   it("shows the language chip", () => {
-    post({ type: "activeCode", code: "x", fileName: "a.py", language: "Python" });
+    post({
+      type: "focus",
+      focusCode: "x",
+      startLine: 1,
+      endLine: 1,
+      cursorLine: 1,
+      fileName: "a.py",
+      language: "Python",
+      totalLines: 1,
+    });
     expect((el("langChip") as HTMLElement).hidden).toBe(false);
     expect(el("langChip").textContent).toBe("Python");
   });
 
   it("hides the chip for an unsupported language", () => {
-    post({ type: "activeCode", code: "x", fileName: "a.md", language: "" });
+    post({
+      type: "focus",
+      focusCode: "x",
+      startLine: 1,
+      endLine: 1,
+      cursorLine: 1,
+      fileName: "a.md",
+      language: "",
+      totalLines: 1,
+    });
     expect((el("langChip") as HTMLElement).hidden).toBe(true);
   });
 
   it("caps the preview and says how much it dropped", () => {
     const code = Array.from({ length: 260 }, (_, i) => `line ${i}`).join("\n");
-    post({ type: "activeCode", code, fileName: "big.py", language: "Python" });
+    post({
+      type: "focus",
+      focusCode: code,
+      startLine: 1,
+      endLine: 260,
+      cursorLine: 1,
+      fileName: "big.py",
+      language: "Python",
+      totalLines: 260,
+    });
     expect($$("#codeSnippet .ln")).toHaveLength(201);
     expect(el("codeSnippet").textContent).toContain("60 more lines");
   });
@@ -285,7 +360,16 @@ describe("streaming", () => {
 
 describe("the composer", () => {
   it("sends the typed question", () => {
-    post({ type: "activeCode", code: "x = 1", fileName: "a.py", language: "Python" });
+    post({
+      type: "focus",
+      focusCode: "x = 1",
+      startLine: 1,
+      endLine: 1,
+      cursorLine: 1,
+      fileName: "a.py",
+      language: "Python",
+      totalLines: 1,
+    });
     (el("input") as HTMLTextAreaElement).value = "why does it crash?";
     (el("send") as HTMLButtonElement).click();
     const msg = lastSent("askHint");
@@ -687,5 +771,266 @@ describe("stream sequencing", () => {
     post({ type: "hint", seq: 1, hint: "done", hint_level: 1, concept_tags: [], mode: "hint" });
     expect(lastTurn().getAttribute("aria-hidden")).toBeNull();
     expect(lastTurn().textContent).toContain("done");
+  });
+});
+
+// This file's harness predates `loadWebview()`: `beforeEach` already calls
+// `load()` and resets the module-level `sent`/`saved`, and `post`/`el`/`$$`
+// read and drive the same jsdom `document` those tests share. The new tests
+// below use that existing harness rather than a `loadWebview()` wrapper that
+// does not exist in this file.
+describe("webview — focus panel", () => {
+  it("renders the focus block with its real line numbers", () => {
+    post({
+      type: "focus",
+      focusCode: "def f(n):\n    return 1 / n",
+      breadcrumb: "demo.py › f",
+      startLine: 12,
+      endLine: 13,
+      cursorLine: 13,
+      fileName: "/tmp/demo.py",
+      language: "Python",
+      totalLines: 40,
+    });
+
+    const gutters = $$(".ln__no").map((n) => n.textContent);
+    expect(gutters).toEqual(["12", "13"]);
+    expect(el("fileName").textContent).toBe("demo.py › f");
+    expect(el("focusRange").textContent).toBe("lines 12–13");
+  });
+
+  it("marks the cursor's line", () => {
+    post({
+      type: "focus",
+      focusCode: "a\nb\nc",
+      breadcrumb: "demo.py › f",
+      startLine: 1,
+      endLine: 3,
+      cursorLine: 2,
+      fileName: "/tmp/demo.py",
+      language: "Python",
+      totalLines: 3,
+    });
+
+    const marked = $$(".ln.is-cursor");
+    expect(marked).toHaveLength(1);
+    expect(marked[0].textContent).toContain("b");
+  });
+
+  it("asks the extension for the full file when the toggle is used", () => {
+    post({
+      type: "focus",
+      focusCode: "a",
+      breadcrumb: "demo.py › f",
+      startLine: 1,
+      endLine: 1,
+      cursorLine: 1,
+      fileName: "/tmp/demo.py",
+      language: "Python",
+      totalLines: 80,
+    });
+
+    (el("scopeToggle") as HTMLButtonElement).click();
+
+    expect(sent).toContainEqual({ type: "requestFullFile" });
+  });
+
+  it("still asks about the focus block while the full file is shown", () => {
+    post({
+      type: "focus",
+      focusCode: "def f(n):",
+      breadcrumb: "demo.py › f",
+      startLine: 5,
+      endLine: 5,
+      cursorLine: 5,
+      fileName: "/tmp/demo.py",
+      language: "Python",
+      totalLines: 80,
+    });
+    expect($$(".ln__no").map((n) => n.textContent)).toEqual(["5"]);
+
+    // Without this click `showingWholeFile` stays false, the `fullFile` guard
+    // breaks out before `renderLines`, and the assertion below passes because
+    // the preview was never repainted rather than because the feature works.
+    (el("scopeToggle") as HTMLButtonElement).click();
+    post({ type: "fullFile", code: "import math\ndef f(n):" });
+
+    // The preview really did widen: the whole file, numbered from line 1.
+    expect($$(".ln__no").map((n) => n.textContent)).toEqual(["1", "2"]);
+
+    // And the composer is still asking about the block, not about what is on
+    // screen — the headline invariant of the whole-file toggle.
+    (el("input") as HTMLTextAreaElement).value = "why?";
+    (el("send") as HTMLButtonElement).click();
+
+    const ask = lastSent("askHint");
+    expect(ask.code).toBe("def f(n):");
+  });
+
+  it("tolerates a focus message with no editor open", () => {
+    // The wire shape sidebarProvider posts when there is no active editor:
+    // startLine/endLine/cursorLine/breadcrumb are absent, not zero.
+    post({ type: "focus", focusCode: "", fileName: "", language: "", totalLines: 0 });
+
+    expect(el("codeSnippet").textContent).toContain("No file open");
+    expect(el("fileName").textContent).toBe("No active file");
+    expect(el("focusRange").textContent).toBe("");
+    expect((el("scopeToggle") as HTMLElement).hidden).toBe(true);
+  });
+
+  it("collapses the whole-file toggle when a new focus block arrives", () => {
+    post({
+      type: "focus",
+      focusCode: "a",
+      startLine: 1,
+      endLine: 1,
+      cursorLine: 1,
+      fileName: "/tmp/demo.py",
+      language: "Python",
+      totalLines: 80,
+    });
+    (el("scopeToggle") as HTMLButtonElement).click();
+    expect(el("scopeToggle").textContent).toBe("Just this block");
+    expect(el("scopeToggle").getAttribute("aria-pressed")).toBe("true");
+
+    post({
+      type: "focus",
+      focusCode: "def g():",
+      startLine: 5,
+      endLine: 5,
+      cursorLine: 5,
+      fileName: "/tmp/demo.py",
+      language: "Python",
+      totalLines: 80,
+    });
+
+    expect(el("scopeToggle").textContent).toBe("Whole file");
+    expect(el("scopeToggle").getAttribute("aria-pressed")).toBe("false");
+    expect($$(".ln__no").map((n) => n.textContent)).toEqual(["5"]);
+  });
+
+  it("keeps the composer on the focus block after an external ask carries different code", () => {
+    // `askExternal` (sidebarProvider.ts) calls sendFocus() before posting
+    // "externalAsk", so the panel already shows the focus block by the time
+    // this arrives. The callers of askExternal pass whole documents
+    // (discussLines, the debug/test-watcher asks) or a raw selection
+    // (ask-about-selection) as `code` — not the resolved focus block — so
+    // that field must not become what the composer sends next.
+    post({
+      type: "focus",
+      focusCode: "def f(n):",
+      breadcrumb: "demo.py › f",
+      startLine: 5,
+      endLine: 5,
+      cursorLine: 5,
+      fileName: "/tmp/demo.py",
+      language: "Python",
+      totalLines: 80,
+    });
+
+    post({
+      type: "externalAsk",
+      question: "explain this error",
+      code: "import math\n\ndef f(n):\n    return 1 / n\n",
+    });
+
+    // The preview is unchanged: still exactly what the "focus" message drew.
+    expect($$(".ln__no").map((n) => n.textContent)).toEqual(["5"]);
+
+    (el("input") as HTMLTextAreaElement).value = "why?";
+    (el("send") as HTMLButtonElement).click();
+
+    expect(lastSent("askHint").code).toBe("def f(n):");
+  });
+
+  it("ignores a late fullFile reply after the toggle has switched back", () => {
+    post({
+      type: "focus",
+      focusCode: "a",
+      startLine: 7,
+      endLine: 7,
+      cursorLine: 7,
+      fileName: "/tmp/demo.py",
+      language: "Python",
+      totalLines: 80,
+    });
+    const toggle = el("scopeToggle") as HTMLButtonElement;
+    toggle.click(); // requests the full file
+    toggle.click(); // switches back to the focus block before the reply arrives
+
+    post({ type: "fullFile", code: "import os\nimport sys\na" });
+
+    expect($$(".ln__no").map((n) => n.textContent)).toEqual(["7"]);
+  });
+
+  it("hides the scope row along with the code preview when collapsed", () => {
+    post({
+      type: "focus",
+      focusCode: "a",
+      startLine: 1,
+      endLine: 1,
+      cursorLine: 1,
+      fileName: "/tmp/demo.py",
+      language: "Python",
+      totalLines: 80,
+    });
+    const button = el("collapseCode") as HTMLButtonElement;
+    button.click();
+    expect((el("scopeRow") as HTMLElement).hidden).toBe(true);
+    button.click();
+    expect((el("scopeRow") as HTMLElement).hidden).toBe(false);
+  });
+});
+
+// As with "webview — focus panel" above, this harness predates `loadWebview()`:
+// there is no `dom` handle or per-test webview instance to destructure. Every
+// test in this file shares the same jsdom `document`, reset by `load()` in
+// `beforeEach`, and drives it through the module-level `post`/`$`/`$$`/`sent`
+// helpers already defined at the top of this file.
+describe("webview — signed-out state", () => {
+  it("invites a signed-out student to sign in", () => {
+    post({ type: "authState", signedIn: false, label: "Not signed in" });
+
+    const card = $(".signin");
+    expect(card).not.toBeNull();
+    expect(card!.textContent).toContain("Ready to get unstuck?");
+  });
+
+  it("sends the sign-in message from the card", () => {
+    post({ type: "authState", signedIn: false, label: "Not signed in" });
+
+    ($(".signin button") as HTMLButtonElement).click();
+
+    expect(sent).toContainEqual({ type: "signIn" });
+  });
+
+  it("replaces the card with the normal empty state once signed in", () => {
+    post({ type: "authState", signedIn: false, label: "Not signed in" });
+    post({ type: "authState", signedIn: true, label: "sam@school.edu" });
+
+    expect($(".signin")).toBeNull();
+    expect($(".empty")).not.toBeNull();
+  });
+
+  it("leaves an existing conversation alone", () => {
+    post({ type: "userMessage", text: "why is this failing?" });
+    post({ type: "authState", signedIn: false, label: "Not signed in" });
+
+    expect($(".signin")).toBeNull();
+    expect(document.body.textContent).toContain("why is this failing?");
+  });
+
+  // Unlike "leaves an existing conversation alone" above, the card is already
+  // on screen *before* the turn arrives here. The composer isn't gated on
+  // signedIn — a signed-out student can ignore the invitation and ask
+  // anyway — so the turn must replace the card, not land next to it.
+  it("removes the sign-in card once the student asks something anyway", () => {
+    post({ type: "authState", signedIn: false, label: "Not signed in" });
+    expect($(".signin")).not.toBeNull();
+
+    post({ type: "userMessage", text: "why is this failing?" });
+
+    expect($(".signin")).toBeNull();
+    expect(document.body.textContent).toContain("why is this failing?");
   });
 });

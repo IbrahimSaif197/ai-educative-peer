@@ -34,6 +34,13 @@ class MockRange {
       this.end = new Position(endLine as number, endChar as number);
     }
   }
+
+  /** Matches vscode.Range: true when start and end are the same position. */
+  get isEmpty(): boolean {
+    return (
+      this.start.line === this.end.line && this.start.character === this.end.character
+    );
+  }
 }
 
 class MockSelection extends MockRange {
@@ -75,6 +82,15 @@ class CodeAction {
 }
 
 const DiagnosticSeverity = { Error: 0, Warning: 1, Information: 2, Hint: 3 };
+
+/** Mirrors vscode.SymbolKind's numbering; focusScope filters on these. */
+const SymbolKind = {
+  File: 0, Module: 1, Namespace: 2, Package: 3, Class: 4, Method: 5,
+  Property: 6, Field: 7, Constructor: 8, Enum: 9, Interface: 10,
+  Function: 11, Variable: 12, Constant: 13, String: 14, Number: 15,
+  Boolean: 16, Array: 17, Object: 18, Key: 19, Null: 20, EnumMember: 21,
+  Struct: 22, Event: 23, Operator: 24, TypeParameter: 25,
+};
 
 class Diagnostic {
   source?: string;
@@ -306,6 +322,7 @@ function __makeDocument(text: string, languageId = "python", path = "/tmp/demo.p
     languageId,
     fileName: path,
     lineCount: lines.length,
+    version: 1,
     uri: { toString: () => `file://${path}`, fsPath: path, path },
     getText: (range?: MockRange) => {
       if (!range) return text;
@@ -369,6 +386,7 @@ module.exports = {
   CodeActionKind,
   Diagnostic,
   DiagnosticSeverity,
+  SymbolKind,
   DecorationRangeBehavior,
   OverviewRulerLane,
   StatusBarAlignment,

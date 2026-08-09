@@ -234,7 +234,9 @@ class TestHintStream:
         import main as app_main
         app_main._profile_cache.clear()
 
-        def fake_stream(code, question, level, language, history, mode, pacing, edit_summary=""):
+        def fake_stream(
+            code, question, level, language, history, mode, pacing, edit_summary="", focus=None,
+        ):
             yield {"type": "delta", "text": "Look at "}
             yield {"type": "delta", "text": "your loop."}
             yield {"type": "done", "hint": "Look at your loop. What do you think should happen next?",
@@ -659,6 +661,32 @@ class TestEditSummaryAndConfidence:
 
 
 # ---------------------------------------------------------------------------
+# focus
+# ---------------------------------------------------------------------------
+
+class TestFocusField:
+    def test_hint_ignores_a_nonsense_focus_instead_of_refusing_the_request(self, client):
+        """An optional enrichment field must never cost the student their hint."""
+        # start > end: the extension would have to be buggy to send this, and the
+        # student should still get tutored when it is.
+        payload = {**VALID_HINT_PAYLOAD, "focus": {"start_line": 9, "end_line": 2}}
+        res = client.post("/hint", json=payload)
+        assert res.status_code == 200
+        assert res.json()["hint"]
+
+    def test_hint_ignores_a_null_label_instead_of_refusing_the_request(self, client):
+        """A JS/TS client can easily spell "no label" as JSON null (`?? null`);
+        that must not 422 the whole request either."""
+        payload = {
+            **VALID_HINT_PAYLOAD,
+            "focus": {"start_line": 1, "end_line": 2, "label": None},
+        }
+        res = client.post("/hint", json=payload)
+        assert res.status_code == 200
+        assert res.json()["hint"]
+
+
+# ---------------------------------------------------------------------------
 # /trace
 # ---------------------------------------------------------------------------
 
@@ -780,7 +808,7 @@ class TestResponseCaching:
         import main as app_main
         calls = []
 
-        def fake_line_hint(code, line, language):
+        def fake_line_hint(code, line, language, focus=None):
             calls.append(line)
             return "Check the index", "indexing"
 

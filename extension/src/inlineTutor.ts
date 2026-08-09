@@ -1,5 +1,6 @@
 import * as vscode from "vscode";
-import { ApiClient, LineFlag, RateLimitError } from "./apiClient";
+import { ApiClient, AuthError, LineFlag, RateLimitError } from "./apiClient";
+import { AnnotationStore, ContentChange, LensState } from "./annotationStore";
 import {
   SUPPORTED_LANGUAGES,
   SUPPORTED_LANGUAGE_IDS,
@@ -7,20 +8,56 @@ import {
   supportedLanguageList,
 } from "./languages";
 import { localLineHint } from "./localTutor";
+import { resolveFocus } from "./focusScope";
 
 import { codeFingerprint as fingerprintCode } from "./pedagogy";
 
-type LineHintCache = Map<string, { hint: string; concept: string }>;
+/**
+ * The failure classes a student can actually do something about, each with the
+ * one sentence that says what to do. Everything that used to be swallowed at
+ * the catch site now lands here instead.
+ */
+export function errorStateFor(err: unknown, apiAvailable: boolean): LensState {
+  if (err instanceof RateLimitError) {
+    const minutes = Math.max(1, Math.round(err.retryAfterSeconds / 60));
+    return {
+      kind: "error",
+      reason: "rate-limit",
+      message: `Hint budget used up, back in ${minutes}m`,
+    };
+  }
+  if (err instanceof AuthError) {
+    return { kind: "error", reason: "auth", message: "Sign in to get hints" };
+  }
+  if (!apiAvailable) {
+    return { kind: "error", reason: "offline", message: "Backend unreachable" };
+  }
+  const message = (err as { message?: string })?.message ?? String(err);
+  if (/\(5\d\d\)/.test(message)) {
+    return { kind: "error", reason: "llm", message: "The tutor couldn't answer that" };
+  }
+  return { kind: "error", reason: "unknown", message: "That didn't work" };
+}
 
-interface FileState {
-  flags: LineFlag[];
-  /** Content of the last scan that actually succeeded. */
-  scanFingerprint: string;
-  /** Content of a scan currently in flight; de-dupes without claiming success. */
-  inFlightFingerprint: string;
-  lineHints: LineHintCache;
-  /** Rule-based nudges shown while the backend is unavailable. */
-  localHints: LineHintCache;
+/** One home for the "working on it" wording, shared by the lens and the hover. */
+export const THINKING_LABEL = "⏳ EduPeer is thinking…";
+
+/** What the lens says. `fallback` is the idle title for this line. */
+export function lensTitle(state: LensState, fallback: string): string {
+  switch (state.kind) {
+    case "loading":
+      return THINKING_LABEL;
+    case "ready":
+      return `💡 ${state.hint}`;
+    case "empty":
+      return "✓ Nothing to flag on this line";
+    case "error":
+      return state.reason === "auth"
+        ? `⚠️ ${state.message} — click to sign in`
+        : `⚠️ ${state.message} — click to retry`;
+    default:
+      return fallback;
+  }
 }
 
 function fingerprintLine(uri: string, lineNum: number, text: string): string {
@@ -31,12 +68,27 @@ function flagEmoji(flag: LineFlag): string {
   return flag.kind === "style" ? "🎨" : "🤔";
 }
 
+/** VS Code's content changes reduced to the line arithmetic the store needs. */
+function toContentChanges(
+  changes: readonly vscode.TextDocumentContentChangeEvent[]
+): ContentChange[] {
+  return changes.map((c) => ({
+    startLine: c.range.start.line,
+    endLine: c.range.end.line,
+    insertedLineCount: c.text.split("\n").length,
+  }));
+}
+
 export class InlineTutor {
   private readonly ghostDecoration: vscode.TextEditorDecorationType;
   private readonly flagGutterInfo: vscode.TextEditorDecorationType;
   private readonly flagGutterWarn: vscode.TextEditorDecorationType;
   private readonly diagnostics: vscode.DiagnosticCollection;
-  private readonly fileStates = new Map<string, FileState>();
+  private readonly stores = new Map<string, AnnotationStore>();
+  /** Content of the last scan that actually succeeded, per document. */
+  private readonly scanFingerprints = new Map<string, string>();
+  /** Content of a scan in flight; de-dupes without claiming success. */
+  private readonly inFlightFingerprints = new Map<string, string>();
   private readonly disposables: vscode.Disposable[] = [];
   private readonly emitter = new vscode.EventEmitter<void>();
 
@@ -52,7 +104,8 @@ export class InlineTutor {
 
   constructor(
     private readonly context: vscode.ExtensionContext,
-    private readonly api: ApiClient
+    private readonly api: ApiClient,
+    private readonly onThinkingChange: (thinking: boolean) => void = () => {}
   ) {
     this.ghostDecoration = vscode.window.createTextEditorDecorationType({
       after: {
@@ -122,6 +175,9 @@ export class InlineTutor {
     this.disposables.push(
       vscode.workspace.onDidChangeTextDocument((e) => {
         if (!this.isSupported(e.document)) return;
+        this.storeFor(e.document.uri).applyChanges(toContentChanges(e.contentChanges));
+        this.applyFlagsToDoc(e.document);
+        this.emitter.fire();
         this.scheduleScan(e.document);
         const editor = vscode.window.activeTextEditor;
         if (editor && editor.document === e.document) {
@@ -168,6 +224,39 @@ export class InlineTutor {
     );
 
     this.disposables.push(
+      vscode.commands.registerCommand(
+        "edupeer.dismissLine",
+        (uri: vscode.Uri, line: number) => {
+          const doc = vscode.window.activeTextEditor?.document;
+          if (!doc || doc.uri.toString() !== uri.toString()) return;
+          this.storeFor(doc.uri).clearLine(line);
+          this.emitter.fire();
+          this.renderActiveLineDecoration(vscode.window.activeTextEditor!);
+        }
+      )
+    );
+
+    this.disposables.push(
+      vscode.commands.registerCommand(
+        "edupeer.deepenLine",
+        async (uri: vscode.Uri, line: number) => {
+          const doc = vscode.window.activeTextEditor?.document;
+          if (!doc || doc.uri.toString() !== uri.toString()) return;
+          const { hint, flag } = this.storeFor(doc.uri).annotationsAt(line);
+          const question = hint?.hint || flag?.question || "Why is this line a problem?";
+          // The real 1→3 ladder lives in the conversation; inline stays a nudge.
+          await vscode.commands.executeCommand(
+            "edupeer.discussLines",
+            doc.uri,
+            line,
+            line,
+            question
+          );
+        }
+      )
+    );
+
+    this.disposables.push(
       vscode.commands.registerCommand("edupeer.scanFile", async () => {
         const editor = vscode.window.activeTextEditor;
         if (!editor || !this.isSupported(editor.document)) {
@@ -186,7 +275,9 @@ export class InlineTutor {
     this.disposables.push(
       vscode.workspace.onDidCloseTextDocument((doc) => {
         const key = doc.uri.toString();
-        this.fileStates.delete(key);
+        this.stores.delete(key);
+        this.scanFingerprints.delete(key);
+        this.inFlightFingerprints.delete(key);
         this.lastFlagCounts.delete(key);
         this.diagnostics.delete(doc.uri);
       })
@@ -211,20 +302,20 @@ export class InlineTutor {
       .get<boolean>("inlineHints", true);
   }
 
-  private stateFor(uri: vscode.Uri): FileState {
+  private storeFor(uri: vscode.Uri): AnnotationStore {
     const key = uri.toString();
-    let s = this.fileStates.get(key);
-    if (!s) {
-      s = {
-        flags: [],
-        scanFingerprint: "",
-        inFlightFingerprint: "",
-        lineHints: new Map(),
-        localHints: new Map(),
-      };
-      this.fileStates.set(key, s);
+    let store = this.stores.get(key);
+    if (!store) {
+      store = new AnnotationStore();
+      this.stores.set(key, store);
     }
-    return s;
+    return store;
+  }
+
+  private get lensMode(): "all" | "flagged" {
+    return vscode.workspace
+      .getConfiguration("edupeer")
+      .get<"all" | "flagged">("lensMode", "all");
   }
 
   private scheduleLineHint(editor: vscode.TextEditor) {
@@ -258,34 +349,93 @@ export class InlineTutor {
     if (line < 0 || line >= doc.lineCount) return;
     const lineText = doc.lineAt(line).text;
     if (!lineText.trim()) return;
-    const state = this.stateFor(doc.uri);
-    const key = fingerprintLine(doc.uri.toString(), line, lineText);
-    if (!opts.force && state.lineHints.has(key)) {
+    const store = this.storeFor(doc.uri);
+    const cached = store.annotationsAt(line).hint;
+    // A local rule is a placeholder for a real hint, so it must not block one
+    // once the backend is answering again. That is what `local` is for.
+    if (!opts.force && cached && !cached.local) {
       this.renderActiveLineIfMatches(doc, line);
       return;
     }
+
+    // Lens state belongs to a hint the student asked for. The debounce path
+    // fires on cursor movement, and painting a lens there would put
+    // unsolicited text on every line the cursor rests on — including under
+    // lensMode "flagged", whose entire purpose is to stop that.
+    const showState = (state: LensState) => {
+      if (opts.force) this.setLensState(doc, line, state);
+    };
+
+    // `line` is captured here and the round trip below takes seconds, during
+    // which `applyChanges` runs on every keystroke — sliding entries down,
+    // dropping the ones the student edited — and `clearLine` runs on a
+    // dismissal. Both bump the store's revision, so a moved revision means
+    // this answer is about a line that no longer exists at this index.
+    // Dropping it is the same trade the spec already makes for flags: a
+    // missing hint comes back on the next ask, a hint on the wrong line
+    // teaches the wrong thing.
+    const revision = store.revision;
+    const isCurrent = () => store.revision === revision;
+
+    // Fired before anything is awaited, so the student sees the click land.
+    showState({ kind: "loading" });
+    if (opts.force) this.onThinkingChange(true);
     try {
-      const res = await this.api.getLineHint(
-        doc.getText(),
-        line + 1,
-        doc.languageId
-      );
+      // The same block the sidebar is showing, so both surfaces agree on
+      // what "the code you're working on" means. That includes a live
+      // selection: `resolveFocus` ranks one above everything, so a synthetic
+      // empty selection here would make the lens resolve the enclosing symbol
+      // while the panel resolves the selection — the two disagreeing in
+      // exactly the case this comment claims they agree.
+      const active = vscode.window.activeTextEditor;
+      const at = new vscode.Position(line, 0);
+      const selection =
+        active?.document === doc &&
+        !active.selection.isEmpty &&
+        active.selection.active.line === line
+          ? active.selection
+          : new vscode.Selection(at, at);
+      const focus = await resolveFocus(doc, selection);
+      const res = await this.api.getLineHint(doc.getText(), line + 1, doc.languageId, {
+        start_line: focus.startLine + 1,
+        end_line: focus.endLine + 1,
+        label: focus.label,
+      });
+      if (!isCurrent()) return;
       if (res.hint) {
-        state.lineHints.set(key, { hint: res.hint, concept: res.concept });
-        this.renderActiveLineIfMatches(doc, line);
+        store.setHint(line, { hint: res.hint, concept: res.concept });
+        showState({ kind: "ready", hint: res.hint });
+      } else {
+        // The lens is about to say there is nothing to flag here, so the hint
+        // beside it has to go too — spec A4: the two surfaces never disagree.
+        store.clearHint(line);
+        showState({ kind: "empty" });
       }
     } catch (err) {
-      // Backend unreachable or throttling: fall back to a local rule so the
-      // gutter still teaches something. Not cached — the real hint should win
-      // as soon as the backend is answering again.
-      if (err instanceof RateLimitError || !this.api.isAvailable) {
-        const local = localLineHint(lineText, doc.languageId);
-        if (local.hint) {
-          state.localHints.set(key, local);
-          this.renderActiveLineIfMatches(doc, line);
-        }
+      if (err instanceof RateLimitError) {
+        // Back-off is global, not per line, so it is recorded even when the
+        // answer itself is stale.
+        this.quietUntil = Date.now() + err.retryAfterSeconds * 1000;
       }
+      if (!isCurrent()) return;
+      // The local rule is still worth showing; the lens says where it came from.
+      const local = localLineHint(lineText, doc.languageId);
+      if (!this.api.isAvailable && local.hint) {
+        store.setHint(line, { ...local, local: true });
+        showState({ kind: "ready", hint: local.hint });
+      } else {
+        showState(errorStateFor(err, this.api.isAvailable));
+      }
+    } finally {
+      if (opts.force) this.onThinkingChange(false);
+      if (isCurrent()) this.renderActiveLineIfMatches(doc, line);
     }
+  }
+
+  /** Store the state and repaint the lenses immediately. */
+  private setLensState(doc: vscode.TextDocument, line: number, state: LensState) {
+    this.storeFor(doc.uri).setLensState(line, state);
+    this.emitter.fire();
   }
 
   private renderActiveLineIfMatches(doc: vscode.TextDocument, line: number) {
@@ -316,22 +466,20 @@ export class InlineTutor {
       return;
     }
     const lineText = doc.lineAt(line).text;
-    const state = this.stateFor(doc.uri);
-    const key = fingerprintLine(doc.uri.toString(), line, lineText);
-    const cached = state.lineHints.get(key);
-    const local = state.localHints.get(key);
 
-    const flag = state.flags.find((f) => line + 1 >= f.line && line + 1 <= f.end_line);
-
-    // Real hint beats a scan flag beats a local rule — the local rule is the
-    // crudest of the three and only earns the line when nothing else has it.
-    const contentText = cached?.hint
-      ? `💡 ${cached.hint}`
-      : flag
-      ? `${flagEmoji(flag)} ${flag.question}`
-      : local?.hint
-      ? `💡 ${local.hint}`
-      : "";
+    // A real hint beats a scan flag beats a local rule — the local rule is
+    // the crudest of the three and only earns the line when nothing else has
+    // it. `hint.local` is what lets a real hint and a local rule share one
+    // map in the store without losing this ordering.
+    const { flag, hint } = this.storeFor(doc.uri).annotationsAt(line);
+    const contentText =
+      hint && !hint.local
+        ? `💡 ${hint.hint}`
+        : flag
+        ? `${flagEmoji(flag)} ${flag.question}`
+        : hint?.hint
+        ? `💡 ${hint.hint}`
+        : "";
 
     if (!contentText) {
       editor.setDecorations(this.ghostDecoration, []);
@@ -366,33 +514,34 @@ export class InlineTutor {
   private async runScan(doc: vscode.TextDocument, opts: { force?: boolean } = {}) {
     const code = doc.getText();
     const fp = fingerprintCode(code);
-    const state = this.stateFor(doc.uri);
-    if (!opts.force && state.scanFingerprint === fp) return;
-    // `inFlightFingerprint` de-dupes concurrent requests without claiming the
-    // scan succeeded. Committing `scanFingerprint` up front meant a failed
+    const key = doc.uri.toString();
+    if (!opts.force && this.scanFingerprints.get(key) === fp) return;
+    // `inFlightFingerprints` de-dupes concurrent requests without claiming the
+    // scan succeeded. Committing `scanFingerprints` up front meant a failed
     // scan permanently suppressed auto-scan for that content — including
     // after a 429, defeating the back-off window right next to it.
-    if (!opts.force && state.inFlightFingerprint === fp) return;
-    state.inFlightFingerprint = fp;
+    if (!opts.force && this.inFlightFingerprints.get(key) === fp) return;
+    this.inFlightFingerprints.set(key, fp);
     try {
       const res = await this.api.scanCode(code, doc.languageId);
-      state.scanFingerprint = fp;
-      state.flags = res.flags || [];
-      this.applyFlagsToDoc(doc, state.flags);
+      this.scanFingerprints.set(key, fp);
+      const store = this.storeFor(doc.uri);
+      store.setFlags(res.flags || []);
+      this.applyFlagsToDoc(doc);
       this.emitter.fire();
       const editor = vscode.window.activeTextEditor;
       if (editor && editor.document === doc) {
         this.renderActiveLineDecoration(editor);
       }
-      this.maybeOfferReflection(doc, code, state.flags.length);
+      this.maybeOfferReflection(doc, code, store.flags().length);
     } catch (err) {
       if (err instanceof RateLimitError) {
         this.quietUntil = Date.now() + err.retryAfterSeconds * 1000;
       }
       /* scan failures are otherwise non-fatal */
     } finally {
-      if (state.inFlightFingerprint === fp) {
-        state.inFlightFingerprint = "";
+      if (this.inFlightFingerprints.get(key) === fp) {
+        this.inFlightFingerprints.delete(key);
       }
     }
   }
@@ -419,28 +568,41 @@ export class InlineTutor {
       });
   }
 
-  private applyFlagsToDoc(doc: vscode.TextDocument, flags: LineFlag[]) {
-    const diags: vscode.Diagnostic[] = [];
-    const infoRanges: vscode.Range[] = [];
-    const warnRanges: vscode.Range[] = [];
-    for (const f of flags) {
-      const startLine = Math.max(0, Math.min(doc.lineCount - 1, f.line - 1));
-      const endLine = Math.max(startLine, Math.min(doc.lineCount - 1, f.end_line - 1));
-      const start = new vscode.Position(startLine, 0);
-      const end = new vscode.Position(endLine, doc.lineAt(endLine).text.length);
-      const range = new vscode.Range(start, end);
-      const severity =
+  /** The editor range a 1-based wire flag covers, clamped to the document. */
+  private flagRange(doc: vscode.TextDocument, flag: LineFlag): vscode.Range {
+    const startLine = Math.max(0, Math.min(doc.lineCount - 1, flag.line - 1));
+    const endLine = Math.max(startLine, Math.min(doc.lineCount - 1, flag.end_line - 1));
+    return new vscode.Range(
+      new vscode.Position(startLine, 0),
+      new vscode.Position(endLine, doc.lineAt(endLine).text.length)
+    );
+  }
+
+  /** Diagnostics for whatever the store currently believes. */
+  private diagnosticsFor(doc: vscode.TextDocument): vscode.Diagnostic[] {
+    return this.storeFor(doc.uri).flags().map((f) => {
+      const diag = new vscode.Diagnostic(
+        this.flagRange(doc, f),
+        `${flagEmoji(f)} ${f.question}`,
         f.severity === "warning"
           ? vscode.DiagnosticSeverity.Warning
-          : vscode.DiagnosticSeverity.Information;
-      const diag = new vscode.Diagnostic(range, `${flagEmoji(f)} ${f.question}`, severity);
+          : vscode.DiagnosticSeverity.Information
+      );
       diag.source = "EduPeer";
       diag.code = f.concept;
-      diags.push(diag);
-      if (f.severity === "warning") warnRanges.push(range);
-      else infoRanges.push(range);
+      return diag;
+    });
+  }
+
+  private applyFlagsToDoc(doc: vscode.TextDocument) {
+    const store = this.storeFor(doc.uri);
+    this.diagnostics.set(doc.uri, this.diagnosticsFor(doc));
+    const infoRanges: vscode.Range[] = [];
+    const warnRanges: vscode.Range[] = [];
+    for (const f of store.flags()) {
+      const range = this.flagRange(doc, f);
+      (f.severity === "warning" ? warnRanges : infoRanges).push(range);
     }
-    this.diagnostics.set(doc.uri, diags);
     for (const editor of vscode.window.visibleTextEditors) {
       if (editor.document === doc) {
         editor.setDecorations(this.flagGutterInfo, infoRanges);
@@ -451,42 +613,62 @@ export class InlineTutor {
 
   private provideCodeLenses(doc: vscode.TextDocument): vscode.CodeLens[] {
     if (!this.isSupported(doc)) return [];
+    const store = this.storeFor(doc.uri);
     const lenses: vscode.CodeLens[] = [];
-    const state = this.stateFor(doc.uri);
     const seenLines = new Set<number>();
 
-    for (const flag of state.flags) {
-      const line = Math.max(0, Math.min(doc.lineCount - 1, flag.line - 1));
-      if (seenLines.has(line)) continue;
+    const add = (line: number, idleTitle: string) => {
+      if (seenLines.has(line)) return;
       seenLines.add(line);
+      const state = store.lensStateAt(line);
       const range = new vscode.Range(line, 0, line, 0);
       lenses.push(
         new vscode.CodeLens(range, {
-          title: `${flagEmoji(flag)} ${flag.question}`,
-          command: "edupeer.nudgeLine",
+          title: lensTitle(state, idleTitle),
+          command:
+            state.kind === "error" && state.reason === "auth"
+              ? "edupeer.signIn"
+              : "edupeer.nudgeLine",
+          arguments: state.kind === "error" && state.reason === "auth" ? [] : [doc.uri, line],
+        })
+      );
+      if (state.kind !== "ready") return;
+      // Sibling lenses so each action is separately clickable.
+      lenses.push(
+        new vscode.CodeLens(range, {
+          title: "Go deeper",
+          command: "edupeer.deepenLine",
+          arguments: [doc.uri, line],
+        }),
+        new vscode.CodeLens(range, {
+          title: "✕",
+          command: "edupeer.dismissLine",
           arguments: [doc.uri, line],
         })
       );
+    };
+
+    // A flag is an observation about this code and outranks a standing offer.
+    for (const flag of store.flags()) {
+      add(this.flagRange(doc, flag).start.line, `${flagEmoji(flag)} ${flag.question}`);
     }
+
+    // A line the student nudged must show its state even when it is neither a
+    // definition nor a flagged line — Ctrl+Alt+H works anywhere, and without
+    // this the loading and error states are invisible on exactly those lines.
+    // Ahead of the lensMode check on purpose: the mode governs unsolicited
+    // offers, not the answer to a question the student actually asked.
+    for (const line of store.activeLensLines()) {
+      if (line >= 0 && line < doc.lineCount) add(line, "💡 Ask EduPeer");
+    }
+
+    if (this.lensMode === "flagged") return lenses;
 
     const lensRegex = SUPPORTED_LANGUAGES[doc.languageId]?.lensRegex;
     if (!lensRegex) return lenses;
     for (let i = 0; i < doc.lineCount; i++) {
-      if (seenLines.has(i)) continue;
-      const text = doc.lineAt(i).text;
-      if (lensRegex.test(text)) {
-        seenLines.add(i);
-        const range = new vscode.Range(i, 0, i, 0);
-        lenses.push(
-          new vscode.CodeLens(range, {
-            title: "💡 Get a hint",
-            command: "edupeer.nudgeLine",
-            arguments: [doc.uri, i],
-          })
-        );
-      }
+      if (lensRegex.test(doc.lineAt(i).text)) add(i, "💡 Ask EduPeer");
     }
-
     return lenses;
   }
 
@@ -521,8 +703,7 @@ export class InlineTutor {
     explain.command = { command: "edupeer.explainSelection", title: "Explain this line" };
     actions.push(explain);
 
-    const state = this.stateFor(doc.uri);
-    const flag = state.flags.find((f) => line + 1 >= f.line && line + 1 <= f.end_line);
+    const { flag } = this.storeFor(doc.uri).annotationsAt(line);
     if (flag) {
       const discuss = new vscode.CodeAction(
         `EduPeer: talk through "${flag.question}"`,
@@ -547,14 +728,25 @@ export class InlineTutor {
     pos: vscode.Position
   ): vscode.Hover | undefined {
     if (!this.isSupported(doc)) return undefined;
-    const state = this.stateFor(doc.uri);
-    const lineNum = pos.line + 1;
-    const flag = state.flags.find((f) => lineNum >= f.line && lineNum <= f.end_line);
-    const lineText = doc.lineAt(pos.line).text;
-    const key = fingerprintLine(doc.uri.toString(), pos.line, lineText);
-    const cached = state.lineHints.get(key) ?? state.localHints.get(key);
+    const store = this.storeFor(doc.uri);
+    const { flag, hint } = store.annotationsAt(pos.line);
+    // Spec A4: the hover reflects `loading` and `error` too, so hovering a
+    // line mid-request no longer says nothing while the lens says ⏳.
+    //
+    // The condition only, never the lens's trailing "— click to retry" /
+    // "— click to sign in": the hover has nothing to click. Its `isTrusted`
+    // allow-list is deliberately just `nudgeLine` and `explainSelection`, and
+    // widening it to carry a sign-in link would widen it for the
+    // model-authored text appended below as well. The action stays on the lens.
+    const state = store.lensStateAt(pos.line);
+    const status =
+      state.kind === "loading"
+        ? THINKING_LABEL
+        : state.kind === "error"
+        ? `⚠️ ${state.message}`
+        : "";
 
-    if (!flag && !cached) return undefined;
+    if (!flag && !hint && !status) return undefined;
     const md = new vscode.MarkdownString(undefined, true);
     // Model-authored text (scan questions, line hints) is appended below, and
     // a blanket-trusted MarkdownString renders ANY command: link in it as
@@ -562,7 +754,8 @@ export class InlineTutor {
     // steers the model into emitting a command link cannot run anything else.
     md.isTrusted = { enabledCommands: ["edupeer.nudgeLine", "edupeer.explainSelection"] };
     md.appendMarkdown("**EduPeer**\n\n");
-    if (cached?.hint) md.appendMarkdown(`💡 ${cached.hint}\n\n`);
+    if (status) md.appendMarkdown(`${status}\n\n`);
+    if (hint?.hint) md.appendMarkdown(`💡 ${hint.hint}\n\n`);
     if (flag) md.appendMarkdown(`${flagEmoji(flag)} ${flag.question}\n\n_concept: ${flag.concept}_\n\n`);
     md.appendMarkdown(
       `[Ask for a deeper nudge](command:edupeer.nudgeLine?${encodeURIComponent(

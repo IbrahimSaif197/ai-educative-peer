@@ -7,6 +7,17 @@ export interface TokenProvider {
   getIdToken(force?: boolean): Promise<string>;
 }
 
+/**
+ * The block inside `code` the student is working on, 1-based and inclusive.
+ * `code` still carries the whole file — this narrows attention, it does not
+ * replace context.
+ */
+export interface FocusRange {
+  start_line: number;
+  end_line: number;
+  label?: string;
+}
+
 export interface HintRequest {
   code: string;
   question: string;
@@ -26,6 +37,8 @@ export interface HintRequest {
   edit_summary?: string;
   /** Self-rated confidence 1-3 before the hint; 0 or omitted means not given. */
   confidence?: number;
+  /** The block the student is working on; omitted when it could not be resolved. */
+  focus?: FocusRange;
 }
 
 /**
@@ -483,8 +496,18 @@ export class ApiClient {
     return (await res.json()) as ScanResponse;
   }
 
-  async getLineHint(code: string, line: number, language = "python"): Promise<LineHintResponse> {
-    const res = await this.authedJson("/line-hint", { code, line, language });
+  async getLineHint(
+    code: string,
+    line: number,
+    language = "python",
+    focus?: FocusRange
+  ): Promise<LineHintResponse> {
+    const res = await this.authedJson("/line-hint", {
+      code,
+      line,
+      language,
+      ...(focus ? { focus } : {}),
+    });
     if (res.status === 429) {
       throw rateLimitErrorFrom(res);
     }

@@ -90,13 +90,44 @@
     chatEl.appendChild(wrap);
   }
 
-  function dropEmptyState() {
-    const empty = chatEl.querySelector(".empty");
-    if (empty) empty.remove();
+  /** Remove whichever placeholder is showing — the empty state or the sign-in card. */
+  function dropPlaceholder() {
+    const placeholder = chatEl.querySelector(".empty, .signin");
+    if (placeholder) placeholder.remove();
+  }
+
+  /**
+   * The signed-out invitation. Same words as the sign-in page, because this is
+   * the click that opens it — but the panel's own theme colours, since the
+   * webview follows the workbench and the hosted page does not.
+   */
+  function showSignInState() {
+    clearChat();
+    const wrap = document.createElement("div");
+    wrap.className = "signin";
+    const title = document.createElement("strong");
+    title.textContent = "Ready to get unstuck?";
+    const sub = document.createElement("p");
+    sub.textContent = "Sign in to keep your hints, badges and progress.";
+    const button = document.createElement("button");
+    button.className = "btn btn--primary";
+    button.textContent = "Sign in";
+    button.addEventListener("click", () => vscode.postMessage({ type: "signIn" }));
+    wrap.appendChild(title);
+    wrap.appendChild(sub);
+    wrap.appendChild(button);
+    chatEl.appendChild(wrap);
+  }
+
+  /** Only swap the placeholder — never a conversation the student is reading. */
+  function refreshPlaceholder() {
+    if (turns.length) return;
+    if (signedIn) showEmptyState();
+    else showSignInState();
   }
 
   function buildTurn(turn) {
-    dropEmptyState();
+    dropPlaceholder();
     const wrap = document.createElement("div");
     wrap.className = `turn turn--${turn.role === "student" ? "student" : "tutor"}`;
     if (turn.role === "error") wrap.classList.add("is-error");
@@ -233,7 +264,17 @@
 
   // ----------------------------------------------------------- code preview
 
-  function renderCode(code) {
+  const focusRangeEl = el("focusRange");
+  const scopeToggleEl = el("scopeToggle");
+  const scopeRowEl = el("scopeRow");
+
+  /** The block every ask is about, whatever the preview happens to show. */
+  let focusCode = "";
+  let focusStartLine = 1;
+  let cursorLine = 0;
+  let showingWholeFile = false;
+
+  function renderLines(code, firstLine, markLine) {
     while (codeEl.firstChild) codeEl.removeChild(codeEl.firstChild);
     if (!code) {
       const line = document.createElement("span");
@@ -244,12 +285,20 @@
     }
     const lines = code.split("\n");
     const shown = lines.slice(0, MAX_PREVIEW_LINES);
-    for (const text of shown) {
-      const line = document.createElement("span");
-      line.className = "ln";
-      line.textContent = text || " ";
-      codeEl.appendChild(line);
-    }
+    shown.forEach((text, offset) => {
+      const number = firstLine + offset;
+      const row = document.createElement("span");
+      row.className = number === markLine ? "ln is-cursor" : "ln";
+      const gutter = document.createElement("span");
+      gutter.className = "ln__no";
+      gutter.textContent = String(number);
+      const body = document.createElement("span");
+      body.className = "ln__text";
+      body.textContent = text || " ";
+      row.appendChild(gutter);
+      row.appendChild(body);
+      codeEl.appendChild(row);
+    });
     if (lines.length > shown.length) {
       const more = document.createElement("span");
       more.className = "ln ln--empty";
@@ -258,9 +307,23 @@
     }
   }
 
+  scopeToggleEl.addEventListener("click", () => {
+    showingWholeFile = !showingWholeFile;
+    scopeToggleEl.setAttribute("aria-pressed", String(showingWholeFile));
+    scopeToggleEl.textContent = showingWholeFile ? "Just this block" : "Whole file";
+    if (showingWholeFile) {
+      vscode.postMessage({ type: "requestFullFile" });
+    } else {
+      renderLines(focusCode, focusStartLine, cursorLine);
+    }
+  });
+
   collapseBtn.addEventListener("click", () => {
     const collapsed = !codeEl.hidden;
     codeEl.hidden = collapsed;
+    // The scope row (range + "Whole file" toggle) describes the preview, so
+    // it has nothing to act on once the preview itself is hidden.
+    scopeRowEl.hidden = collapsed;
     collapseBtn.textContent = collapsed ? "Show" : "Hide";
     collapseBtn.setAttribute("aria-expanded", String(!collapsed));
   });
@@ -268,7 +331,7 @@
   // ---------------------------------------------------------- trace exercise
 
   function renderTraceExercise(msg) {
-    dropEmptyState();
+    dropPlaceholder();
     addTurn({
       role: "tutor",
       text: msg.prompt || "Work through this line by line and fill in each value.",
@@ -492,18 +555,42 @@
           buildTurn(turn);
           turns.push(turn);
         }
-        if (!turns.length) showEmptyState();
+        refreshPlaceholder();
         break;
       }
 
-      case "activeCode":
-        currentCode = msg.code || "";
-        renderCode(currentCode);
-        fileNameEl.textContent = msg.fileName
-          ? msg.fileName.split(/[\\/]/).pop()
-          : "No active file";
+      case "focus":
+        focusCode = msg.focusCode || "";
+        focusStartLine = msg.startLine || 1;
+        cursorLine = msg.cursorLine || 0;
+        currentCode = focusCode;
+        showingWholeFile = false;
+        scopeToggleEl.setAttribute("aria-pressed", "false");
+        scopeToggleEl.textContent = "Whole file";
+        scopeToggleEl.hidden = !msg.totalLines;
+        renderLines(focusCode, focusStartLine, cursorLine);
+        fileNameEl.textContent =
+          msg.breadcrumb || (msg.fileName ? msg.fileName.split(/[\\/]/).pop() : "No active file");
+        fileNameEl.title = msg.fileName || "";
+        focusRangeEl.textContent =
+          msg.startLine && msg.endLine
+            ? msg.startLine === msg.endLine
+              ? `line ${msg.startLine}`
+              : `lines ${msg.startLine}–${msg.endLine}`
+            : "";
         langChipEl.textContent = msg.language || "";
         langChipEl.hidden = !msg.language;
+        break;
+
+      case "fullFile":
+        // A reply can arrive after the student has already toggled back to
+        // the focus block (e.g. a quick on/off); without this guard it would
+        // silently repaint the preview with the whole file even though the
+        // button already reads "Whole file".
+        if (!showingWholeFile) break;
+        // The preview widens; `currentCode` deliberately does not, so an ask
+        // stays about the block even while the whole file is on screen.
+        renderLines(msg.code || "", 1, cursorLine);
         break;
 
       case "userMessage":
@@ -512,7 +599,7 @@
 
       case "streamStart": {
         removeStreamingTurn();
-        dropEmptyState();
+        dropPlaceholder();
         const wrap = document.createElement("div");
         wrap.className = "turn turn--tutor";
         // The chat is an aria-live log, so an unmuted streaming bubble makes a
@@ -619,6 +706,7 @@
         accountLabelEl.textContent = msg.label;
         accountLabelEl.title = msg.label;
         authBtn.textContent = signedIn ? "Sign out" : "Sign in";
+        refreshPlaceholder();
         break;
 
       case "reviewDue":
@@ -643,8 +731,12 @@
         break;
 
       case "externalAsk":
-        currentCode = msg.code || currentCode;
-        renderCode(currentCode);
+        // Nothing to do. `askExternal` calls sendFocus() before posting this,
+        // so the "focus" message has already set both the preview and
+        // `currentCode` to the block on screen. Setting `currentCode` from
+        // `msg.code` here would point the next typed follow-up at code the
+        // student never saw — the callers pass whole documents and raw
+        // selections, not the resolved focus block.
         break;
     }
   });
@@ -658,7 +750,7 @@
   } else {
     showEmptyState();
   }
-  renderCode("");
+  renderLines("", 1, 0);
 
   vscode.postMessage({ type: "ready" });
 })();

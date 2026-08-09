@@ -3,50 +3,327 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="referrer" content="no-referrer" />
   <title>Sign in to EduPeer</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link
+    href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,600..800&family=Geist:wght@400;500;600&family=Geist+Mono:wght@400;500&display=swap"
+    rel="stylesheet"
+  />
   <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-app-compat.js"></script>
   <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-auth-compat.js"></script>
   <style>
-    body { font-family: system-ui, sans-serif; background: #1e1e2e; color: #eee;
-           display: flex; justify-content: center; align-items: center; min-height: 100vh; margin: 0; }
-    .card { background: #2a2a3c; border-radius: 12px; padding: 32px; width: 320px; }
-    h1 { font-size: 20px; margin: 0 0 20px; }
-    button { width: 100%; padding: 10px; margin: 6px 0; border: none; border-radius: 6px;
-             font-size: 14px; cursor: pointer; background: #444; color: #eee; }
-    button.primary { background: #4f7cff; color: white; }
-    input { width: 100%; padding: 9px; margin: 5px 0; border-radius: 6px; border: 1px solid #555;
-            background: #1e1e2e; color: #eee; box-sizing: border-box; }
-    .divider { text-align: center; color: #888; margin: 14px 0 8px; font-size: 12px; }
-    .error { color: #ff7b7b; font-size: 13px; min-height: 18px; margin-top: 8px; }
+    :root {
+      --ground: #12101B;
+      --card: #1B1826;
+      --line: #6D6198;
+      --line-lit: #7E73A5;
+      --muted: #9C93B8;
+      --ink: #F2EFFA;
+      --coral: #FF6B4A;
+      --coral-lit: #FF8366;
+      --mint: #7CE0D3;
+      --sans: "Geist", ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+      --mono: "Geist Mono", ui-monospace, "SF Mono", Menlo, monospace;
+      --display: "Bricolage Grotesque", var(--sans);
+    }
+
+    * { box-sizing: border-box; }
+
+    body {
+      margin: 0;
+      min-height: 100vh;
+      display: flex;
+      padding: 24px;
+      background: var(--ground);
+      color: var(--ink);
+      font-family: var(--sans);
+      font-size: 15px;
+      line-height: 1.5;
+      /* Not `overflow: hidden`: the ? mark is position:fixed and contributes
+         no scrollable overflow, so hiding it only cost the page its ability to
+         scroll — which clipped the Sign in button out of reach at ~512 CSS px
+         of viewport height. */
+      overflow-x: clip;
+    }
+
+    /* EduPeer answers with questions. The mark says so and nothing else does. */
+    .mark {
+      position: fixed;
+      left: 50%;
+      top: 50%;
+      transform: translate(-58%, -46%);
+      font-family: var(--display);
+      font-weight: 800;
+      font-size: min(115vh, 88vw);
+      line-height: 0.78;
+      color: #1A1726;
+      user-select: none;
+      pointer-events: none;
+      z-index: 0;
+    }
+
+    .card {
+      position: relative;
+      z-index: 1;
+      width: 100%;
+      max-width: 400px;
+      padding: 32px;
+      background: var(--card);
+      border: 1px solid var(--line);
+      border-radius: 16px;
+      box-shadow: 0 28px 64px -24px rgba(0, 0, 0, 0.8);
+      animation: rise 0.42s cubic-bezier(0.22, 1, 0.36, 1) both;
+      /* Auto margins centre the card without ever pushing its top out of
+         reach, which is what centred flex or grid alignment does once the card
+         is taller than the viewport. */
+      margin: auto;
+    }
+
+    /* Where the card's edge crosses the question mark. */
+    .card::before {
+      content: "";
+      position: absolute;
+      top: -1px;
+      left: 32px;
+      width: 64px;
+      height: 2px;
+      border-radius: 2px;
+      background: var(--mint);
+    }
+
+    @keyframes rise {
+      from { opacity: 0; transform: translateY(12px); }
+    }
+
+    .eyebrow {
+      margin: 0 0 12px;
+      font-family: var(--mono);
+      font-size: 11px;
+      font-weight: 500;
+      letter-spacing: 0.18em;
+      color: var(--muted);
+    }
+
+    h1 {
+      margin: 0 0 8px;
+      font-family: var(--display);
+      font-size: 30px;
+      font-weight: 700;
+      line-height: 1.1;
+      letter-spacing: -0.02em;
+    }
+
+    .sub { margin: 0 0 24px; color: var(--muted); font-size: 14px; }
+
+    .providers { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+
+    @media (max-width: 379px) {
+      .providers { grid-template-columns: 1fr; }
+    }
+
+    button {
+      font: inherit;
+      cursor: pointer;
+      border-radius: 10px;
+      transition: background 0.15s, border-color 0.15s, transform 0.15s;
+    }
+
+    button:disabled { opacity: 0.55; cursor: default; }
+
+    .oauth {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+      height: 44px;
+      padding: 0 12px;
+      font-size: 14px;
+      font-weight: 500;
+      color: var(--ink);
+      background: transparent;
+      border: 1px solid var(--line);
+    }
+
+    .oauth:hover:not(:disabled) {
+      background: #211D2E;
+      border-color: var(--line-lit);
+      transform: translateY(-1px);
+    }
+
+    .oauth svg { flex: none; }
+
+    .divider {
+      display: grid;
+      grid-template-columns: 1fr auto 1fr;
+      align-items: center;
+      gap: 12px;
+      margin: 20px 0;
+      font-family: var(--mono);
+      font-size: 11px;
+      letter-spacing: 0.06em;
+      color: var(--muted);
+    }
+
+    .divider::before,
+    .divider::after { content: ""; height: 1px; background: var(--line); }
+
+    label { display: block; margin-bottom: 6px; font-size: 13px; color: var(--muted); }
+
+    .field { margin-bottom: 14px; }
+
+    input {
+      width: 100%;
+      height: 44px;
+      padding: 0 12px;
+      font: inherit;
+      font-size: 14px;
+      color: var(--ink);
+      background: #151221;
+      border: 1px solid var(--line);
+      border-radius: 10px;
+    }
+
+    input::placeholder { color: #867BA8; }
+
+    .password { position: relative; }
+
+    .password input { padding-right: 62px; }
+
+    .reveal {
+      position: absolute;
+      right: 6px;
+      top: 6px;
+      height: 32px;
+      padding: 0 10px;
+      font-family: var(--mono);
+      font-size: 11px;
+      color: var(--muted);
+      background: transparent;
+      border: 1px solid transparent;
+    }
+
+    .reveal:hover { color: var(--ink); border-color: var(--line); }
+
+    .primary {
+      width: 100%;
+      height: 44px;
+      margin-top: 4px;
+      font-size: 14px;
+      font-weight: 600;
+      color: #1A0A05;
+      background: var(--coral);
+      border: none;
+    }
+
+    .primary:hover:not(:disabled) { background: var(--coral-lit); }
+
+    .toggle {
+      display: block;
+      width: 100%;
+      margin-top: 14px;
+      padding: 6px;
+      font-size: 13px;
+      color: var(--muted);
+      background: none;
+      border: none;
+      text-align: center;
+    }
+
+    .toggle:hover { color: var(--ink); }
+
+    .error {
+      min-height: 20px;
+      margin-top: 12px;
+      font-size: 13px;
+      color: #FFB4A2;
+    }
+
+    .error:not(:empty) {
+      padding-left: 10px;
+      border-left: 2px solid var(--coral);
+    }
+
+    :focus-visible {
+      outline: 2px solid var(--coral);
+      outline-offset: 2px;
+      border-color: transparent;
+    }
+
     .hidden { display: none; }
-    .toggle { color: #9ab4ff; font-size: 13px; cursor: pointer; text-align: center; margin-top: 10px; }
+
+    .done-note { margin: 0 0 20px; color: var(--muted); font-size: 14px; }
+
+    @media (prefers-reduced-motion: reduce) {
+      *, *::before, *::after {
+        animation: none !important;
+        transition: none !important;
+      }
+    }
   </style>
 </head>
 <body>
-  <div class="card" id="signin">
-    <h1>Sign in to EduPeer</h1>
-    <button class="primary" id="google">Continue with Google</button>
-    <button id="github">Continue with GitHub</button>
-    <div class="divider">or use email</div>
-    <input type="email" id="email" placeholder="Email" />
-    <input type="password" id="password" placeholder="Password" />
-    <button id="emailSubmit">Sign in</button>
-    <div class="toggle" id="modeToggle">New here? Create an account</div>
-    <div class="error" id="error"></div>
-  </div>
-  <div class="card hidden" id="done">
-    <h1>You're signed in ✔</h1>
-    <p>Return to VS Code — EduPeer is ready.</p>
-    <div id="handoff" class="hidden">
-      <div class="divider">Nothing happened in VS Code?</div>
-      <button id="fallback">Send it again</button>
-      <div class="error" id="fallbackError"></div>
+  <div class="mark" aria-hidden="true">?</div>
+
+  <main class="card" id="signin">
+    <p class="eyebrow">EDUPEER</p>
+    <h1>Ready to get unstuck?</h1>
+    <p class="sub">Sign in to keep your hints, badges and progress.</p>
+
+    <div class="providers">
+      <button class="oauth" id="google" type="button">
+        <svg viewBox="0 0 48 48" width="18" height="18" aria-hidden="true" focusable="false">
+          <path fill="#EA4335" d="M24 9.5c3.54 0 6.71 1.22 9.21 3.6l6.85-6.85C35.9 2.38 30.47 0 24 0 14.62 0 6.51 5.38 2.56 13.22l7.98 6.19C12.43 13.72 17.74 9.5 24 9.5z"/>
+          <path fill="#4285F4" d="M46.98 24.55c0-1.57-.15-3.09-.38-4.55H24v9.02h12.94c-.58 2.96-2.26 5.48-4.78 7.18l7.73 6c4.51-4.18 7.09-10.36 7.09-17.65z"/>
+          <path fill="#FBBC05" d="M10.53 28.59c-.48-1.45-.76-2.99-.76-4.59s.28-3.14.76-4.59l-7.98-6.19C.92 16.46 0 20.12 0 24c0 3.88.92 7.54 2.55 10.78l7.98-6.19z"/>
+          <path fill="#34A853" d="M24 48c6.48 0 11.93-2.13 15.89-5.81l-7.73-6c-2.15 1.45-4.92 2.3-8.16 2.3-6.26 0-11.57-4.22-13.47-9.91l-7.98 6.19C6.51 42.62 14.62 48 24 48z"/>
+        </svg>
+        Google
+      </button>
+      <button class="oauth" id="github" type="button">
+        <svg viewBox="0 0 16 16" width="18" height="18" fill="currentColor" aria-hidden="true" focusable="false">
+          <path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27s1.36.09 2 .27c1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8z"/>
+        </svg>
+        GitHub
+      </button>
     </div>
-  </div>
-  <div class="card hidden" id="invalid">
-    <h1>Sign-in link is invalid</h1>
-    <p class="error">This link is missing a valid port or security token and can't continue. Close this tab and retry sign-in from VS Code.</p>
-  </div>
+
+    <div class="divider"><span>or continue with email</span></div>
+
+    <form id="emailForm" novalidate>
+      <div class="field">
+        <label for="email">Email</label>
+        <input type="email" id="email" autocomplete="email" placeholder="you@school.edu" />
+      </div>
+      <div class="field password">
+        <label for="password">Password</label>
+        <input type="password" id="password" autocomplete="current-password" placeholder="••••••••" />
+        <button type="button" class="reveal" id="reveal" aria-label="Show password">show</button>
+      </div>
+      <button type="submit" class="primary" id="emailSubmit">Sign in</button>
+    </form>
+
+    <button type="button" class="toggle" id="modeToggle">New here? Create an account</button>
+    <div class="error" id="error" role="status" aria-live="polite"></div>
+  </main>
+
+  <main class="card" id="done" hidden>
+    <p class="eyebrow">EDUPEER</p>
+    <h1>You're in.</h1>
+    <p class="done-note">Head back to VS Code — EduPeer is ready.</p>
+    <div id="handoff" class="hidden">
+      <div class="divider"><span>didn't jump back to VS Code?</span></div>
+      <button class="primary" id="fallback" type="button">Send it again</button>
+      <div class="error" id="fallbackError" role="status" aria-live="polite"></div>
+    </div>
+  </main>
+
+  <main class="card" id="invalid" hidden>
+    <p class="eyebrow">EDUPEER</p>
+    <h1>This link is missing its port or security token</h1>
+    <p class="done-note">Close this tab and start sign-in again from VS Code.</p>
+  </main>
 
   <script>
     const config = {
@@ -81,6 +358,34 @@
         ? `${rawScheme}://${rawExt}/callback`
         : null;
 
+    // Firebase's codes are for us, not for a student. Each one says what
+    // happened and what to do about it; none of them apologise.
+    const ERROR_MESSAGES = {
+      "auth/invalid-email": "That doesn't look like an email address.",
+      "auth/user-not-found": "No account for that email yet — create one below.",
+      "auth/wrong-password": "That password doesn't match this email.",
+      "auth/invalid-credential": "That password doesn't match this email.",
+      "auth/email-already-in-use": "That email already has an account — sign in instead.",
+      "auth/weak-password": "Passwords need at least 6 characters.",
+      "auth/popup-blocked": "Your browser blocked the sign-in window. Allow pop-ups and try again.",
+      "auth/popup-closed-by-user": "Sign-in window closed before it finished.",
+      "auth/network-request-failed": "Can't reach the sign-in service. Check your connection and try again.",
+    };
+
+    function messageFor(e) {
+      const code = (e && e.code) || "";
+      if (ERROR_MESSAGES[code]) return ERROR_MESSAGES[code];
+      return code
+        ? `Sign-in failed (${code}). Try again, or use a different method.`
+        : "Sign-in failed. Try again, or use a different method.";
+    }
+
+    function setBusy(busy) {
+      for (const id of ["google", "github", "emailSubmit", "modeToggle"]) {
+        document.getElementById(id).disabled = busy;
+      }
+    }
+
     function base64url(text) {
       const bytes = new TextEncoder().encode(text);
       let binary = "";
@@ -102,7 +407,7 @@
 
     function showDone(offerRetry) {
       document.getElementById("signin").classList.add("hidden");
-      document.getElementById("done").classList.remove("hidden");
+      document.getElementById("done").hidden = false;
       if (offerRetry) document.getElementById("handoff").classList.remove("hidden");
     }
 
@@ -128,15 +433,27 @@
         return;
       }
 
-      await postToLoopback(lastPayload);
-      showDone(false);
+      try {
+        await postToLoopback(lastPayload);
+        showDone(false);
+      } catch {
+        // Sign-in succeeded and only the handoff failed — browsers now gate
+        // local-network requests, so this is an expected path, not an error.
+        // Show the done card with the retry button rather than telling the
+        // student their sign-in failed.
+        showDone(true);
+      }
     }
 
     function run(promise) {
       errorEl.textContent = "";
-      promise.then((cred) => deliver(cred.user)).catch((e) => {
-        errorEl.textContent = e.message || String(e);
-      });
+      setBusy(true);
+      promise
+        .then((cred) => deliver(cred.user))
+        .catch((e) => {
+          errorEl.textContent = messageFor(e);
+        })
+        .finally(() => setBusy(false));
     }
 
     function initSignIn() {
@@ -152,12 +469,24 @@
             "reach this device, allow it and press this again.";
         }
       });
+      document.getElementById("reveal").addEventListener("click", () => {
+        const field = document.getElementById("password");
+        const reveal = document.getElementById("reveal");
+        const showing = field.type === "text";
+        field.type = showing ? "password" : "text";
+        reveal.textContent = showing ? "show" : "hide";
+        reveal.setAttribute("aria-label", showing ? "Show password" : "Hide password");
+      });
       document.getElementById("modeToggle").addEventListener("click", () => {
         createMode = !createMode;
         document.getElementById("emailSubmit").textContent = createMode ? "Create account" : "Sign in";
         document.getElementById("modeToggle").textContent = createMode
           ? "Already have an account? Sign in"
           : "New here? Create an account";
+        document.getElementById("password").setAttribute(
+          "autocomplete",
+          createMode ? "new-password" : "current-password"
+        );
       });
       document.getElementById("google").addEventListener("click", () =>
         run(auth.signInWithPopup(new firebase.auth.GoogleAuthProvider()))
@@ -165,11 +494,12 @@
       document.getElementById("github").addEventListener("click", () =>
         run(auth.signInWithPopup(new firebase.auth.GithubAuthProvider()))
       );
-      document.getElementById("emailSubmit").addEventListener("click", () => {
+      document.getElementById("emailForm").addEventListener("submit", (event) => {
+        event.preventDefault();
         const email = document.getElementById("email").value.trim();
         const password = document.getElementById("password").value;
         if (!email || !password) {
-          errorEl.textContent = "Enter an email and password.";
+          errorEl.textContent = "Enter an email and a password.";
           return;
         }
         run(
@@ -188,7 +518,7 @@
     // with a readable message rather than after the user has signed in.
     if (!port || !/^\d{1,5}$/.test(port) || !state || !/^[a-f0-9]{32}$/.test(state)) {
       document.getElementById("signin").classList.add("hidden");
-      document.getElementById("invalid").classList.remove("hidden");
+      document.getElementById("invalid").hidden = false;
     } else {
       initSignIn();
     }

@@ -359,3 +359,38 @@ describe("hint request fields", () => {
     expect(body).not.toHaveProperty("confidence");
   });
 });
+
+describe("getLineHint — focus", () => {
+  it("sends the focus block alongside the file", async () => {
+    const fetchMock = jest.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => ({ hint: "what if n is 0?", concept: "division" }),
+    });
+    (global as any).fetch = fetchMock;
+
+    const api = new ApiClient(BASE, makeTokens());
+    await api.getLineHint("x = 1\ny = 2", 2, "python", {
+      start_line: 1,
+      end_line: 2,
+      label: "main",
+    });
+
+    const body = JSON.parse(fetchMock.mock.calls[0][1].body);
+    expect(body.focus).toEqual({ start_line: 1, end_line: 2, label: "main" });
+  });
+
+  it("omits focus entirely when there isn't one", async () => {
+    const fetchMock = jest.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => ({ hint: "h", concept: "general" }),
+    });
+    (global as any).fetch = fetchMock;
+
+    const api = new ApiClient(BASE, makeTokens());
+    await api.getLineHint("x = 1", 1, "python");
+
+    expect(JSON.parse(fetchMock.mock.calls[0][1].body)).not.toHaveProperty("focus");
+  });
+});

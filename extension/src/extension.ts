@@ -90,7 +90,7 @@ export async function activate(context: vscode.ExtensionContext) {
     })
   );
 
-  const tutor = new InlineTutor(context, api);
+  const tutor = new InlineTutor(context, api, (thinking) => statusBar.update({ thinking }));
   tutor.activate();
   context.subscriptions.push({ dispose: () => tutor.dispose() });
 

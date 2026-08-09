@@ -582,3 +582,91 @@ class TestDesignTraceTable:
     def test_variables_of_wrong_type_yields_nothing(self):
         engine = self._engine('{"variables": "i and j", "steps": 4, "prompt": "T."}')
         assert engine.design_trace_table("code") == ([], 0, "")
+
+
+from hinting_engine import focus_instruction
+
+
+def test_focus_instruction_is_empty_without_a_focus():
+    assert focus_instruction(None) == ""
+
+
+def test_focus_instruction_names_the_span_and_the_label():
+    text = focus_instruction({"start_line": 12, "end_line": 19, "label": "calculate_average"})
+    assert "lines 12-19" in text
+    assert "calculate_average" in text
+    assert "background context" in text
+
+
+def test_focus_instruction_says_line_singular_for_one_line():
+    text = focus_instruction({"start_line": 7, "end_line": 7, "label": ""})
+    assert "line 7" in text
+    assert "lines" not in text
+
+
+def test_focus_instruction_ignores_a_nonsense_span():
+    assert focus_instruction({"start_line": 0, "end_line": 4}) == ""
+    assert focus_instruction({"start_line": 9, "end_line": 2}) == ""
+
+
+class TestGenerateLineHintFocusWindow:
+    """Which lines `generate_line_hint` actually shows the model, focus vs. default."""
+
+    def _engine(self, response_text: str):
+        from hinting_engine import HintingEngine
+        engine = HintingEngine(api_key="test-key")
+        engine.client = _make_mock_client(response_text)
+        return engine
+
+    def _user_message(self, engine):
+        call_kwargs = engine.client.chat.completions.create.call_args
+        return call_kwargs.kwargs["messages"][-1]["content"]
+
+    @staticmethod
+    def _numbered_code(n):
+        # Zero-padded so "code_002" can never be a substring of "code_020" —
+        # assertions below rely on exact line-content membership.
+        return "\n".join(f"code_{i:03d}" for i in range(1, n + 1))
+
+    def test_a_focus_containing_the_cursor_widens_the_window(self):
+        engine = self._engine('{"hint":"h","concept":"general"}')
+        code = self._numbered_code(20)
+        engine.generate_line_hint(
+            code, 10, "python", {"start_line": 1, "end_line": 15, "label": ""}
+        )
+        message = self._user_message(engine)
+        # Line 2 sits outside the default +/-3 window around line 10 (lines
+        # 7-13) but inside the focus (1-15) - only the focus explains it.
+        assert "code_002" in message
+        # Still bounded by the focus, not the whole file.
+        assert "code_018" not in message
+        assert "code_020" not in message
+
+    def test_a_focus_not_containing_the_cursor_line_is_ignored(self):
+        engine = self._engine('{"hint":"h","concept":"general"}')
+        code = self._numbered_code(20)
+        engine.generate_line_hint(
+            code, 10, "python", {"start_line": 1, "end_line": 5, "label": ""}
+        )
+        message = self._user_message(engine)
+        # Cursor (line 10) is outside the focus (1-5), so it must fall back
+        # to the default +/-3 window (lines 7-13).
+        assert "code_007" in message
+        assert "code_013" in message
+        # The ignored focus must not have leaked any of its lines in.
+        assert "code_002" not in message
+
+    def test_a_focus_wider_than_the_cap_is_capped(self):
+        engine = self._engine('{"hint":"h","concept":"general"}')
+        code = self._numbered_code(100)
+        engine.generate_line_hint(
+            code, 50, "python", {"start_line": 1, "end_line": 100, "label": ""}
+        )
+        message = self._user_message(engine)
+        # The focus spans the whole file, but the window caps at +/-30 from
+        # the cursor (line 50): line 20 is the first line shown...
+        assert "code_020" in message
+        assert "code_019" not in message
+        # ...and a line well outside the cap stays hidden even though the
+        # focus includes it.
+        assert "code_010" not in message

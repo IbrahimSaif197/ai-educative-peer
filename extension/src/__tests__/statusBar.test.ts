@@ -71,3 +71,49 @@ describe("renderStatus", () => {
     expect(status.text).not.toContain("sign-in");
   });
 });
+
+describe("renderStatus — thinking", () => {
+  it("shows a spinner while a line hint is in flight", () => {
+    const { text } = renderStatus({
+      hintLevel: 0,
+      streakDays: 0,
+      reviewDue: false,
+      offline: false,
+      thinking: true,
+    });
+    expect(text).toContain("$(sync~spin)");
+  });
+
+  it("says so in the tooltip", () => {
+    const { tooltip } = renderStatus({
+      hintLevel: 0,
+      streakDays: 0,
+      reviewDue: false,
+      offline: false,
+      thinking: true,
+    });
+    expect(tooltip).toContain("Working on a hint for the line you're on");
+  });
+
+  it("keeps the offline warning ahead of the spinner", () => {
+    const { text } = renderStatus({
+      hintLevel: 0,
+      streakDays: 0,
+      reviewDue: false,
+      offline: true,
+      thinking: true,
+    });
+    expect(text).toContain("offline");
+    expect(text).not.toContain("$(sync~spin)");
+  });
+
+  it("shows no spinner when nothing is in flight", () => {
+    const { text } = renderStatus({
+      hintLevel: 2,
+      streakDays: 0,
+      reviewDue: false,
+      offline: false,
+    });
+    expect(text).not.toContain("$(sync~spin)");
+  });
+});

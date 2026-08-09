@@ -1,4 +1,6 @@
-from pydantic import BaseModel, Field
+import re
+
+from pydantic import BaseModel, Field, field_validator
 from typing import List, Literal, Optional
 
 
@@ -24,6 +26,66 @@ MAX_CODE_CHARS = 40000
 MAX_QUESTION_CHARS = 4000
 MAX_GOAL_CHARS = 500
 MAX_PROBLEM_KEY_CHARS = 512
+
+
+MAX_FOCUS_LABEL_CHARS = 120
+
+# What a symbol name is allowed to look like. The label is the one client-
+# supplied string that reaches the prompt OUTSIDE the <student_code-NONCE>
+# wrapper, so it is checked against a shape rather than merely tidied:
+# collapsing whitespace never stopped an instruction, it only put it on one
+# line. Identifier characters plus the punctuation real symbol names carry
+# (`Stats.average`, `impl<T>`, `arr[0]`, `ns::fn`, `$scope`, `read-file`).
+#
+# No space, deliberately. A real label is one token — `selection`,
+# `calculate_average` — and excluding the space is what rejects prose, which
+# is the whole shape of an injected instruction. The only label that loses is
+# the window fallback's `lines 4-19`, and that costs nothing: focus_instruction
+# already prints the same range itself, from start_line/end_line.
+_SAFE_FOCUS_LABEL_RE = re.compile(rf"^[\w.$:<>\[\]-]{{0,{MAX_FOCUS_LABEL_CHARS}}}$")
+
+
+class FocusRange(BaseModel):
+    """The block of code the student is actually working on.
+
+    `code` still carries the whole file, because a hint about a function is
+    usually wrong without its imports and callers. This narrows the model's
+    attention inside that file rather than replacing it.
+
+    Deliberately permissive: `focus` is an optional enrichment, not a
+    contract the client must satisfy exactly. An inverted or out-of-range
+    span is nonsensical, not invalid — rejecting it here would turn a
+    degradable failure into a 422 that silences the tutor entirely.
+    `focus_instruction` and `generate_line_hint`'s window guard are the
+    single gate that decides whether a span is usable.
+    """
+
+    start_line: int = Field(..., description="1-based first line of the block")
+    end_line: int = Field(..., description="1-based last line, inclusive")
+    label: str = Field(
+        default="",
+        description="Symbol name for the block, for the tutor to refer to",
+    )
+
+    @field_validator("label", mode="before")
+    @classmethod
+    def _null_is_empty(cls, value: object) -> object:
+        # An explicit JSON null is a client spelling "no label", not a reason to
+        # refuse the student's hint. This has to run before the str type check.
+        return "" if value is None else value
+
+    @field_validator("label")
+    @classmethod
+    def _single_line(cls, value: str) -> str:
+        # Anything that is not shaped like a symbol name is dropped outright
+        # rather than truncated: a truncated instruction is still an
+        # instruction, and the label travels outside the untrusted-input
+        # wrapper. Dropping it costs nothing — `focus_instruction` then names
+        # the lines without a name, and the student still gets their hint.
+        #
+        # `fullmatch`, not `match`: Python's `$` also matches just before a
+        # trailing newline, which is exactly the character this must reject.
+        return value if _SAFE_FOCUS_LABEL_RE.fullmatch(value) else ""
 
 
 class HintRequest(BaseModel):
@@ -70,6 +132,10 @@ class HintRequest(BaseModel):
         ge=0,
         le=3,
         description="Self-rated confidence before the hint; 0 means not given",
+    )
+    focus: Optional[FocusRange] = Field(
+        default=None,
+        description="The block inside `code` the student is working on",
     )
 
 
@@ -120,6 +186,10 @@ class LineHintRequest(BaseModel):
     code: str = Field(default="", max_length=MAX_CODE_CHARS, description="Full file content")
     line: int = Field(..., ge=1, description="1-based line the user is editing")
     language: str = Field(default="python", description="VS Code languageId of the code")
+    focus: Optional[FocusRange] = Field(
+        default=None,
+        description="The block inside `code` the student is working on",
+    )
 
 
 class LineHintResponse(BaseModel):
