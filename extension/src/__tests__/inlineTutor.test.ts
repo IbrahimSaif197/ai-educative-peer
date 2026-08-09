@@ -1141,3 +1141,73 @@ describe("InlineTutor — stripping fixed bug markers", () => {
     expect(announced).toBe(1);
   });
 });
+
+describe("InlineTutor — the seeded marker never reaches the tutor", () => {
+  const MARKED = [
+    "def add(a, b):",
+    "    return a + b          # bug: subtracts instead of adds",
+  ].join("\n");
+
+  const tutors: any[] = [];
+  afterEach(() => {
+    while (tutors.length) tutors.pop().dispose();
+  });
+
+  function setup(api: any, source = MARKED) {
+    mock.__reset();
+    mock.__state.configuration = { inlineHints: true, lensMode: "all", autoScan: false };
+    const doc = mock.__makeDocument(source, "python", "/tmp/seeded.py");
+    const editor = mock.__makeEditor(doc, 1, 0);
+    mock.window.activeTextEditor = editor;
+    mock.window.visibleTextEditors = [editor];
+    const tutor = new InlineTutor({ subscriptions: [] } as any, api);
+    tutor.activate();
+    tutors.push(tutor);
+    return { tutor, doc };
+  }
+
+  it("keeps the marker out of the scan request but leaves the buffer alone", async () => {
+    const api = makeApi();
+    const { doc } = setup(api);
+
+    await mock.__runCommand("edupeer.scanFile");
+
+    const sent = api.scanCode.mock.calls[0][0];
+    expect(sent).not.toContain("bug:");
+    expect(sent).toContain("return a + b");
+    // Line numbers come back 1-based against this text, so blanking a marker
+    // must never change how many lines there are.
+    expect(sent.split("\n")).toHaveLength(doc.getText().split("\n").length);
+    expect(doc.getText()).toContain("# bug: subtracts instead of adds");
+  });
+
+  it("keeps the marker out of the line-hint request", async () => {
+    const api = makeApi();
+    const { doc } = setup(api);
+
+    await mock.__runCommand("edupeer.nudgeLine", doc.uri, 1);
+
+    const sent = api.getLineHint.mock.calls[0][0];
+    expect(sent).not.toContain("bug:");
+    expect(sent).toContain("return a + b");
+  });
+
+  it("lets a fixed file scan clean instead of the marker keeping it flagged", async () => {
+    // Stands in for the real reviewer, which reads the comment and believes
+    // it. While the marker was on the wire this file could never scan clean,
+    // and the removal that needed a clean scan could therefore never fire.
+    const scanCode = jest.fn(async (code: string) => ({
+      flags: code.includes("bug:") || code.includes("a - b") ? [flag({ line: 2, end_line: 2 })] : [],
+    }));
+    const api = makeApi({ scanCode });
+    const { doc } = setup(api, MARKED.replace("a + b", "a - b"));
+
+    await mock.__runCommand("edupeer.scanFile");
+    expect(mock.workspace.applyEdit).not.toHaveBeenCalled(); // genuinely buggy
+
+    doc.__setText(MARKED); // the student fixes the operator
+    await mock.__runCommand("edupeer.scanFile");
+
+    expect(mock.workspace.applyEdit).toHaveBeenCalledTimes(1);
+  });
+});

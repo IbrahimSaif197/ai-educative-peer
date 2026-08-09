@@ -104,3 +104,31 @@ export function findBugMarkers(lines: string[], languageId: string): BugMarker[]
   }
   return markers;
 }
+
+/**
+ * The same code with every `bug:` marker blanked out, for sending to the tutor.
+ *
+ * A seeded marker names the bug in plain words, so a file that still carries
+ * one is asking the model to grade the comment rather than the code. Two things
+ * went wrong while it was on the wire. The tutor answered from the comment, so
+ * a corrected line kept drawing the hint that described its old mistake. And
+ * the marker sustained the flags that `removeFixedBugMarkers` waits on, so the
+ * comment kept alive the very state that was supposed to delete it — a file
+ * seeded this way could never scan clean no matter what the student wrote.
+ *
+ * The marker's own removal reads the buffer, not this, so it still finds them.
+ *
+ * Blanks in place rather than deleting: every line number in the reply — flags,
+ * the focus window, the cursor line — is 1-based against the text we sent, so
+ * the line count has to survive. A whole-line marker becomes an empty line.
+ */
+export function stripBugMarkers(code: string, languageId: string): string {
+  const lines = code.split("\n");
+  const markers = findBugMarkers(lines, languageId);
+  if (!markers.length) return code;
+  for (const marker of markers) {
+    const line = lines[marker.line];
+    lines[marker.line] = line.slice(0, marker.start) + line.slice(marker.end);
+  }
+  return lines.join("\n");
+}

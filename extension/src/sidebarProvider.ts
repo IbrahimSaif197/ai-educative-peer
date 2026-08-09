@@ -3,6 +3,7 @@ import * as vscode from "vscode";
 import { ApiClient, AuthError, ChatTurn, RateLimitError } from "./apiClient";
 import { AttemptTracker, nudgeForUnchangedCode } from "./attemptTracker";
 import { AuthManager } from "./authManager";
+import { stripBugMarkers } from "./bugMarkers";
 import { FirebaseClient } from "./firebaseClient";
 import { FocusScope, focusText, resolveFocus } from "./focusScope";
 import { isSupportedLanguage, languageLabel } from "./languages";
@@ -489,7 +490,15 @@ export class EduPeerSidebarProvider implements vscode.WebviewViewProvider {
     const aboutOpenFile = opts.aboutOpenFile !== false;
     // The whole file, so a hint about one function still sees its imports and
     // its callers. `focus` narrows attention; it does not replace context.
-    const requestCode = aboutOpenFile ? this.lastFullCode || code || "" : code || "";
+    //
+    // Stripped of any seeded `bug:` marker, which names the mistake outright:
+    // left in, it is the answer sitting in the prompt, and the tutor recites
+    // the comment instead of reading the code. The panel still shows the
+    // student their own file, comment and all — this is the wire only.
+    const requestCode = stripBugMarkers(
+      aboutOpenFile ? this.lastFullCode || code || "" : code || "",
+      this.lastLanguageId
+    );
     const attemptCode = aboutOpenFile ? this.lastFocusCode || code || "" : code || "";
 
     // Only progressive hints are gated on having actually tried something.

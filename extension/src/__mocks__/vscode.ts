@@ -331,18 +331,33 @@ const Uri = {
 
 /** Build a TextDocument stand-in from source text. */
 function __makeDocument(text: string, languageId = "python", path = "/tmp/demo.py") {
-  const lines = text.split("\n");
+  let lines = text.split("\n");
+  let version = 1;
   return {
     languageId,
     fileName: path,
-    lineCount: lines.length,
-    version: 1,
+    get lineCount() {
+      return lines.length;
+    },
+    get version() {
+      return version;
+    },
     uri: { toString: () => `file://${path}`, fsPath: path, path },
     getText: (range?: MockRange) => {
       if (!range) return text;
       return lines.slice(range.start.line, range.end.line + 1).join("\n");
     },
     lineAt: (line: number) => ({ text: lines[line] ?? "" }),
+    /**
+     * Rewrite the buffer in place, as the student typing would. A real
+     * `TextDocument` is mutable and its `version` advances; tests that edit
+     * between two scans need both, and `focusScope` memoises on the version.
+     */
+    __setText: (next: string) => {
+      text = next;
+      lines = next.split("\n");
+      version++;
+    },
   };
 }
 

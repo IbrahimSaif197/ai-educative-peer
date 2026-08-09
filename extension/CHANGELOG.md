@@ -1,5 +1,18 @@
 # Changelog
 
+## 1.3.1
+
+- Fix hints that outlived the mistake they described. A practice file's
+  `# bug:` note was being sent to the tutor along with the code, so the tutor
+  answered from the note: fix the line and it would still be flagged, and
+  still be asked about the mistake you had just corrected. The note is now
+  stripped from what gets sent — the scan, the inline hint and the chat all
+  read your code and nothing else. You still see the note in your file until
+  it goes.
+- This also unsticks the note itself. Removing it waits for the file to scan
+  clean, which could never happen while the note was the thing keeping the
+  file flagged.
+
 ## 1.3.0
 
 - The tutor panel has been rebuilt. It has its own look now instead of

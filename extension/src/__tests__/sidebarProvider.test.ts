@@ -1246,3 +1246,29 @@ describe("EduPeerSidebarProvider — cursor vs focus", () => {
     expect(posted.map((m: any) => m.type)).toContain("focus");
   });
 });
+
+describe("the seeded bug marker never reaches the tutor", () => {
+  beforeEach(() => mock.__reset());
+
+  const MARKED = "def add(a, b):\n    return a + b   # bug: subtracts instead of adds\n";
+
+  it("strips the marker from the code it sends", async () => {
+    const h = await build({}, MARKED);
+    await askPastTheGate(h);
+
+    const sent = hintRequest(h.api).code;
+    expect(sent).not.toContain("bug:");
+    expect(sent).toContain("return a + b");
+  });
+
+  it("still shows the student their own file, comment and all", async () => {
+    // The strip is for the wire only. The panel is a mirror of the buffer, so
+    // hiding the comment there would leave the student reading a file that
+    // does not match the one on disk.
+    const { provider, posted } = await setupProvider(MARKED, 1, "/tmp/marked-focus/add.py");
+    await provider["sendFocus"]();
+
+    const focus = latest(posted, "focus");
+    expect(focus.focusCode).toContain("# bug: subtracts instead of adds");
+  });
+});

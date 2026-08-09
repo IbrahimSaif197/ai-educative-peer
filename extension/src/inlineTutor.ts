@@ -9,7 +9,7 @@ import {
 } from "./languages";
 import { localLineHint } from "./localTutor";
 import { resolveFocus } from "./focusScope";
-import { findBugMarkers } from "./bugMarkers";
+import { findBugMarkers, stripBugMarkers } from "./bugMarkers";
 
 import { codeFingerprint as fingerprintCode } from "./pedagogy";
 
@@ -405,7 +405,8 @@ export class InlineTutor {
           ? active.selection
           : new vscode.Selection(at, at);
       const focus = await resolveFocus(doc, selection);
-      const res = await this.api.getLineHint(doc.getText(), line + 1, doc.languageId, {
+      const code = stripBugMarkers(doc.getText(), doc.languageId);
+      const res = await this.api.getLineHint(code, line + 1, doc.languageId, {
         start_line: focus.startLine + 1,
         end_line: focus.endLine + 1,
         label: focus.label,
@@ -521,7 +522,10 @@ export class InlineTutor {
   }
 
   private async runScan(doc: vscode.TextDocument, opts: { force?: boolean } = {}) {
-    const code = doc.getText();
+    // Fingerprinted as well as sent, so removing a marker — which changes the
+    // buffer but not the code under review — does not spend a scan re-reading
+    // an identical file.
+    const code = stripBugMarkers(doc.getText(), doc.languageId);
     const fp = fingerprintCode(code);
     const key = doc.uri.toString();
     if (!opts.force && this.scanFingerprints.get(key) === fp) return;

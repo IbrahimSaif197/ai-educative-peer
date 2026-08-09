@@ -2,7 +2,7 @@
   "name": "edupeer",
   "displayName": "EduPeer",
   "description": "A Socratic AI tutor for novice programmers (Python, JavaScript, TypeScript, Java, C, C++, C#, Go, Rust, SQL).",
-  "version": "1.3.0",
+  "version": "1.3.1",
   "publisher": "edupeer",
   "license": "GPL-3.0-or-later",
   "icon": "media/icon.png",
