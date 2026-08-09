@@ -33,7 +33,11 @@
 
   /* Lines */
   --line: #6D6198;
-  --line-soft: #2E2940;
+  /* Grouping only (never a control boundary or a state signal — those use
+     --line, which clears 3:1). Raised from #2E2940 (1.35:1 on --ground,
+     1.25:1 on --card — invisible) to ~2:1 on both, enough for a card or a
+     code block to read as bounded without claiming the 3:1 a control needs. */
+  --line-soft: #504770;
 
   /* Ink */
   --ink: #F2EFFA;
@@ -77,6 +81,13 @@
      rare rewarding moments get overshoot, anything that fires on a keystroke
      does not. */
   --ease-signature: cubic-bezier(0.34, 1.26, 0.64, 1);
+  /* Reserved for the banner exit (spec: "slide + fade, 160ms, --ease-exit").
+     Banners hide via the `[hidden]` attribute, which is an instant
+     `display: none` — animating the exit needs that hide to be deferred
+     until the animation ends (a class + animationend/timeout, or a
+     transition-on-remove pattern), and that's a structural change to how
+     banners are dismissed, not a one-line style fix. Left unused rather than
+     risked in a final fix wave; still available for whoever restructures it. */
   --ease-exit: cubic-bezier(0.3, 0, 1, 1);
   --ease-loop: cubic-bezier(0.4, 0, 0.6, 1);
   --t-quick: 140ms;
@@ -282,8 +293,11 @@ body {
   min-height: 20px;
 }
 
+/* The focus breadcrumb's symbol name — one of the three places the spec puts
+   the display face (with the empty state and the hint-card headers). */
 .filecard__name {
-  font-family: var(--mono);
+  font-family: var(--display);
+  font-weight: 700;
   font-size: var(--t-micro);
   color: var(--muted);
   overflow: hidden;
@@ -369,7 +383,10 @@ body {
 
 .ln__no {
   color: var(--muted);
-  opacity: 0.6;
+  /* Not decorative — this gutter exists so the student can map it to the
+     editor's real absolute line numbers. 0.6 composited --muted onto --card
+     measured 3.02:1, below the 4.5:1 text minimum; 0.85 measures 4.75:1. */
+  opacity: 0.85;
   text-align: right;
   user-select: none;
 }
@@ -397,12 +414,18 @@ body {
   gap: var(--s5);
 }
 
+/* Spec's motion inventory: "rise + fade, 300ms, 80ms delay". Reuses turn-in
+   (same rise-8px-and-fade shape as every other entrance) rather than a
+   sibling keyframe, since only the duration/delay differ from the rest of
+   the panel — this and .signin are the first thing a new or signed-out
+   student sees, and were the one card shape with no entrance at all. */
 .empty {
   margin: auto 0;
   padding: var(--s6) var(--s2);
   color: var(--muted);
   font-size: var(--t-small);
   line-height: 1.6;
+  animation: turn-in 300ms var(--ease-signature) 80ms both;
 }
 
 .empty strong,
@@ -458,6 +481,26 @@ body {
 
 .turn--tutor.is-error {
   border-left-color: var(--danger);
+}
+
+/* Restoring a saved transcript rebuilds every turn in one pass (main.js,
+   the "restoreChat" handler), so without this a 20-turn history would fire
+   every card's entrance and every ladder's dot-fill/dot-ring at once — a lot
+   of motion for content the student has already read. main.js marks those
+   turns with `is-restored` only while rebuilding; live turns are untouched
+   and keep animating normally. Specificity ((0,2,0) / (0,4,0) / (0,4,1))
+   beats the unmodified rules above regardless of source order. */
+.turn.is-restored,
+.turn.is-restored .ladder__dot.is-on {
+  animation: none;
+}
+
+.turn.is-restored .ladder__dot.is-on::after {
+  animation: none;
+  /* The ring is purely an animation effect (it has no resting appearance),
+     so with the animation suppressed it would otherwise still render at its
+     `from` keyframe's opacity. Hide it outright. */
+  display: none;
 }
 
 /* The student's own words are the one filled surface, right-aligned. */
@@ -736,7 +779,12 @@ input[type="text"].trace__cell {
   background: transparent;
   color: var(--muted);
   cursor: pointer;
+  /* border-color and color are here because :hover changes both — without
+     them in the list, the selected state (background, transform) animates
+     and hover snaps. */
   transition: background-color var(--t-quick) linear,
+    border-color var(--t-quick) linear,
+    color var(--t-quick) linear,
     transform 180ms var(--ease-signature);
 }
 
@@ -760,7 +808,11 @@ input[type="text"] {
   font-size: var(--t-body);
   color: var(--ink);
   background: var(--card);
-  border: 1px solid var(--line-soft);
+  /* A control boundary, not grouping — needs the 3:1 UI minimum, which
+     --line-soft cannot supply (1.35:1 on --ground, 1.25:1 on --card). --line
+     clears both (3.42:1, 3.16:1); see .trace__cell above for the same
+     reasoning applied earlier. */
+  border: 1px solid var(--line);
   border-radius: var(--radius-md);
   padding: var(--s4);
   transition: border-color var(--t-quick) linear;
@@ -796,7 +848,9 @@ textarea::placeholder {
   font-size: var(--t-small);
   color: var(--ink);
   background: var(--card-lit);
-  border: 1px solid var(--line-soft);
+  /* Identifies a control, so it needs the 3:1 UI minimum --line-soft can't
+     give it — see the textarea/input rule above for the same fix. */
+  border: 1px solid var(--line);
   border-radius: var(--radius-md);
   padding: var(--s3) var(--s5);
   cursor: pointer;
@@ -843,7 +897,11 @@ textarea::placeholder {
 .btn__hint {
   font-family: var(--mono);
   font-size: var(--t-micro);
-  opacity: 0.65;
+  /* Sits inside .btn--primary, so opacity composited --coral-ink onto
+     --coral. 0.65 measured 3.74:1, below the 4.5:1 text minimum. A
+     composited colour instead of opacity: color-mix(--coral-ink 80%,
+     --coral) measures 5.10:1. */
+  color: color-mix(in srgb, var(--coral-ink) 80%, var(--coral));
 }
 
 .btn--ghost {
@@ -916,10 +974,20 @@ textarea::placeholder {
     transition-duration: 0.01ms !important;
     scroll-behavior: auto !important;
   }
+
+  /* The sweep travels, so a collapsed duration lands it off-screen and the
+     student gets nothing. Hold it still instead: reduced motion means no
+     movement, not no feedback. */
+  body.is-celebrating::before {
+    transform: none !important;
+    background: var(--mint) !important;
+  }
 }
 
 /* ----------------------------------------------------------------- signin */
 
+/* Same entrance as .empty above, and for the same reason: rise + fade,
+   300ms, 80ms delay, per the spec's motion inventory. */
 .signin {
   display: grid;
   gap: var(--s4);
@@ -928,6 +996,7 @@ textarea::placeholder {
   background: var(--card);
   border: 1px solid var(--line);
   border-radius: var(--radius-md);
+  animation: turn-in 300ms var(--ease-signature) 80ms both;
 }
 
 .signin p {
@@ -956,7 +1025,10 @@ textarea::placeholder {
   width: 7px;
   height: 7px;
   border-radius: var(--radius-pill);
-  background: var(--line-soft);
+  /* How many hints remain is readable only from the empty dots, so this is
+     state, not grouping — it needs the 3:1 --line clears (3.16:1 on --card)
+     and --line-soft cannot (1.25:1 on --card). */
+  background: var(--line);
 }
 
 .ladder__dot.is-on {
@@ -980,7 +1052,7 @@ textarea::placeholder {
 @keyframes dot-fill {
   from {
     transform: scale(0.6);
-    background: var(--line-soft);
+    background: var(--line);
   }
   60% {
     transform: scale(1.15);
@@ -1005,6 +1077,15 @@ textarea::placeholder {
 /* Asked again without editing: the ladder reports, it does not advance. */
 .ladder.is-held .ladder__dot.is-on {
   animation: dot-held var(--t-slow) var(--ease-signature);
+}
+
+/* The animation above is the only signal otherwise — it collapses to
+   nothing under reduced motion, the same defect the sweep has above, and a
+   student who re-asks without editing would get no ladder feedback at all.
+   A static ring on the last filled dot (`.ladder__dot--anchor`, set in
+   main.js) makes the held state readable without relying on movement. */
+.ladder.is-held .ladder__dot--anchor {
+  box-shadow: 0 0 0 2px var(--card), 0 0 0 4px var(--coral);
 }
 
 @keyframes dot-held {

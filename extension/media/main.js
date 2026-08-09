@@ -63,6 +63,11 @@
   let isLoading = false;
   // Rendered turns, mirrored to the extension so they survive a reload.
   let turns = [];
+  // True only while "restoreChat" is rebuilding a saved transcript — lets
+  // buildTurn() mark those turns so their entrance (and their ladders'
+  // dot-fill/dot-ring) don't all fire at once. See buildTurn() and the
+  // "restoreChat" case below.
+  let isRestoring = false;
 
   // ------------------------------------------------------------------ chat
 
@@ -133,6 +138,11 @@
     wrap.className = `turn turn--${turn.role === "student" ? "student" : "tutor"}`;
     if (turn.role === "error") wrap.classList.add("is-error");
     if (turn.flagged) wrap.classList.add("is-flagged");
+    // A restored transcript rebuilds every turn in one pass; without this,
+    // N cards would fire their entrance (and every ladder its dot-fill and
+    // dot-ring) all at once. Live turns are unaffected — isRestoring is only
+    // ever true while the "restoreChat" handler below is looping.
+    if (isRestoring) wrap.classList.add("is-restored");
 
     if (turn.eyebrow) {
       const eyebrow = document.createElement("div");
@@ -150,12 +160,18 @@
       label.className = "ladder__label";
       label.textContent = `hint ${turn.level}`;
       ladder.appendChild(label);
+      // Tracked so the held state (below) has a single dot to put its static
+      // ring on: the last filled one, i.e. the current depth.
+      let lastOnDot = null;
       for (let i = 1; i <= 3; i++) {
         const dot = document.createElement("span");
-        dot.className = i <= turn.level ? "ladder__dot is-on" : "ladder__dot";
+        const on = i <= turn.level;
+        dot.className = on ? "ladder__dot is-on" : "ladder__dot";
         dot.style.setProperty("--dot-index", String(i - 1));
+        if (on) lastOnDot = dot;
         ladder.appendChild(dot);
       }
+      if (lastOnDot) lastOnDot.classList.add("ladder__dot--anchor");
       wrap.appendChild(ladder);
     }
 
@@ -555,10 +571,12 @@
         const restored = Array.isArray(msg.messages) ? msg.messages : [];
         turns = [];
         clearChat();
+        isRestoring = true;
         for (const turn of restored) {
           buildTurn(turn);
           turns.push(turn);
         }
+        isRestoring = false;
         refreshPlaceholder();
         break;
       }
