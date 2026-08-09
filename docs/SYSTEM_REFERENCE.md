@@ -1,5 +1,34 @@
 # EduPeer — System Reference
 
+**STALE AS OF 2026-08-09 — branch `feat/focus-scope-and-auth-redesign`.** This
+document was generated against `main` at the commit named in Section 1,
+before this branch existed, and has not been refreshed for it. Known wrong,
+not exhaustively:
+
+1. **`extension/src/inlineTutor.ts`** and **`extension/src/sidebarProvider.ts`**
+   — both cited throughout this document — were substantially reworked (the
+   lens state machine, focus scoping, the signed-out sidebar invitation
+   card). Their line-number citations no longer point at the code described.
+2. **Three modules this document does not mention at all:**
+   `extension/src/annotationStore.ts`, `extension/src/blockHeuristics.ts`,
+   `extension/src/focusScope.ts`.
+3. **Two commands this document does not mention at all:**
+   `edupeer.deepenLine`, `edupeer.dismissLine`.
+4. **One setting this document does not mention at all:** `edupeer.lensMode`.
+5. **`backend/static/auth.html` was rewritten**, from the 131 lines this
+   document's file-size table and file listing still report, to a much
+   larger file. Every `auth.html:N` line citation below is wrong, and the
+   manual-verification rows for "Sign-in success card" and "Invalid sign-in
+   link" quote copy the new page no longer has — "You're signed in ✔ —
+   Return to VS Code" and "Sign-in link is invalid" were both replaced
+   during this branch's redesign.
+
+Treat every line-number citation in this document as **UNVERIFIED** until it
+is regenerated against this branch. This banner marks the damage; the
+sections below it were not refreshed.
+
+---
+
 Generated for use as the sole source for Chapters 4, 5 and 6 of the Final Year
 Project report. Every claim below was checked against the code at the commit
 named in Section 1. Where a claim could not be checked from the repository it
