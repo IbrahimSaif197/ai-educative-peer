@@ -90,9 +90,10 @@
     chatEl.appendChild(wrap);
   }
 
-  function dropEmptyState() {
-    const empty = chatEl.querySelector(".empty");
-    if (empty) empty.remove();
+  /** Remove whichever placeholder is showing — the empty state or the sign-in card. */
+  function dropPlaceholder() {
+    const placeholder = chatEl.querySelector(".empty, .signin");
+    if (placeholder) placeholder.remove();
   }
 
   /**
@@ -126,7 +127,7 @@
   }
 
   function buildTurn(turn) {
-    dropEmptyState();
+    dropPlaceholder();
     const wrap = document.createElement("div");
     wrap.className = `turn turn--${turn.role === "student" ? "student" : "tutor"}`;
     if (turn.role === "error") wrap.classList.add("is-error");
@@ -330,7 +331,7 @@
   // ---------------------------------------------------------- trace exercise
 
   function renderTraceExercise(msg) {
-    dropEmptyState();
+    dropPlaceholder();
     addTurn({
       role: "tutor",
       text: msg.prompt || "Work through this line by line and fill in each value.",
@@ -598,7 +599,7 @@
 
       case "streamStart": {
         removeStreamingTurn();
-        dropEmptyState();
+        dropPlaceholder();
         const wrap = document.createElement("div");
         wrap.className = "turn turn--tutor";
         // The chat is an aria-live log, so an unmuted streaming bubble makes a

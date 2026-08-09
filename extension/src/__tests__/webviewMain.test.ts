@@ -123,19 +123,36 @@ describe("restoring a transcript", () => {
     expect($(".turn--student")!.textContent).toContain("why does it crash?");
   });
 
-  it("falls back to the empty state when there is nothing stored", () => {
+  // Mirrors "leaves an existing conversation alone" in the signed-out-state
+  // tests below, for the other call site refreshPlaceholder() guards.
+  // signedIn is left at its default (false) deliberately: this is the case
+  // where, without the `turns.length` guard, the sign-in card would have the
+  // most reason to leak in.
+  it("shows neither placeholder once a non-empty transcript is restored", () => {
+    post({
+      type: "restoreChat",
+      messages: [{ role: "student", text: "why does it crash?" }],
+    });
+    expect($(".empty")).toBeNull();
+    expect($(".signin")).toBeNull();
+  });
+
+  it("falls back to the empty state when there is nothing stored and the student is signed in", () => {
     post({ type: "authState", signedIn: true, label: "sam@school.edu" });
     post({ type: "restoreChat", messages: [] });
     expect($(".empty")).not.toBeNull();
   });
 
-  // signedIn defaults to false until an "authState" message says otherwise,
-  // and the real provider always posts "restoreChat" before "authState" (see
-  // sidebarProvider.ts's "ready" handler) — so a signed-out reload hits this
-  // case with the default. This is the "restoreChat" half of Task 12's
-  // refreshPlaceholder(): a signed-out student with no history gets the
-  // sign-in invitation here too, not just from an explicit "authState".
-  it("invites a signed-out student instead, when there is nothing stored", () => {
+  // signedIn defaults to false until an "authState" message says otherwise.
+  // The provider now posts authState before restoreChat on every "ready"
+  // (sidebarProvider.ts), so this ordering should not occur in the running
+  // extension — but main.js has no way to enforce that from its side, and
+  // restoreChat is reachable without ever having received an authState (this
+  // test included). This is the "restoreChat" half of Task 12's
+  // refreshPlaceholder(): with signedIn at its default, a student with no
+  // history gets the sign-in invitation here too, not just from an explicit
+  // "authState".
+  it("falls back to the sign-in invitation when there is nothing stored and the student is signed out", () => {
     post({ type: "restoreChat", messages: [] });
     expect($(".signin")).not.toBeNull();
     expect($(".empty")).toBeNull();
@@ -987,6 +1004,20 @@ describe("webview — signed-out state", () => {
   it("leaves an existing conversation alone", () => {
     post({ type: "userMessage", text: "why is this failing?" });
     post({ type: "authState", signedIn: false, label: "Not signed in" });
+
+    expect($(".signin")).toBeNull();
+    expect(document.body.textContent).toContain("why is this failing?");
+  });
+
+  // Unlike "leaves an existing conversation alone" above, the card is already
+  // on screen *before* the turn arrives here. The composer isn't gated on
+  // signedIn — a signed-out student can ignore the invitation and ask
+  // anyway — so the turn must replace the card, not land next to it.
+  it("removes the sign-in card once the student asks something anyway", () => {
+    post({ type: "authState", signedIn: false, label: "Not signed in" });
+    expect($(".signin")).not.toBeNull();
+
+    post({ type: "userMessage", text: "why is this failing?" });
 
     expect($(".signin")).toBeNull();
     expect(document.body.textContent).toContain("why is this failing?");

@@ -226,6 +226,23 @@ describe("startup", () => {
     expect(latest(posted, "offline").value).toBe(false);
   });
 
+  // The webview's placeholder (Task 12) reads `signedIn` at the moment
+  // "restoreChat" arrives with no stored messages, defaulting to signed-out
+  // until "authState" says otherwise. `sendBadges` sits between the two posts
+  // below and makes a real network call in production, so if "restoreChat"
+  // led, a signed-in student with no history would see "sign in" for as long
+  // as that call takes — not a same-tick flicker. `authState` must lead.
+  it("posts auth state before the restored chat, so a reload never tells a signed-in student to sign in", async () => {
+    const h = await build();
+    await h.send({ type: "ready" });
+
+    const authIndex = h.posted.findIndex((m) => m.type === "authState");
+    const restoreIndex = h.posted.findIndex((m) => m.type === "restoreChat");
+    expect(authIndex).toBeGreaterThanOrEqual(0);
+    expect(restoreIndex).toBeGreaterThanOrEqual(0);
+    expect(authIndex).toBeLessThan(restoreIndex);
+  });
+
   it("labels an anonymous session as not signed in", async () => {
     const h = await build();
     h.provider.reveal();

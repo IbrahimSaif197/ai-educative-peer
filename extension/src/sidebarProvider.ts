@@ -109,13 +109,13 @@ export class EduPeerSidebarProvider implements vscode.WebviewViewProvider {
     webviewView.webview.onDidReceiveMessage(async (msg) => {
       switch (msg.type) {
         case "ready":
+          this.postAuthState();
           this.post({
             type: "restoreChat",
             messages: this.context.globalState.get<unknown[]>(CHAT_STATE_KEY, []),
           });
           await this.sendFocus();
           await this.sendBadges();
-          this.postAuthState();
           this.postOffline(!this.api.isAvailable);
           this.postAuthTrouble(this.api.isAuthHealthy === false);
           void this.checkReviewDue();
