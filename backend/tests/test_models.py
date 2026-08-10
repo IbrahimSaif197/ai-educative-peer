@@ -25,7 +25,7 @@ class TestHintRequest:
 
     def test_hint_level_above_max_raises(self):
         with pytest.raises(ValidationError):
-            HintRequest(question="q", hint_level=4)
+            HintRequest(question="q", hint_level=5)
 
 
 class TestHintResponse:

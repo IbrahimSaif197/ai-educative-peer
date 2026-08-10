@@ -141,10 +141,10 @@ class TestHintEndpoint:
         res2 = client.post("/hint", json=VALID_HINT_PAYLOAD)
         assert res2.json()["hint_level"] == 2
 
-    def test_hint_level_caps_at_3(self, client):
+    def test_hint_level_caps_at_4(self, client):
         for _ in range(5):
             res = client.post("/hint", json=VALID_HINT_PAYLOAD)
-        assert res.json()["hint_level"] == 3
+        assert res.json()["hint_level"] == 4
 
     def test_empty_question_returns_400(self, client):
         payload = {**VALID_HINT_PAYLOAD, "question": ""}
@@ -574,7 +574,7 @@ class TestLadderWithTheRealProblemKey:
             fs_client.post("/hint", json=self._payload()).json()["hint_level"]
             for _ in range(4)
         ]
-        assert levels == [1, 2, 3, 3]
+        assert levels == [1, 2, 3, 4]
 
     def test_editing_the_code_deepens_the_hint(self, fs_client):
         # The reason the ladder is keyed on the URI at all: an edit must

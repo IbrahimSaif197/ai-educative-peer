@@ -24,11 +24,11 @@ class TestInMemorySessionStore:
         store.next_hint_level("u1", "fp1")
         assert store.next_hint_level("u1", "fp1") == 2
 
-    def test_level_caps_at_3(self):
+    def test_level_caps_at_4(self):
         store = InMemorySessionStore()
         for _ in range(5):
             level = store.next_hint_level("u1", "fp1")
-        assert level == 3
+        assert level == 4
 
     def test_different_fingerprint_independent(self):
         store = InMemorySessionStore()
@@ -198,11 +198,11 @@ class TestFirestoreSessionStore:
         store.next_hint_level("u1", "fp1")
         assert store.next_hint_level("u1", "fp1") == 2
 
-    def test_level_caps_at_3(self):
+    def test_level_caps_at_4(self):
         store = self._store()
         for _ in range(5):
             level = store.next_hint_level("u1", "fp1")
-        assert level == 3
+        assert level == 4
 
     def test_different_fingerprint_independent(self):
         store = self._store()
@@ -407,9 +407,11 @@ class TestResolveLevel:
         from session_store import resolve_level
         assert resolve_level(1, escalate=True) == 2
 
-    def test_escalating_stops_at_three(self):
+    def test_escalating_past_three_now_reaches_four(self):
+        # 3 used to be the ceiling, so escalating from it was a no-op; now
+        # it is one rung below the top, so escalating from it advances.
         from session_store import resolve_level
-        assert resolve_level(3, escalate=True) == 3
+        assert resolve_level(3, escalate=True) == 4
 
     def test_not_escalating_reuses_the_level(self):
         from session_store import resolve_level
@@ -419,9 +421,21 @@ class TestResolveLevel:
         from session_store import resolve_level
         assert resolve_level(0, escalate=False) == 1
 
-    def test_a_corrupt_high_level_is_clamped(self):
+    def test_escalating_from_three_reaches_the_worked_example(self):
         from session_store import resolve_level
-        assert resolve_level(99, escalate=False) == 3
+        assert resolve_level(3, escalate=True) == 4
+
+    def test_escalating_stops_at_four(self):
+        from session_store import resolve_level
+        assert resolve_level(4, escalate=True) == 4
+
+    def test_not_escalating_reuses_level_four(self):
+        from session_store import resolve_level
+        assert resolve_level(4, escalate=False) == 4
+
+    def test_a_corrupt_high_level_clamps_to_four(self):
+        from session_store import resolve_level
+        assert resolve_level(99, escalate=False) == 4
 
 
 class TestPeekAndCommit:
@@ -451,7 +465,7 @@ class TestPeekAndCommit:
     def test_commit_clamps_out_of_range_levels(self):
         store = self._store()
         store.commit_hint_level("u1", "fp1", 99)
-        assert store.peek_hint_level("u1", "fp1", escalate=False) == 3
+        assert store.peek_hint_level("u1", "fp1", escalate=False) == 4
         store.commit_hint_level("u1", "fp2", 0)
         assert store.peek_hint_level("u1", "fp2", escalate=False) == 1
 
@@ -534,7 +548,7 @@ class TestFirestorePeekAndCommit:
     def test_commit_clamps_before_writing(self):
         store, writes = self._store_with(1)
         store.commit_hint_level("u1", "fp1", 99)
-        assert writes[0]["hint_level"] == 3
+        assert writes[0]["hint_level"] == 4
 
     def test_peek_degrades_to_one_on_error(self):
         from session_store import FirestoreSessionStore
@@ -604,3 +618,25 @@ class TestInMemoryCurrentHintLevel:
         for i in range(50):
             store.current_hint_level("u1", f"fp{i}")
         assert len(store._levels) == 5
+
+
+class TestBothStoresPersistLevelFour:
+    """The fourth rung is only useful if it survives a commit/read cycle."""
+
+    def test_in_memory_store_keeps_four(self):
+        store = InMemorySessionStore()
+        store.commit_hint_level("u1", "fp1", 4)
+        assert store.peek_hint_level("u1", "fp1", escalate=False) == 4
+
+    def test_firestore_store_keeps_four(self):
+        store = FirestoreSessionStore(FakeFirestore())
+        store.commit_hint_level("u1", "fp1", 4)
+        assert store.peek_hint_level("u1", "fp1", escalate=False) == 4
+
+    def test_the_in_memory_ladder_climbs_all_four_rungs(self):
+        store = InMemorySessionStore()
+        assert [store.next_hint_level("u1", "fp1") for _ in range(5)] == [1, 2, 3, 4, 4]
+
+    def test_the_firestore_ladder_climbs_all_four_rungs(self):
+        store = FirestoreSessionStore(FakeFirestore())
+        assert [store.next_hint_level("u1", "fp1") for _ in range(5)] == [1, 2, 3, 4, 4]

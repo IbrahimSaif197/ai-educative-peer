@@ -96,14 +96,14 @@ class TestHintLadderKeyedOnProblem:
         assert first.json()["hint_level"] == 1
         assert second.json()["hint_level"] == 2
 
-    def test_ladder_stops_at_three(self, client):
+    def test_ladder_stops_at_four(self, client):
         levels = [
             client.post("/hint", json={
                 **VALID_HINT_PAYLOAD, "problem_key": "k", "escalate": True,
             }).json()["hint_level"]
             for _ in range(5)
         ]
-        assert levels == [1, 2, 3, 3, 3]
+        assert levels == [1, 2, 3, 4, 4]
 
     def test_asking_again_without_editing_holds_the_level(self, client):
         client.post("/hint", json={**VALID_HINT_PAYLOAD, "problem_key": "k", "escalate": True})

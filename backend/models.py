@@ -27,6 +27,13 @@ MAX_QUESTION_CHARS = 4000
 MAX_GOAL_CHARS = 500
 MAX_PROBLEM_KEY_CHARS = 512
 
+# The top of the hint ladder. Rungs 1-3 are the Socratic ladder; rung 4 *is*
+# the worked example - see `effective_mode` in hinting_engine.py. Kept here
+# because both session_store (which walks the ladder) and hinting_engine
+# (which picks a prompt for it) need the same number, and models.py is the
+# only module both already depend on.
+MAX_HINT_LEVEL = 4
+
 
 MAX_FOCUS_LABEL_CHARS = 120
 
@@ -95,7 +102,7 @@ class HintRequest(BaseModel):
         max_length=MAX_QUESTION_CHARS,
         description="The student's question or described error",
     )
-    hint_level: int = Field(default=1, ge=1, le=3)
+    hint_level: int = Field(default=1, ge=1, le=MAX_HINT_LEVEL)
     problem_key: str = Field(
         default="",
         max_length=MAX_PROBLEM_KEY_CHARS,
