@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.5.1
+
+- The first question after a quiet spell no longer fails. The server sleeps
+  when nobody has used it for a while and takes up to a minute to wake, which
+  was longer than EduPeer was willing to wait — so it gave up and fell back to
+  the offline tutor. It now waits out the wake-up, and says that is what it is
+  doing instead of leaving you on a spinner.
+
 ## 1.5.0
 
 - The hint ladder has a fourth rung, and it is a worked example. Getting stuck
