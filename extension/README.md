@@ -21,8 +21,8 @@ Alongside the chat panel:
 - **File scan** — suspicious lines flagged in the Problems panel and the gutter.
 - **Trace and predict** — step through what a selection actually does, or commit
   to an answer before you run it.
-- **Progress dashboard** — which concepts keep needing deep hints, and how well
-  your confidence lines up with your results.
+- **Progress dashboard** — which concepts keep needing deep hints, your streak,
+  and when a spaced review is due.
 
 ## Getting started
 

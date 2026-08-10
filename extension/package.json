@@ -2,7 +2,7 @@
   "name": "edupeer",
   "displayName": "EduPeer",
   "description": "A Socratic AI tutor for novice programmers (Python, JavaScript, TypeScript, Java, C, C++, C#, Go, Rust, SQL).",
-  "version": "1.3.1",
+  "version": "1.4.0",
   "publisher": "edupeer",
   "license": "GPL-3.0-or-later",
   "icon": "media/icon.png",
@@ -220,7 +220,7 @@
           {
             "id": "edupeer.step.progress",
             "title": "Check what you're building",
-            "description": "Your dashboard shows which concepts keep needing deep hints, how well your confidence matches reality, and what you've practised.\n[Show my progress](command:edupeer.showProgress)",
+            "description": "Your dashboard shows which concepts keep needing deep hints, your streak and daily activity, and when a spaced review is ready.\n[Show my progress](command:edupeer.showProgress)",
             "media": {
               "markdown": "media/walkthrough/progress.md"
             }
