@@ -12,7 +12,7 @@ class ChatTurn(BaseModel):
 TutorMode = Literal[
     "hint", "reflect", "translate", "worked-example",
     "explain-error", "explain-concept", "predict-output", "review-exercise",
-    "subgoal-label", "trace-check",
+    "subgoal-label", "trace-check", "answer",
 ]
 
 # Longest edit summary accepted from a client. Diffs are built client-side, so
@@ -26,6 +26,13 @@ MAX_CODE_CHARS = 40000
 MAX_QUESTION_CHARS = 4000
 MAX_GOAL_CHARS = 500
 MAX_PROBLEM_KEY_CHARS = 512
+
+# The top of the hint ladder. Rungs 1-3 are the Socratic ladder; rung 4 *is*
+# the worked example - see `effective_mode` in hinting_engine.py. Kept here
+# because both session_store (which walks the ladder) and hinting_engine
+# (which picks a prompt for it) need the same number, and models.py is the
+# only module both already depend on.
+MAX_HINT_LEVEL = 4
 
 
 MAX_FOCUS_LABEL_CHARS = 120
@@ -95,7 +102,7 @@ class HintRequest(BaseModel):
         max_length=MAX_QUESTION_CHARS,
         description="The student's question or described error",
     )
-    hint_level: int = Field(default=1, ge=1, le=3)
+    hint_level: int = Field(default=1, ge=1, le=MAX_HINT_LEVEL)
     problem_key: str = Field(
         default="",
         max_length=MAX_PROBLEM_KEY_CHARS,
@@ -143,6 +150,10 @@ class HintResponse(BaseModel):
     hint: str
     hint_level: int
     concept_tags: List[str]
+    # The mode the backend actually ran, which is not always `req.mode`: a
+    # level-4 hint runs the worked example. The panel labels each card from
+    # this, so without it a worked example arrives titled "hint 4".
+    mode: str = "hint"
 
 
 class HealthResponse(BaseModel):

@@ -1,4 +1,5 @@
 import type { ActivityDay, ConceptStat, ProgressReport } from "./apiClient";
+import { MAX_HINT_LEVEL } from "./pedagogy";
 
 /**
  * Pure HTML builder for the progress dashboard (tested in jest).
@@ -25,7 +26,10 @@ function statTile(label: string, value: string | number): string {
   </div>`;
 }
 
-function conceptBars(items: ConceptStat[], maxLevel = 3): string {
+// `_update_concept_stats` counts rung-4 hints, so an average above 3 is
+// ordinary rather than a glitch. Scaling against 3 pinned every deep concept
+// at a full bar and told a screen reader "average hint depth 3.5 of 3".
+function conceptBars(items: ConceptStat[], maxLevel = MAX_HINT_LEVEL): string {
   if (!items.length) {
     return `<p class="empty">Nothing here yet. Ask a few questions and this fills in.</p>`;
   }
@@ -36,7 +40,7 @@ function conceptBars(items: ConceptStat[], maxLevel = 3): string {
         <span class="row__label">${escapeHtml(item.concept)}</span>
         <span class="row__track">
           <svg viewBox="0 0 100 6" preserveAspectRatio="none" role="img"
-               aria-label="${escapeHtml(item.concept)}: average hint depth ${escapeHtml(item.avg_level)} of 3">
+               aria-label="${escapeHtml(item.concept)}: average hint depth ${escapeHtml(item.avg_level)} of ${maxLevel}">
             <rect x="0" y="0" width="100" height="6" rx="3" class="track"></rect>
             <rect x="0" y="0" width="${pct}" height="6" rx="3" class="fill"></rect>
           </svg>
@@ -47,30 +51,48 @@ function conceptBars(items: ConceptStat[], maxLevel = 3): string {
     .join("\n");
 }
 
+const LEVEL_BLURBS = [
+  "a question was enough",
+  "needed the line pointed out",
+  "needed pseudocode",
+  "needed a worked example",
+];
+
 /** Stacked bar of how many hints landed at each depth. */
 function levelDistribution(counts: Record<string, number> | undefined): string {
-  const one = Math.max(0, Number(counts?.["1"] ?? 0));
-  const two = Math.max(0, Number(counts?.["2"] ?? 0));
-  const three = Math.max(0, Number(counts?.["3"] ?? 0));
-  const total = one + two + three;
+  const values = LEVEL_BLURBS.map((_, i) =>
+    Math.max(0, Number(counts?.[String(i + 1)] ?? 0))
+  );
+  const total = values.reduce((a, b) => a + b, 0);
   if (!total) {
     return `<p class="empty">No hints yet, so there's no depth to report.</p>`;
   }
-  const w1 = (one / total) * 100;
-  const w2 = (two / total) * 100;
-  const w3 = (three / total) * 100;
   const pct = (n: number) => Math.round((n / total) * 100);
 
+  let x = 0;
+  const rects = values
+    .map((n, i) => {
+      const w = (n / total) * 100;
+      const rect = `<rect x="${x}" y="0" width="${w}" height="10" class="seg seg--${i + 1}"></rect>`;
+      x += w;
+      return rect;
+    })
+    .join("\n    ");
+
+  const label = values.map((n, i) => `${pct(n)}% at level ${i + 1}`).join(", ");
+  const legend = values
+    .map(
+      (n, i) =>
+        `<li><span class="key key--${i + 1}"></span>Level ${i + 1} — ${LEVEL_BLURBS[i]} · ${n} (${pct(n)}%)</li>`
+    )
+    .join("\n    ");
+
   return `<svg class="stack" viewBox="0 0 100 10" preserveAspectRatio="none" role="img"
-       aria-label="Hint depth: ${pct(one)}% at level 1, ${pct(two)}% at level 2, ${pct(three)}% at level 3">
-    <rect x="0" y="0" width="${w1}" height="10" class="seg seg--1"></rect>
-    <rect x="${w1}" y="0" width="${w2}" height="10" class="seg seg--2"></rect>
-    <rect x="${w1 + w2}" y="0" width="${w3}" height="10" class="seg seg--3"></rect>
+       aria-label="Hint depth: ${label}">
+    ${rects}
   </svg>
   <ul class="legend">
-    <li><span class="key key--1"></span>Level 1 — a question was enough · ${one} (${pct(one)}%)</li>
-    <li><span class="key key--2"></span>Level 2 — needed the line pointed out · ${two} (${pct(two)}%)</li>
-    <li><span class="key key--3"></span>Level 3 — needed pseudocode · ${three} (${pct(three)}%)</li>
+    ${legend}
   </ul>`;
 }
 
@@ -149,6 +171,7 @@ export function buildProgressHtml(progress: ProgressReport): string {
     --c1: var(--vscode-charts-blue, #3794ff);
     --c2: var(--vscode-charts-purple, #b180d7);
     --c3: var(--vscode-charts-orange, #d18616);
+    --c4: var(--vscode-charts-green, #89d185);
   }
   * { box-sizing: border-box; }
   body {
@@ -194,12 +217,14 @@ export function buildProgressHtml(progress: ProgressReport): string {
   .seg--1 { fill: var(--c1); }
   .seg--2 { fill: var(--c2); }
   .seg--3 { fill: var(--c3); }
+  .seg--4 { fill: var(--c4); }
   .legend { list-style: none; margin: 10px 0 0; padding: 0; font-size: 0.82em; color: var(--dim); }
   .legend li { display: flex; align-items: center; gap: 8px; margin: 3px 0; }
   .key { width: 10px; height: 10px; border-radius: 2px; flex: none; }
   .key--1 { background: var(--c1); }
   .key--2 { background: var(--c2); }
   .key--3 { background: var(--c3); }
+  .key--4 { background: var(--c4); }
   .strip { display: block; width: 100%; height: 44px; }
   .day { fill: var(--accent); }
   .day--idle { fill: var(--raised); }

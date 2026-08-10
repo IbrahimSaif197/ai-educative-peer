@@ -8,15 +8,24 @@ describe("renderStatus", () => {
   });
 
   it("shows the hint depth once a hint has been given", () => {
-    expect(renderStatus({ ...base, hintLevel: 2 }).text).toContain("hint 2/3");
+    expect(renderStatus({ ...base, hintLevel: 2 }).text).toContain("hint 2/4");
   });
 
   it("hides the depth before the first hint", () => {
     expect(renderStatus(base).text).not.toContain("hint");
   });
 
-  it("clamps a depth beyond level 3", () => {
-    expect(renderStatus({ ...base, hintLevel: 9 }).text).toContain("hint 3/3");
+  /**
+   * The ladder has four rungs — rung 4 *is* the worked example. Capping at 3
+   * left the bar reading "hint 3/3" beside a panel showing "hint 4" and four
+   * filled dots.
+   */
+  it("shows the fourth rung rather than capping at the third", () => {
+    expect(renderStatus({ ...base, hintLevel: 4 }).text).toContain("hint 4/4");
+  });
+
+  it("clamps a depth beyond the top rung", () => {
+    expect(renderStatus({ ...base, hintLevel: 9 }).text).toContain("hint 4/4");
   });
 
   it("shows a streak in days", () => {
@@ -34,12 +43,12 @@ describe("renderStatus", () => {
   it("reports offline instead of a stale depth", () => {
     const status = renderStatus({ ...base, hintLevel: 2, offline: true });
     expect(status.text).toContain("offline");
-    expect(status.text).not.toContain("hint 2/3");
+    expect(status.text).not.toContain("hint 2/4");
   });
 
   it("explains each part in the tooltip", () => {
     const status = renderStatus({ ...base, hintLevel: 2, streakDays: 3, reviewDue: true });
-    expect(status.tooltip).toContain("Hint depth on this problem: 2 of 3");
+    expect(status.tooltip).toContain("Hint depth on this problem: 2 of 4");
     expect(status.tooltip).toContain("Practice streak: 3 days");
     expect(status.tooltip).toContain("spaced review is ready");
     expect(status.tooltip).toContain("Click to open the tutor panel");

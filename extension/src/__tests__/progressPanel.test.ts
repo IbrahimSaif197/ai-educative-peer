@@ -31,7 +31,7 @@ describe("buildProgressHtml", () => {
 
   it("renders struggle bars at the right width", () => {
     const html = buildProgressHtml(
-      report({ concept_struggles: [{ concept: "recursion", encounters: 3, avg_level: 3 }] })
+      report({ concept_struggles: [{ concept: "recursion", encounters: 3, avg_level: 4 }] })
     );
     expect(html).toContain("recursion");
     // Geometry lives in SVG attributes, not style attributes, so the panel
@@ -41,9 +41,22 @@ describe("buildProgressHtml", () => {
 
   it("scales a partial struggle bar", () => {
     const html = buildProgressHtml(
-      report({ concept_struggles: [{ concept: "loops", encounters: 2, avg_level: 1.5 }] })
+      report({ concept_struggles: [{ concept: "loops", encounters: 2, avg_level: 2 }] })
     );
     expect(html).toContain('width="50"');
+  });
+
+  /**
+   * `_update_concept_stats` counts level-4 hints, so an average above 3 is
+   * ordinary. Scaling against 3 pinned every deep concept at a full bar and
+   * read out "average hint depth 3.5 of 3" to a screen reader.
+   */
+  it("scales concept bars against the top rung, not a stale max of three", () => {
+    const html = buildProgressHtml(
+      report({ concept_struggles: [{ concept: "recursion", encounters: 3, avg_level: 3.5 }] })
+    );
+    expect(html).toContain("average hint depth 3.5 of 4");
+    expect(html).toContain('width="88"');
   });
 
   it("shows the review banner only when due", () => {
@@ -103,6 +116,7 @@ describe("hint level distribution", () => {
     expect(html).toContain("seg--1");
     expect(html).toContain("seg--2");
     expect(html).toContain("seg--3");
+    expect(html).toContain("seg--4");
     expect(html).toContain("60%");
   });
 
@@ -111,11 +125,23 @@ describe("hint level distribution", () => {
     expect(html).toContain("Level 1");
     expect(html).toContain("Level 2");
     expect(html).toContain("Level 3");
+    expect(html).toContain("Level 4");
   });
 
   it("survives an all-zero distribution", () => {
     const html = buildProgressHtml(report({ hint_level_counts: { "1": 0, "2": 0, "3": 0 } }));
     expect(html).toContain("no depth to report");
+  });
+
+  it("counts a fourth-level hint in its own segment, not folded into level 3", () => {
+    const html = buildProgressHtml(
+      report({ hint_level_counts: { "1": 0, "2": 0, "3": 0, "4": 1 } })
+    );
+    expect(html).toContain("seg--4");
+    expect(html).toContain("needed a worked example");
+    expect(html).toContain("Level 4 — needed a worked example · 1 (100%)");
+    // The level-3 bucket must stay untouched by the level-4 ask.
+    expect(html).toContain("Level 3 — needed pseudocode · 0 (0%)");
   });
 });
 

@@ -2,6 +2,7 @@ import {
   AttemptTracker,
   HINT_COOLDOWN_MS,
   MAX_EDIT_SUMMARY_CHARS,
+  isAnswerRequest,
   isAttempt,
   nudgeForUnchangedCode,
   summarizeEdit,
@@ -310,5 +311,56 @@ describe("AttemptTracker — answering counts as trying", () => {
       expect(tracker.evaluate("file", CODE, at, true).escalate).toBe(true);
       tracker.record("file", CODE, at);
     }
+  });
+});
+
+describe("isAnswerRequest", () => {
+  it.each([
+    "tell me the answer",
+    "just tell me the answer",
+    "give me the answer",
+    "show me the answer",
+    "what is the answer",
+    "whats the answer",
+    "show me the solution",
+    "just fix it",
+    "show me the code",
+  ])("matches %p", (message) => {
+    expect(isAnswerRequest(message)).toBe(true);
+  });
+
+  it("strips padding the way isAttempt does", () => {
+    expect(isAnswerRequest("i really just want the answer please")).toBe(false);
+    expect(isAnswerRequest("ok please just tell me the answer")).toBe(true);
+  });
+
+  it("ignores case and punctuation", () => {
+    expect(isAnswerRequest("Just tell me the answer!")).toBe(true);
+  });
+
+  it("matches when it is one clause among several", () => {
+    expect(isAnswerRequest("i tried the loop. just tell me the answer")).toBe(true);
+  });
+
+  // The bare "tell me" is in GIVE_UP but is far too vague to mean "solve it
+  // for me" - "tell me more" and "tell me about ranges" both start that way.
+  it("does not match the bare 'tell me'", () => {
+    expect(isAnswerRequest("tell me")).toBe(false);
+    expect(isAnswerRequest("tell me more about ranges")).toBe(false);
+  });
+
+  it("does not match giving up", () => {
+    expect(isAnswerRequest("i dont know")).toBe(false);
+    expect(isAnswerRequest("i give up")).toBe(false);
+  });
+
+  it("does not match an ordinary question", () => {
+    expect(isAnswerRequest("what does range do")).toBe(false);
+    expect(isAnswerRequest("is the answer 5")).toBe(false);
+  });
+
+  it("does not match empty input", () => {
+    expect(isAnswerRequest("")).toBe(false);
+    expect(isAnswerRequest("   ")).toBe(false);
   });
 });

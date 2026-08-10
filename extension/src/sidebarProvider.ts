@@ -1,7 +1,7 @@
 import * as crypto from "crypto";
 import * as vscode from "vscode";
 import { ApiClient, AuthError, ChatTurn, RateLimitError } from "./apiClient";
-import { AttemptTracker, isAttempt, nudgeForUnchangedCode } from "./attemptTracker";
+import { AttemptTracker, isAnswerRequest, isAttempt, nudgeForUnchangedCode } from "./attemptTracker";
 import { AuthManager } from "./authManager";
 import { stripBugMarkers } from "./bugMarkers";
 import { FirebaseClient } from "./firebaseClient";
@@ -492,6 +492,13 @@ export class EduPeerSidebarProvider implements vscode.WebviewViewProvider {
     if (mode === "hint" && looksLikeErrorText(question)) {
       mode = "explain-error";
     }
+    // Asked outright for the answer. Routed here, before the attempt gate, so
+    // it neither advances nor spends a rung — and so the three of these
+    // phrases that also sit in `GIVE_UP` never reach it to be scored as
+    // giving up.
+    if (mode === "hint" && isAnswerRequest(question)) {
+      mode = "answer";
+    }
     const filled = questionForMode(mode, question);
     // Judged on what the student typed, not on the canned wrapper
     // `questionForMode` may have put around it.
@@ -695,7 +702,15 @@ export class EduPeerSidebarProvider implements vscode.WebviewViewProvider {
         hint: res.hint,
         hint_level: res.hint_level,
         concept_tags: res.concept_tags,
-        mode,
+        // The mode the backend *ran*, not the one asked for: at the top of the
+        // ladder a `hint` request comes back as `worked-example`, and the card
+        // is titled — and its "Label the steps" action gated — from this.
+        // Falls back to the request mode for a backend too old to report one.
+        //
+        // Only the label moves. `attempts.record` and the level event above
+        // stay keyed on the request mode: re-key them here and rung 4 stops
+        // spending its rung, which strands the ladder at 4 forever.
+        mode: res.mode ?? mode,
       });
       await this.sendBadges();
     } catch (err: any) {

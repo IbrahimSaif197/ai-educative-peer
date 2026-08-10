@@ -946,9 +946,206 @@ git commit -m "The panel shows four rungs, and the worked example arrives withou
 
 ---
 
+### Task 8: The depth stat counts a fourth rung
+
+Added after Task 1's review caught it. Not in the original spec — the ladder's
+top moved but the per-level counters that feed the progress dashboard did not,
+so every level-4 ask is recorded as a level-3 one and the "needed pseudocode"
+share is permanently overstated. Independent of Tasks 2-7; run it last.
+
+**Files:**
+- Modify: `backend/firebase_service.py:141-147` (`_update_hint_level_counts`), `:319-321`, `:540`
+- Modify: `backend/progress.py:165-175` (`hint_level_counts`)
+- Modify: `extension/src/progressPanel.ts:51-75` (`levelDistribution`) and the stylesheet defining `.seg--1..3` / `.key--1..3`
+- Test: `backend/tests/test_firebase_service.py`, `backend/tests/test_progress.py`, `backend/tests/test_audit_regressions.py`
+
+**Interfaces:**
+- Consumes: `MAX_HINT_LEVEL` from `models.py` (Task 1).
+- Produces: nothing downstream.
+
+- [ ] **Step 1: Write the failing tests**
+
+Append to `backend/tests/test_firebase_service.py`:
+
+```python
+class TestTheCountersReachLevelFour:
+    """The ladder grew a fourth rung; these counters have to grow with it.
+
+    Clamping at 3 does not lose the ask - it silently files it under level 3,
+    so the dashboard reports pseudocode hints that were really worked examples.
+    """
+
+    def test_a_level_four_ask_lands_in_its_own_bucket(self):
+        from firebase_service import _update_hint_level_counts
+        assert _update_hint_level_counts(None, 4) == {"1": 0, "2": 0, "3": 0, "4": 1}
+
+    def test_an_over_range_level_still_clamps_to_the_top(self):
+        from firebase_service import _update_hint_level_counts
+        assert _update_hint_level_counts(None, 99)["4"] == 1
+
+    def test_an_existing_three_bucket_document_gains_a_fourth(self):
+        # Documents written before the fourth rung have no "4" key.
+        from firebase_service import _update_hint_level_counts
+        old = {"1": 5, "2": 2, "3": 1}
+        assert _update_hint_level_counts(old, 4) == {"1": 5, "2": 2, "3": 1, "4": 1}
+```
+
+Update the two existing assertions in that file that pin the three-key shape:
+`_update_hint_level_counts(None, 2) == {"1": 0, "2": 1, "3": 0}` gains `"4": 0`,
+and `_update_hint_level_counts(None, 99)["3"] == 1` becomes `["4"] == 1` (it is
+superseded by the new test above — delete the old one rather than keep both).
+
+Append to `backend/tests/test_progress.py`:
+
+```python
+    def test_hint_level_counts_reports_four_buckets(self):
+        assert hint_level_counts({}) == {"1": 0, "2": 0, "3": 0, "4": 0}
+
+    def test_hint_level_counts_reads_a_fourth_bucket(self):
+        data = {"hint_level_counts": {"1": 5, "2": 2, "3": 1, "4": 3}}
+        assert hint_level_counts(data) == {"1": 5, "2": 2, "3": 1, "4": 3}
+
+    def test_a_legacy_document_without_a_fourth_bucket_reads_zero(self):
+        data = {"hint_level_counts": {"1": 5, "2": 2, "3": 1}}
+        assert hint_level_counts(data)["4"] == 0
+```
+
+Then update every other assertion in `test_progress.py` and
+`test_audit_regressions.py` that spells out the three-key dict to carry `"4"`.
+
+- [ ] **Step 2: Run the tests to verify they fail**
+
+Run: `backend/.venv/Scripts/python.exe -m pytest tests/test_firebase_service.py tests/test_progress.py -q` from `backend/`
+
+Expected: FAIL — `KeyError: '4'` and dict-shape mismatches.
+
+- [ ] **Step 3: Widen the writer**
+
+In `backend/firebase_service.py`, add `from models import MAX_HINT_LEVEL` to the existing imports, then replace `_update_hint_level_counts`:
+
+```python
+# The buckets the ladder can land in, as string keys because Firestore map
+# keys are strings. Derived from MAX_HINT_LEVEL so a future rung cannot be
+# added to the ladder while these counters keep quietly filing it under the
+# old top - which is exactly what happened when the ladder grew to four.
+LEVEL_KEYS = tuple(str(n) for n in range(1, MAX_HINT_LEVEL + 1))
+
+
+def _update_hint_level_counts(
+    counts: Optional[Dict[str, Any]], hint_level: int
+) -> Dict[str, int]:
+    result = {key: int((counts or {}).get(key, 0)) for key in LEVEL_KEYS}
+    key = str(max(1, min(MAX_HINT_LEVEL, int(hint_level))))
+    result[key] += 1
+    return result
+```
+
+Then replace the two other hardcoded tuples in the same file with `LEVEL_KEYS`:
+the `for key in ("1", "2", "3")` at line 321, and the `("1", "2", "3")`
+argument passed to `_merge_counters` at line 540.
+
+- [ ] **Step 4: Widen the reader**
+
+In `backend/progress.py`, add `from models import MAX_HINT_LEVEL` to the imports and change the loop in `hint_level_counts` (line 170):
+
+```python
+    for level in (str(n) for n in range(1, MAX_HINT_LEVEL + 1)):
+```
+
+- [ ] **Step 5: Run the backend tests to verify they pass**
+
+Run: `backend/.venv/Scripts/python.exe -m pytest -q` from `backend/`
+
+Expected: PASS. Any remaining failure is another test spelling out the
+three-key dict — update it in place; do not delete it.
+
+- [ ] **Step 6: Make the dashboard segment data-driven**
+
+`levelDistribution` in `extension/src/progressPanel.ts` hardcodes three
+segments, three widths and three legend rows. Rather than adding a fourth
+copy of each, drive it from a list so the next rung needs no edit here:
+
+```ts
+const LEVEL_BLURBS = [
+  "a question was enough",
+  "needed the line pointed out",
+  "needed pseudocode",
+  "needed a worked example",
+];
+
+function levelDistribution(counts: Record<string, number> | undefined): string {
+  const values = LEVEL_BLURBS.map((_, i) =>
+    Math.max(0, Number(counts?.[String(i + 1)] ?? 0))
+  );
+  const total = values.reduce((a, b) => a + b, 0);
+  if (!total) {
+    return `<p class="empty">No hints yet, so there's no depth to report.</p>`;
+  }
+  const pct = (n: number) => Math.round((n / total) * 100);
+
+  let x = 0;
+  const rects = values
+    .map((n, i) => {
+      const w = (n / total) * 100;
+      const rect = `<rect x="${x}" y="0" width="${w}" height="10" class="seg seg--${i + 1}"></rect>`;
+      x += w;
+      return rect;
+    })
+    .join("\n    ");
+
+  const label = values.map((n, i) => `${pct(n)}% at level ${i + 1}`).join(", ");
+  const legend = values
+    .map(
+      (n, i) =>
+        `<li><span class="key key--${i + 1}"></span>Level ${i + 1} — ${LEVEL_BLURBS[i]} · ${n} (${pct(n)}%)</li>`
+    )
+    .join("\n    ");
+
+  return `<svg class="stack" viewBox="0 0 100 10" preserveAspectRatio="none" role="img"
+       aria-label="Hint depth: ${label}">
+    ${rects}
+  </svg>
+  <ul class="legend">
+    ${legend}
+  </ul>`;
+}
+```
+
+Read the existing function first and keep whatever surrounding markup it
+returns that this snippet omits — the `</ul>` and any trailing content below
+line 75 are not shown above.
+
+- [ ] **Step 7: Add the fourth swatch to the stylesheet**
+
+Find the rules defining `.seg--3` and `.key--3` (grep `seg--3` under
+`extension/`) and add `.seg--4` / `.key--4` beside them, following the same
+shape.
+
+**This is the one judgment call in the task: the colour.** Continue the
+existing ramp rather than inventing a hue — read the three existing values and
+pick the next step in the same progression. If the ramp's direction is not
+obvious from three samples, stop and report DONE_WITH_CONCERNS naming the
+three existing values and what you chose, rather than guessing silently.
+
+- [ ] **Step 8: Run the extension tests**
+
+Run: `npm test` from `extension/`
+
+Expected: PASS. Update any `progressPanel` test asserting the three-segment
+markup in place.
+
+- [ ] **Step 9: Commit**
+
+```bash
+git add backend/firebase_service.py backend/progress.py backend/tests extension/src/progressPanel.ts extension
+git commit -m "The depth distribution counts the fourth rung instead of folding it into the third"
+```
+
+---
+
 ## Verification
 
-After Task 7, before merging:
+After Task 8, before merging:
 
 - [ ] `backend/.venv/Scripts/python.exe -m pytest -q` from `backend/` — all green
 - [ ] `npm test` from `extension/` — all green

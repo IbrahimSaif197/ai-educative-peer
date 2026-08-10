@@ -185,15 +185,26 @@ class TestCalibrationSummary:
 
 class TestHintLevelCounts:
     def test_missing_counts_are_zero(self):
-        assert hint_level_counts({}) == {"1": 0, "2": 0, "3": 0}
+        assert hint_level_counts({}) == {"1": 0, "2": 0, "3": 0, "4": 0}
 
     def test_reads_stored_counts(self):
         data = {"hint_level_counts": {"1": 5, "2": 2, "3": 1}}
-        assert hint_level_counts(data) == {"1": 5, "2": 2, "3": 1}
+        assert hint_level_counts(data) == {"1": 5, "2": 2, "3": 1, "4": 0}
 
     def test_garbage_values_fall_back_to_zero(self):
         data = {"hint_level_counts": {"1": "many", "2": None, "3": -4}}
-        assert hint_level_counts(data) == {"1": 0, "2": 0, "3": 0}
+        assert hint_level_counts(data) == {"1": 0, "2": 0, "3": 0, "4": 0}
+
+    def test_hint_level_counts_reports_four_buckets(self):
+        assert hint_level_counts({}) == {"1": 0, "2": 0, "3": 0, "4": 0}
+
+    def test_hint_level_counts_reads_a_fourth_bucket(self):
+        data = {"hint_level_counts": {"1": 5, "2": 2, "3": 1, "4": 3}}
+        assert hint_level_counts(data) == {"1": 5, "2": 2, "3": 1, "4": 3}
+
+    def test_a_legacy_document_without_a_fourth_bucket_reads_zero(self):
+        data = {"hint_level_counts": {"1": 5, "2": 2, "3": 1}}
+        assert hint_level_counts(data)["4"] == 0
 
 
 class TestActivityStrip:
@@ -235,5 +246,5 @@ class TestBuildProgressNewFields:
     def test_empty_profile_still_produces_the_new_keys(self):
         report = build_progress({}, TODAY)
         assert report["calibration"]["samples"] == 0
-        assert report["hint_level_counts"] == {"1": 0, "2": 0, "3": 0}
+        assert report["hint_level_counts"] == {"1": 0, "2": 0, "3": 0, "4": 0}
         assert len(report["activity"]) == 14

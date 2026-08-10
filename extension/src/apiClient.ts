@@ -71,10 +71,40 @@ function rateLimitErrorFrom(res: Response): RateLimitError {
   return new RateLimitError(Number.isFinite(header) && header > 0 ? header : 30);
 }
 
+/**
+ * Modes young enough that a backend may not have heard of them yet. Its
+ * `TutorMode` literal rejects the value outright, so the request comes back
+ * 422 — a perfectly ordinary HTTP response, which means the client stays
+ * "available" and the offline tutor never steps in. What the student saw was
+ * the raw validation JSON in an error banner.
+ *
+ * Every other mode this client sends has been in `TutorMode` since v1, so a
+ * 422 for one of those is a real contract breach and still surfaces.
+ */
+const DOWNGRADABLE_MODES = new Set(["answer"]);
+
+/**
+ * The same request as a plain hint, or undefined when the mode is old enough
+ * that a 422 cannot be version skew. Degrading rather than surfacing is the
+ * convention here — see `ProgressReport.calibration`.
+ */
+function withoutNewMode(req: HintRequest): HintRequest | undefined {
+  return req.mode && DOWNGRADABLE_MODES.has(req.mode) ? { ...req, mode: "hint" } : undefined;
+}
+
 export interface HintResponse {
   hint: string;
   hint_level: number;
   concept_tags: string[];
+  /**
+   * The mode the backend actually ran, which is not always the one asked for:
+   * a hint at the top of the ladder *is* the worked example. The panel labels
+   * each card from this, so dropping it titles a worked example "hint 4".
+   *
+   * Added in v2; absent when talking to an older backend, so callers fall back
+   * to the mode they requested.
+   */
+  mode?: string;
 }
 
 export interface LineFlag {
@@ -358,6 +388,18 @@ export class ApiClient {
     if (res.status === 429) {
       throw rateLimitErrorFrom(res);
     }
+    if (res.status === 422) {
+      // Version skew, most likely: ask again for the same thing in a mode
+      // every backend knows. `withoutNewMode` returns nothing the second time
+      // round, so this retries once and never loops.
+      const retry = withoutNewMode(req);
+      if (retry) {
+        const hint = await this.getHint(retry);
+        // An old backend answers no `mode` at all; name the one that ran so
+        // the panel does not title a Socratic hint "Answer".
+        return { ...hint, mode: hint.mode ?? retry.mode };
+      }
+    }
     if (!res.ok) {
       const text = await res.text();
       throw new Error(`Backend error (${res.status}): ${text}`);
@@ -399,6 +441,16 @@ export class ApiClient {
       // exhausted budget, so surface it and let the caller show the message.
       throw rateLimitErrorFrom(res);
     }
+    if (res.status === 422) {
+      // A mode this backend has never heard of. Retried once as a plain hint
+      // so the student gets taught something instead of reading validation
+      // JSON; `withoutNewMode` gives nothing back on the retry, so it stops.
+      const retry = withoutNewMode(req);
+      if (retry) {
+        const hint = await this.streamHint(retry, onEvent, signal);
+        return { ...hint, mode: hint.mode ?? retry.mode };
+      }
+    }
     if (!res.ok || !res.body) {
       throw new Error(`stream failed (${res.status})`);
     }
@@ -406,6 +458,10 @@ export class ApiClient {
     const decoder = new TextDecoder();
     let buffer = "";
     let level = req.hint_level ?? 1;
+    // The mode the backend reports running, which is not always `req.mode`.
+    // Left undefined when the meta event carries none, so the caller can tell
+    // "an older backend said nothing" from "it ran what I asked for".
+    let mode: string | undefined;
     let done: SseEvent | undefined;
     try {
       while (true) {
@@ -422,6 +478,7 @@ export class ApiClient {
           }
           if (event.type === "meta") {
             level = Number(event.hint_level ?? level);
+            if (typeof event.mode === "string") mode = event.mode;
           }
           if (event.type === "done") {
             done = event;
@@ -445,6 +502,7 @@ export class ApiClient {
       hint: String(done.hint ?? ""),
       hint_level: level,
       concept_tags: (done.concept_tags as string[]) ?? [],
+      mode,
     };
   }
 

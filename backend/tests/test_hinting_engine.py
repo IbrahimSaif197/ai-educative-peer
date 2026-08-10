@@ -42,15 +42,17 @@ class TestHintingEngine:
         hint, _ = engine.generate_hint("x[5]", "help", 2)
         assert hint == text
 
-    def test_level_clamped_to_3(self):
-        from hinting_engine import HintingEngine
+    def test_level_clamped_to_max_hint_level(self):
+        from hinting_engine import HintingEngine, clamp_hint_level
         engine = HintingEngine(api_key="test-key")
         engine.client = _make_mock_client("hint text. What do you think should happen next?")
         engine.generate_hint("", "q", 99)
+        # Level 99 clamps to MAX_HINT_LEVEL (4), which switches to worked-example mode.
+        # Worked-example mode doesn't include the hint_level in the user message.
+        assert clamp_hint_level(99) == 4
         call_kwargs = engine.client.chat.completions.create.call_args
-        # messages[0] is the system prompt, messages[1] is the user message
-        msg_content = call_kwargs.kwargs["messages"][1]["content"]
-        assert "hint_level: 3" in msg_content
+        system_content = call_kwargs.kwargs["messages"][0]["content"]
+        assert "WORKED EXAMPLE" in system_content
 
     def test_concept_tag_extraction_variables(self):
         engine = self._engine("Think about your variables. What do you think should happen next?")
@@ -805,3 +807,102 @@ class TestGenerateLineHintFocusWindow:
         # ...and a line well outside the cap stays hidden even though the
         # focus includes it.
         assert "code_010" not in message
+
+
+class TestTheFourthRungIsTheWorkedExample:
+    """Level 4 is not a fourth Socratic hint - it *is* the worked example.
+
+    The worked-example prompt was previously reachable only by a button in the
+    panel, which a stuck student had to notice at the moment they were least
+    likely to go looking. Reaching level 3 and asking again now gets there on
+    its own.
+    """
+
+    def _engine(self, response_text: str = "ok"):
+        from hinting_engine import HintingEngine
+        engine = HintingEngine(api_key="test-key")
+        engine.client = _make_mock_client(response_text)
+        return engine
+
+    def _system_message(self, engine):
+        messages = engine.client.chat.completions.create.call_args.kwargs["messages"]
+        return messages[0]["content"]
+
+    def test_effective_mode_is_worked_example_at_level_four(self):
+        from hinting_engine import effective_mode
+        assert effective_mode("hint", 4) == "worked-example"
+
+    def test_effective_mode_is_hint_below_level_four(self):
+        from hinting_engine import effective_mode
+        assert [effective_mode("hint", n) for n in (1, 2, 3)] == ["hint"] * 3
+
+    def test_effective_mode_leaves_other_modes_alone(self):
+        # A translate or reflect request is not on the ladder, so its level -
+        # whatever the client sent - must not turn it into a worked example.
+        from hinting_engine import effective_mode
+        assert effective_mode("translate", 4) == "translate"
+        assert effective_mode("reflect", 4) == "reflect"
+
+    def test_effective_mode_falls_back_to_hint_for_an_unknown_mode(self):
+        from hinting_engine import effective_mode
+        assert effective_mode("nonsense", 1) == "hint"
+
+    def test_a_level_four_ask_gets_the_worked_example_prompt(self):
+        engine = self._engine()
+        engine.generate_hint("x = 1", "still stuck", 4)
+        assert "WORKED EXAMPLE" in self._system_message(engine)
+
+    def test_a_level_three_ask_still_gets_the_socratic_prompt(self):
+        engine = self._engine()
+        engine.generate_hint("x = 1", "still stuck", 3)
+        system = self._system_message(engine)
+        assert "hint_level 3: pseudocode only" in system
+        assert "WORKED EXAMPLE" not in system
+
+    def test_streaming_gets_the_worked_example_prompt_too(self):
+        engine = self._engine()
+        chunk = MagicMock()
+        chunk.choices[0].delta.content = "hi"
+        engine.client.chat.completions.create.return_value = [chunk]
+        list(engine.stream_hint("x = 1", "still stuck", 4))
+        assert "WORKED EXAMPLE" in self._system_message(engine)
+
+
+class TestAnswerMode:
+    """Asked outright for the answer, the tutor gives it.
+
+    Everything else in EduPeer withholds. This one mode does not - a student
+    who has decided they want the answer will get it somewhere, and getting it
+    here, with the bug named and the reasoning attached, beats getting it from
+    a search engine with neither.
+    """
+
+    def _engine(self, response_text: str = "ok"):
+        from hinting_engine import HintingEngine
+        engine = HintingEngine(api_key="test-key")
+        engine.client = _make_mock_client(response_text)
+        return engine
+
+    def _system_message(self, engine):
+        messages = engine.client.chat.completions.create.call_args.kwargs["messages"]
+        return messages[0]["content"]
+
+    def test_answer_mode_has_a_template(self):
+        from hinting_engine import MODE_SYSTEM_TEMPLATES
+        assert "answer" in MODE_SYSTEM_TEMPLATES
+
+    def test_answer_mode_selects_its_own_prompt(self):
+        engine = self._engine()
+        engine.generate_hint("x = 1", "just tell me the answer", 1, mode="answer")
+        assert "asked you outright for the answer" in self._system_message(engine)
+
+    def test_the_answer_prompt_bounds_what_it_shows(self):
+        from hinting_engine import ANSWER_TEMPLATE
+        prompt = ANSWER_TEMPLATE.format(language="Python")
+        assert "ONLY the line" in prompt
+        assert "Never the whole function" in prompt
+
+    def test_answer_mode_is_not_swapped_for_a_worked_example_at_level_four(self):
+        # It is not on the ladder, so the level it happens to carry is inert.
+        from hinting_engine import effective_mode
+        assert effective_mode("answer", 4) == "answer"

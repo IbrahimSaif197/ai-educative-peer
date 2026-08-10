@@ -125,16 +125,22 @@ offer Quick Fix actions ("nudge me on this line", "explain this line"), and a
 
 ## How hinting works
 
-Each call to `POST /hint` advances the hint level (1 → 2 → 3) for the same user
-and problem within a session. The ladder is keyed on the file you are working
-in, not on a hash of its contents, so editing your code deepens the hint
-instead of restarting it. Reset the session to start over at level 1.
+Each call to `POST /hint` advances the hint level (1 → 2 → 3 → 4) for the same
+user and problem within a session. The ladder is keyed on the file you are
+working in, not on a hash of its contents, so editing your code deepens the
+hint instead of restarting it. Reset the session to start over at level 1.
 
 - **Level 1** — one guiding question.
 - **Level 2** — points out the specific line/concept and briefly explains it.
 - **Level 3** — pseudocode only, never real code in the student's language.
+- **Level 4** — a fully worked example of the same concept on a *different*
+  problem. You reach it by asking again at level 3; there is no button for it,
+  because a worked example is the last rung of the ladder rather than a
+  shortcut past it. The response comes back with `mode: "worked-example"`.
 
-Every response ends with "What do you think should happen next?".
+Levels 1–3 close with a question whenever the tutor is genuinely waiting on
+you, worded freshly each time rather than as a stock sentence. Level 4 closes
+by asking you to name what each numbered step accomplishes.
 
 The tutor also remembers the recent conversation: the sidebar sends the last
 few student/tutor turns with each question, so follow-ups like "I tried that
@@ -253,8 +259,11 @@ All endpoints except `GET /health`, `GET /auth/config`, and `GET /auth/login` re
 
 ## Tutor modes
 
-`POST /hint` takes a `mode` field. Only `hint` advances the 1→2→3 level; the
-rest are one-shot teaching moves the sidebar triggers contextually:
+`POST /hint` takes a `mode` field. Only `hint` advances the 1→2→3→4 level; the
+rest are one-shot teaching moves the sidebar triggers contextually. The
+response carries a `mode` of its own — the mode the backend *actually* ran,
+which is not always the one asked for — and the panel labels each card from
+it:
 
 - **hint** — the progressive Socratic flow, with an optional, skippable
   "explain the code first" step. The step is keyed on the exact state of your
@@ -264,8 +273,16 @@ rest are one-shot teaching moves the sidebar triggers contextually:
   short quiz question about *why* the fix works.
 - **translate** — after a level-3 pseudocode hint, submit your code
   translation and get feedback on the translation only.
-- **worked-example** — still stuck at level 3? A fully worked example of the
-  same concept on a *different* problem.
+- **worked-example** — level 4 of the ladder rather than a mode you ask for: a
+  `hint` request that lands on the top rung runs the worked example and says
+  so in the response's `mode`. A fully worked example of the same concept on a
+  *different* problem, as unlabelled numbered steps.
+- **answer** — ask outright ("just tell me the answer", "show me the
+  solution") and you get it: the bug named in one sentence, only the lines
+  that change, and why the original was wrong. Recognised from what you typed,
+  so there is no button. It sits outside the ladder — asking for the answer
+  neither advances nor spends a rung, and it skips the "explain it first" step
+  rather than holding the answer behind a question.
 - **explain-error** — paste a stack trace (auto-detected) or run
   `EduPeer: Explain This Error`; teaches you to *read* the error, not the fix.
 - **subgoal-label** — a worked example arrives as unlabelled numbered steps;

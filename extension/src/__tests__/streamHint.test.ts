@@ -69,6 +69,28 @@ describe("streamHint", () => {
     expect(res.hint_level).toBe(3);
   });
 
+  it("reports the mode from meta, so a rung-4 worked example is not labelled a hint", async () => {
+    // The backend answers `mode` on the meta event because the mode it ran is
+    // not always the one asked for: `hint` at the top of the ladder *is* the
+    // worked example. Dropping it here is what left the panel titling a worked
+    // example "hint 4" and the "Label the steps" action unreachable.
+    stubStream([
+      frame({ type: "meta", hint_level: 4, mode: "worked-example" }),
+      frame({ type: "done", hint: "h", concept_tags: [] }),
+    ]);
+    const res = await new ApiClient(BASE, tokens()).streamHint(req, () => {});
+    expect(res.mode).toBe("worked-example");
+  });
+
+  it("leaves the mode unset when an older backend's meta omits it", async () => {
+    stubStream([
+      frame({ type: "meta", hint_level: 2 }),
+      frame({ type: "done", hint: "h", concept_tags: [] }),
+    ]);
+    const res = await new ApiClient(BASE, tokens()).streamHint(req, () => {});
+    expect(res.mode).toBeUndefined();
+  });
+
   it("forwards every event to the callback in order", async () => {
     stubStream([
       frame({ type: "meta", hint_level: 1 }),

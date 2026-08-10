@@ -5,6 +5,8 @@ from typing import Dict, Tuple
 
 from firebase_admin import firestore
 
+from models import MAX_HINT_LEVEL
+
 
 def code_fingerprint(code: str) -> str:
     normalized = "\n".join(line.rstrip() for line in code.strip().splitlines())
@@ -32,13 +34,17 @@ SESSION_IDLE_SECONDS = 1800.0
 def resolve_level(current: int, escalate: bool) -> int:
     """The level an ask should answer at, given the level already spent.
 
-    Escalating advances by one and stops at 3. Not escalating re-uses the
-    level, with a floor of 1 so a first-ever non-escalating ask still gets a
-    level-1 hint.
+    Escalating advances by one and stops at `MAX_HINT_LEVEL`. Not escalating
+    re-uses the level, with a floor of 1 so a first-ever non-escalating ask
+    still gets a level-1 hint.
+
+    The top rung is the worked example rather than a fourth Socratic hint:
+    capping at 3 meant a stuck student got the same pseudocode back for every
+    remaining ask, which is the loop this exists to break.
     """
     if escalate:
-        return min(3, current + 1)
-    return max(1, min(3, current))
+        return min(MAX_HINT_LEVEL, current + 1)
+    return max(1, min(MAX_HINT_LEVEL, current))
 
 
 class InMemorySessionStore:
@@ -63,7 +69,7 @@ class InMemorySessionStore:
     def commit_hint_level(self, user_id: str, fingerprint: str, level: int) -> None:
         """Record that `level` was actually delivered for this code."""
         key = (user_id, fingerprint)
-        self._levels[key] = max(1, min(3, int(level)))
+        self._levels[key] = max(1, min(MAX_HINT_LEVEL, int(level)))
         self._levels.move_to_end(key)
         while len(self._levels) > self._max_entries:
             self._levels.popitem(last=False)
@@ -170,7 +176,7 @@ class FirestoreSessionStore:
                 {
                     "user_id": user_id,
                     "fingerprint": fingerprint,
-                    "hint_level": max(1, min(3, int(level))),
+                    "hint_level": max(1, min(MAX_HINT_LEVEL, int(level))),
                     "updated_at": firestore.SERVER_TIMESTAMP,
                 },
                 timeout=self.TIMEOUT,

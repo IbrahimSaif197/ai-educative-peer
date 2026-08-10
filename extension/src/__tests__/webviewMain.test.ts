@@ -392,21 +392,48 @@ describe("rendering a hint", () => {
     expect(lastTurn().querySelector(".turn__eyebrow")!.textContent).toBe("Worked example");
   });
 
-  it("offers translation and worked-example actions at depth three", () => {
+  it("offers the translation action at depth three", () => {
     post({ type: "hint", hint: "h", hint_level: 3, concept_tags: [], mode: "hint" });
     const labels = $$(".actions button").map((b) => b.textContent);
-    expect(labels).toEqual(["Submit my translation", "Show a worked example"]);
+    expect(labels).toEqual(["Submit my translation"]);
   });
 
   it("offers step labelling after a worked example", () => {
     post({ type: "hint", hint: "1. do a thing", hint_level: 1, concept_tags: [], mode: "worked-example" });
     expect($$(".actions button").map((b) => b.textContent)).toEqual(["Label the steps"]);
   });
+});
 
-  it("asks for a worked example when that action is clicked", () => {
+describe("the fourth rung", () => {
+  it("renders four dots on the ladder", () => {
+    post({ type: "hint", hint: "h", hint_level: 1, concept_tags: [], mode: "hint" });
+    expect(document.querySelectorAll(".ladder__dot").length).toBe(4);
+  });
+
+  it("fills all four at level four", () => {
+    post({ type: "hint", hint: "h", hint_level: 4, concept_tags: [], mode: "worked-example" });
+    expect(document.querySelectorAll(".ladder__dot.is-on").length).toBe(4);
+  });
+
+  it("keeps the ladder on a level-four worked example", () => {
+    // It arrives as mode "worked-example", but it is still rung four - the
+    // student needs to see they have reached the end of the ladder.
+    post({ type: "hint", hint: "1. do a thing", hint_level: 4, concept_tags: [], mode: "worked-example" });
+    expect(document.querySelector(".ladder")).not.toBeNull();
+    expect(document.querySelector(".turn__eyebrow")?.textContent).toBe("Worked example");
+  });
+
+  it("shows no ladder on an answer card", () => {
+    post({ type: "hint", hint: "Line 11 should be...", hint_level: 1, concept_tags: [], mode: "answer" });
+    expect(document.querySelector(".ladder")).toBeNull();
+    expect(document.querySelector(".turn__eyebrow")?.textContent).toBe("Answer");
+  });
+
+  it("no longer offers a worked-example button at level three", () => {
     post({ type: "hint", hint: "h", hint_level: 3, concept_tags: [], mode: "hint" });
-    ($$(".actions button")[1] as HTMLButtonElement).click();
-    expect(lastSent("askHint").mode).toBe("worked-example");
+    const labels = [...document.querySelectorAll("button")].map((b) => b.textContent);
+    expect(labels).not.toContain("Show a worked example");
+    expect(labels).toContain("Submit my translation");
   });
 });
 
@@ -1126,7 +1153,7 @@ describe("webview — the hint ladder lives in the card", () => {
     post({ type: "hint", hint: "why is it empty?", hint_level: 2, concept_tags: [], mode: "hint" });
 
     const dots = $$(".turn--tutor .ladder__dot");
-    expect(dots).toHaveLength(3);
+    expect(dots).toHaveLength(4);
     expect($$(".turn--tutor .ladder__dot.is-on")).toHaveLength(2);
   });
 

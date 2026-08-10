@@ -1,5 +1,6 @@
 import * as vscode from "vscode";
 import { EduPeerSidebarProvider } from "../sidebarProvider";
+import { AttemptTracker } from "../attemptTracker";
 import { AuthError, RateLimitError } from "../apiClient";
 import { formatTestFailureQuestion } from "../pedagogy";
 
@@ -2091,5 +2092,116 @@ describe("selecting text is not an edit", () => {
     await provider["handleAsk"]("i changed it", "code", "hint");
 
     expect(hintRequest(api).edit_summary).toContain("total += 2");
+  });
+});
+
+describe("answer on request", () => {
+  beforeEach(() => mock.__reset());
+
+  it("routes an outright request to answer mode", async () => {
+    const h = await build();
+    await h.send({ type: "askHint", question: "just tell me the answer", code: CODE, mode: "hint" });
+    expect(hintRequest(h.api).mode).toBe("answer");
+  });
+
+  it("leaves an ordinary question in hint mode", async () => {
+    const h = await build();
+    await askPastTheGate(h, "what does range do");
+    expect(hintRequest(h.api).mode).toBe("hint");
+  });
+
+  it("skips the explain-first gate", async () => {
+    // Explain-first guards hint mode only. An answer request must not be held
+    // behind "explain it in your own words" before the student sees anything —
+    // note this test deliberately uses h.send directly rather than
+    // askPastTheGate, because the gate firing at all is the failure.
+    const h = await build();
+    await h.send({ type: "askHint", question: "just tell me the answer", code: CODE, mode: "hint" });
+    expect(latest(h.posted, "explainFirst")).toBeUndefined();
+  });
+
+  it("does not spend a rung", async () => {
+    // `mode` on the outgoing request is set from the caller-supplied
+    // parameter regardless of whether the ladder ran, so asserting on it
+    // alone (as the other tests in this block do — routing is already
+    // covered there) would not catch a regression that broadened the ladder
+    // gate in `handleAsk` from `mode === "hint"` to
+    // `mode === "hint" || mode === "answer"`. Spying on the tracker itself is
+    // what actually watches the ladder: `evaluate` must not run for the
+    // answer-mode ask, and `record` — the call that spends the rung — must
+    // not either. The first real hint that follows should then still find no
+    // prior attempt for this problem key and start the ladder at 1.
+    const evaluateSpy = jest.spyOn(AttemptTracker.prototype, "evaluate");
+    const recordSpy = jest.spyOn(AttemptTracker.prototype, "record");
+    const h = await build();
+
+    await h.send({ type: "askHint", question: "show me the solution", code: CODE, mode: "hint" });
+    expect(evaluateSpy).not.toHaveBeenCalled();
+    expect(recordSpy).not.toHaveBeenCalled();
+
+    await askPastTheGate(h);
+    expect(hintRequest(h.api).mode).toBe("hint");
+    expect(evaluateSpy).toHaveBeenCalledTimes(1);
+    expect(recordSpy).toHaveBeenCalledTimes(1);
+
+    evaluateSpy.mockRestore();
+    recordSpy.mockRestore();
+  });
+});
+
+describe("the card is labelled with the mode the backend actually ran", () => {
+  beforeEach(() => mock.__reset());
+
+  /**
+   * Rung 4 *is* the worked example: the request goes out as `hint`, and the
+   * backend answers `mode: "worked-example"`. Posting the request mode instead
+   * titles a worked example "hint 4" and — because `media/main.js` gates the
+   * "Label the steps" action on `mode === "worked-example"` — leaves
+   * subgoal-labelling unreachable now that the button that used to produce
+   * that mode is gone.
+   */
+  it("posts the response mode, not the mode the request asked for", async () => {
+    const h = await build({
+      streamHint: jest.fn(async () => ({
+        hint: "Here is the same idea on a different problem…",
+        hint_level: 4,
+        concept_tags: ["loops"],
+        mode: "worked-example",
+      })),
+    });
+    await askPastTheGate(h);
+    expect(latest(h.posted, "hint").mode).toBe("worked-example");
+  });
+
+  it("falls back to the request mode when an older backend sends none", async () => {
+    const h = await build({
+      streamHint: jest.fn(async () => ({ hint: "h", hint_level: 2, concept_tags: [] })),
+    });
+    await askPastTheGate(h);
+    expect(latest(h.posted, "hint").mode).toBe("hint");
+  });
+
+  /**
+   * The guard against fixing the label by re-keying the ladder: `record` and
+   * the level event are keyed on the *request* mode. Keying them on the
+   * response mode would stop rung 4 spending the rung, and the ladder would
+   * sit at 4 forever.
+   */
+  it("still spends the rung when the backend answers with a different mode", async () => {
+    const levels: number[] = [];
+    const recordSpy = jest.spyOn(AttemptTracker.prototype, "record");
+    const h = await build({
+      streamHint: jest.fn(async () => ({
+        hint: "worked example",
+        hint_level: 4,
+        concept_tags: [],
+        mode: "worked-example",
+      })),
+    });
+    h.provider.onDidChangeHintLevel((level) => levels.push(level));
+    await askPastTheGate(h);
+    expect(recordSpy).toHaveBeenCalledTimes(1);
+    expect(levels).toEqual([4]);
+    recordSpy.mockRestore();
   });
 });

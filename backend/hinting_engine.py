@@ -6,7 +6,7 @@ from typing import List, Optional, Tuple
 from groq import Groq
 
 from languages import concepts_for, get_language
-from models import MAX_FOCUS_LABEL_CHARS
+from models import MAX_FOCUS_LABEL_CHARS, MAX_HINT_LEVEL
 
 # Appended to every system prompt. The student's file and message are data the
 # tutor discusses, not instructions it follows — without this, a "```" in the
@@ -161,6 +161,17 @@ RULES:
 - Keep responses under 120 words"""
 
 
+ANSWER_TEMPLATE = """You are EduPeer. The student has asked you outright for the answer, and this time they get it.
+
+RULES:
+- Name the bug in ONE sentence: what is wrong and where, citing the real line number
+- Then show ONLY the line or lines that change, corrected. Never the whole function, never the whole file
+- Then one short paragraph on WHY the original was wrong and why the fix works
+- Do not lecture them for asking, and do not half-withhold: they asked plainly, and a grudging answer is worse than none
+- If the code has more than one bug, answer the one they are asking about and say in a sentence that the others are there
+- Keep responses under 200 words"""
+
+
 MODE_SYSTEM_TEMPLATES = {
     "hint": SYSTEM_PROMPT_TEMPLATE,
     "reflect": REFLECT_TEMPLATE,
@@ -172,7 +183,35 @@ MODE_SYSTEM_TEMPLATES = {
     "review-exercise": REVIEW_EXERCISE_TEMPLATE,
     "subgoal-label": SUBGOAL_LABEL_TEMPLATE,
     "trace-check": TRACE_CHECK_TEMPLATE,
+    "answer": ANSWER_TEMPLATE,
 }
+
+
+def clamp_hint_level(hint_level: int) -> int:
+    """A usable rung number, whatever the client sent."""
+    try:
+        return max(1, min(MAX_HINT_LEVEL, int(hint_level)))
+    except (TypeError, ValueError):
+        return 1
+
+
+def effective_mode(mode: str, hint_level: int) -> str:
+    """The mode a request actually runs in, which is not always the one asked for.
+
+    The ladder's top rung *is* the worked example, so a level-4 ask in `hint`
+    mode runs `WORKED_EXAMPLE_TEMPLATE`. Two callers need to agree on this -
+    `_prepare_hint_messages` to pick the prompt, and `/hint` to tell the panel
+    what to label the card - so it is derived here once rather than in both.
+
+    Modes that are not on the ladder keep their own prompt no matter what level
+    the client sent: a `translate` request at level 4 is still a translation
+    check.
+    """
+    if mode not in MODE_SYSTEM_TEMPLATES:
+        mode = "hint"
+    if mode == "hint" and clamp_hint_level(hint_level) >= MAX_HINT_LEVEL:
+        return "worked-example"
+    return mode
 
 
 SCAN_SYSTEM_PROMPT_TEMPLATE = """You are EduPeer's static reviewer for beginner {language} code.
@@ -628,9 +667,8 @@ class HintingEngine:
         edit_summary: str = "",
         focus: Optional[dict] = None,
     ) -> Tuple[List[dict], str]:
-        level = max(1, min(3, int(hint_level)))
-        if mode not in MODE_SYSTEM_TEMPLATES:
-            mode = "hint"
+        level = clamp_hint_level(hint_level)
+        mode = effective_mode(mode, level)
         lang = get_language(language)
         system = (
             MODE_SYSTEM_TEMPLATES[mode].format(language=lang["display_name"])

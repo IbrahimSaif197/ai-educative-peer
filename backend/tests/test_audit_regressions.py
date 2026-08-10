@@ -96,14 +96,14 @@ class TestHintLadderKeyedOnProblem:
         assert first.json()["hint_level"] == 1
         assert second.json()["hint_level"] == 2
 
-    def test_ladder_stops_at_three(self, client):
+    def test_ladder_stops_at_four(self, client):
         levels = [
             client.post("/hint", json={
                 **VALID_HINT_PAYLOAD, "problem_key": "k", "escalate": True,
             }).json()["hint_level"]
             for _ in range(5)
         ]
-        assert levels == [1, 2, 3, 3, 3]
+        assert levels == [1, 2, 3, 4, 4]
 
     def test_asking_again_without_editing_holds_the_level(self, client):
         client.post("/hint", json={**VALID_HINT_PAYLOAD, "problem_key": "k", "escalate": True})
@@ -655,7 +655,7 @@ class TestNonHintModesDoNotDistortProgress:
     def test_non_hint_modes_do_not_move_the_hint_depth_chart(self, fake_firebase):
         self._write(fake_firebase, "hint", level=2)
         self._write(fake_firebase, "reflect")
-        assert fake_firebase.stored["u1"]["hint_level_counts"] == {"1": 0, "2": 1, "3": 0}
+        assert fake_firebase.stored["u1"]["hint_level_counts"] == {"1": 0, "2": 1, "3": 0, "4": 0}
 
     def test_non_hint_modes_do_not_score_calibration(self, fake_firebase):
         self._write(fake_firebase, "predict-output", level=1, confidence=3)

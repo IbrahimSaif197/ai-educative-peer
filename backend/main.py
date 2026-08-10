@@ -35,7 +35,7 @@ from models import (
 )
 from auth import get_current_uid, verify_token
 from cache import TtlCache
-from hinting_engine import build_engine
+from hinting_engine import build_engine, effective_mode
 from firebase_service import FirebaseService
 from languages import normalize_language
 from progress import build_progress, pacing_summary, review_due_concepts
@@ -268,7 +268,12 @@ async def hint(req: HintRequest, uid: str = Depends(rate_limited("hint"))) -> Hi
         mode=req.mode,
     )
 
-    return HintResponse(hint=hint_text, hint_level=level, concept_tags=concept_tags)
+    return HintResponse(
+        hint=hint_text,
+        hint_level=level,
+        concept_tags=concept_tags,
+        mode=effective_mode(req.mode, level),
+    )
 
 
 @app.post("/hint/stream")
@@ -286,7 +291,7 @@ async def hint_stream(req: HintRequest, uid: str = Depends(rate_limited("hint"))
         return f"data: {json.dumps(payload)}\n\n"
 
     def event_source():
-        yield sse({"type": "meta", "hint_level": level})
+        yield sse({"type": "meta", "hint_level": level, "mode": effective_mode(req.mode, level)})
         done = None
         try:
             for event in engine.stream_hint(
