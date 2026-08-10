@@ -978,3 +978,15 @@ class TestTheResponseCarriesItsEffectiveMode:
         monkeypatch.setattr(app_main.engine, "stream_hint", fake_stream)
         res = client.post("/hint/stream", json=VALID_HINT_PAYLOAD)
         assert '"mode": "hint"' in res.text
+
+
+class TestAnswerModeEndpoint:
+    def test_answer_mode_is_accepted(self, client):
+        payload = {**VALID_HINT_PAYLOAD, "mode": "answer"}
+        assert client.post("/hint", json=payload).status_code == 200
+
+    def test_answer_mode_does_not_move_the_ladder(self, client):
+        # Asking for the answer is neither an attempt nor a rung spent.
+        client.post("/hint", json=VALID_HINT_PAYLOAD)  # level 1
+        client.post("/hint", json={**VALID_HINT_PAYLOAD, "mode": "answer"})
+        assert client.post("/hint", json=VALID_HINT_PAYLOAD).json()["hint_level"] == 2

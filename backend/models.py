@@ -12,7 +12,7 @@ class ChatTurn(BaseModel):
 TutorMode = Literal[
     "hint", "reflect", "translate", "worked-example",
     "explain-error", "explain-concept", "predict-output", "review-exercise",
-    "subgoal-label", "trace-check",
+    "subgoal-label", "trace-check", "answer",
 ]
 
 # Longest edit summary accepted from a client. Diffs are built client-side, so

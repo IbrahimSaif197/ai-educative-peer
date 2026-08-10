@@ -866,3 +866,43 @@ class TestTheFourthRungIsTheWorkedExample:
         engine.client.chat.completions.create.return_value = [chunk]
         list(engine.stream_hint("x = 1", "still stuck", 4))
         assert "WORKED EXAMPLE" in self._system_message(engine)
+
+
+class TestAnswerMode:
+    """Asked outright for the answer, the tutor gives it.
+
+    Everything else in EduPeer withholds. This one mode does not - a student
+    who has decided they want the answer will get it somewhere, and getting it
+    here, with the bug named and the reasoning attached, beats getting it from
+    a search engine with neither.
+    """
+
+    def _engine(self, response_text: str = "ok"):
+        from hinting_engine import HintingEngine
+        engine = HintingEngine(api_key="test-key")
+        engine.client = _make_mock_client(response_text)
+        return engine
+
+    def _system_message(self, engine):
+        messages = engine.client.chat.completions.create.call_args.kwargs["messages"]
+        return messages[0]["content"]
+
+    def test_answer_mode_has_a_template(self):
+        from hinting_engine import MODE_SYSTEM_TEMPLATES
+        assert "answer" in MODE_SYSTEM_TEMPLATES
+
+    def test_answer_mode_selects_its_own_prompt(self):
+        engine = self._engine()
+        engine.generate_hint("x = 1", "just tell me the answer", 1, mode="answer")
+        assert "asked you outright for the answer" in self._system_message(engine)
+
+    def test_the_answer_prompt_bounds_what_it_shows(self):
+        from hinting_engine import ANSWER_TEMPLATE
+        prompt = ANSWER_TEMPLATE.format(language="Python")
+        assert "ONLY the line" in prompt
+        assert "Never the whole function" in prompt
+
+    def test_answer_mode_is_not_swapped_for_a_worked_example_at_level_four(self):
+        # It is not on the ladder, so the level it happens to carry is inert.
+        from hinting_engine import effective_mode
+        assert effective_mode("answer", 4) == "answer"
