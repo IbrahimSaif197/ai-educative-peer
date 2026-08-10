@@ -404,11 +404,10 @@ class TestCalibrationCounters:
 class TestHintLevelAndActivityCounters:
     def test_level_counted_into_its_bucket(self):
         from firebase_service import _update_hint_level_counts
-        assert _update_hint_level_counts(None, 2) == {"1": 0, "2": 1, "3": 0}
+        assert _update_hint_level_counts(None, 2) == {"1": 0, "2": 1, "3": 0, "4": 0}
 
-    def test_out_of_range_level_is_clamped(self):
+    def test_a_too_low_level_is_clamped_to_one(self):
         from firebase_service import _update_hint_level_counts
-        assert _update_hint_level_counts(None, 99)["3"] == 1
         assert _update_hint_level_counts(None, 0)["1"] == 1
 
     def test_activity_increments_today(self):
@@ -450,3 +449,25 @@ class TestHintLevelAndActivityCounters:
     def test_merge_activity_skips_corrupt_entries(self):
         from firebase_service import _merge_activity
         assert _merge_activity({"2026-08-04": None}, {"2026-08-04": 2}) == {"2026-08-04": 2}
+
+
+class TestTheCountersReachLevelFour:
+    """The ladder grew a fourth rung; these counters have to grow with it.
+
+    Clamping at 3 does not lose the ask - it silently files it under level 3,
+    so the dashboard reports pseudocode hints that were really worked examples.
+    """
+
+    def test_a_level_four_ask_lands_in_its_own_bucket(self):
+        from firebase_service import _update_hint_level_counts
+        assert _update_hint_level_counts(None, 4) == {"1": 0, "2": 0, "3": 0, "4": 1}
+
+    def test_an_over_range_level_still_clamps_to_the_top(self):
+        from firebase_service import _update_hint_level_counts
+        assert _update_hint_level_counts(None, 99)["4"] == 1
+
+    def test_an_existing_three_bucket_document_gains_a_fourth(self):
+        # Documents written before the fourth rung have no "4" key.
+        from firebase_service import _update_hint_level_counts
+        old = {"1": 5, "2": 2, "3": 1}
+        assert _update_hint_level_counts(old, 4) == {"1": 5, "2": 2, "3": 1, "4": 1}

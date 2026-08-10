@@ -7,6 +7,8 @@ can be tested without Firestore.
 from datetime import date, datetime, timedelta
 from typing import Any, Dict, List, Optional
 
+from models import MAX_HINT_LEVEL
+
 # A concept is a "struggle" when the student repeatedly needed deep hints and
 # a "strength" when they consistently solved at the first question.
 STRUGGLE_MIN_ENCOUNTERS = 2
@@ -167,7 +169,7 @@ def hint_level_counts(data: Optional[Dict[str, Any]]) -> Dict[str, int]:
     raw = (data or {}).get("hint_level_counts")
     raw = raw if isinstance(raw, dict) else {}
     counts = {}
-    for level in ("1", "2", "3"):
+    for level in (str(n) for n in range(1, MAX_HINT_LEVEL + 1)):
         try:
             counts[level] = max(0, int(raw.get(level, 0)))
         except (TypeError, ValueError):

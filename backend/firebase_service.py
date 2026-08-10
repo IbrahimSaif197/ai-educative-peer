@@ -8,6 +8,7 @@ from firebase_admin import credentials, firestore
 
 
 from languages import LANGUAGES
+from models import MAX_HINT_LEVEL
 from progress import classify_calibration
 
 BADGE_FIRST_QUESTION = "First Question"
@@ -138,11 +139,18 @@ def _update_calibration(
     return result
 
 
+# The buckets the ladder can land in, as string keys because Firestore map
+# keys are strings. Derived from MAX_HINT_LEVEL so a future rung cannot be
+# added to the ladder while these counters keep quietly filing it under the
+# old top - which is exactly what happened when the ladder grew to four.
+LEVEL_KEYS = tuple(str(n) for n in range(1, MAX_HINT_LEVEL + 1))
+
+
 def _update_hint_level_counts(
     counts: Optional[Dict[str, Any]], hint_level: int
 ) -> Dict[str, int]:
-    result = {key: int((counts or {}).get(key, 0)) for key in ("1", "2", "3")}
-    key = str(max(1, min(3, int(hint_level))))
+    result = {key: int((counts or {}).get(key, 0)) for key in LEVEL_KEYS}
+    key = str(max(1, min(MAX_HINT_LEVEL, int(hint_level))))
     result[key] += 1
     return result
 
@@ -318,7 +326,7 @@ class FirebaseService:
             level_counts = (
                 _update_hint_level_counts(data.get("hint_level_counts"), hint_level_used)
                 if is_hint
-                else {key: int((data.get("hint_level_counts") or {}).get(key, 0)) for key in ("1", "2", "3")}
+                else {key: int((data.get("hint_level_counts") or {}).get(key, 0)) for key in LEVEL_KEYS}
             )
             activity = _update_activity(data.get("activity"), today)
 
@@ -537,7 +545,7 @@ class FirebaseService:
                 ("calibrated", "overconfident", "underconfident"),
             )
             level_counts = _merge_counters(
-                src.get("hint_level_counts"), tgt.get("hint_level_counts"), ("1", "2", "3")
+                src.get("hint_level_counts"), tgt.get("hint_level_counts"), LEVEL_KEYS
             )
             activity = _merge_activity(src.get("activity"), tgt.get("activity"))
             badges = _apply_badge_rules(

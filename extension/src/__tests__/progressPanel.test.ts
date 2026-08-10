@@ -103,6 +103,7 @@ describe("hint level distribution", () => {
     expect(html).toContain("seg--1");
     expect(html).toContain("seg--2");
     expect(html).toContain("seg--3");
+    expect(html).toContain("seg--4");
     expect(html).toContain("60%");
   });
 
@@ -111,11 +112,23 @@ describe("hint level distribution", () => {
     expect(html).toContain("Level 1");
     expect(html).toContain("Level 2");
     expect(html).toContain("Level 3");
+    expect(html).toContain("Level 4");
   });
 
   it("survives an all-zero distribution", () => {
     const html = buildProgressHtml(report({ hint_level_counts: { "1": 0, "2": 0, "3": 0 } }));
     expect(html).toContain("no depth to report");
+  });
+
+  it("counts a fourth-level hint in its own segment, not folded into level 3", () => {
+    const html = buildProgressHtml(
+      report({ hint_level_counts: { "1": 0, "2": 0, "3": 0, "4": 1 } })
+    );
+    expect(html).toContain("seg--4");
+    expect(html).toContain("needed a worked example");
+    expect(html).toContain("Level 4 — needed a worked example · 1 (100%)");
+    // The level-3 bucket must stay untouched by the level-4 ask.
+    expect(html).toContain("Level 3 — needed pseudocode · 0 (0%)");
   });
 });
 
