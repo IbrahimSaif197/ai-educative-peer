@@ -152,10 +152,23 @@ describe("AttemptTracker", () => {
 });
 
 describe("nudgeForUnchangedCode", () => {
-  it("tells the student what unlocks a deeper hint", () => {
+  it("leads with telling the tutor what you tried, the fastest way out", () => {
     const text = nudgeForUnchangedCode(30_000);
-    expect(text).toContain("haven't changed anything");
+    expect(text).toContain("Tell me what you tried");
     expect(text).toContain("30s");
+  });
+
+  it("no longer claims nothing was typed", () => {
+    // `unchanged` now requires a give-up phrase, so this card fires *after*
+    // the student typed something. "You haven't changed anything yet" both
+    // misdescribed that and pointed only at the two slowest ways out.
+    const text = nudgeForUnchangedCode(30_000);
+    expect(text).not.toContain("haven't changed anything");
+  });
+
+  it("still offers editing and waiting", () => {
+    const text = nudgeForUnchangedCode(30_000);
+    expect(text).toContain("editing the code");
   });
 
   it("never counts down below one second", () => {
@@ -167,47 +180,68 @@ describe("nudgeForUnchangedCode", () => {
   });
 });
 
+/**
+ * The probe set is the acceptance contract for this function, both halves of
+ * it. A give-up phrase used to be matched as a bare substring, which scored a
+ * beginner's most natural way of phrasing a real guess ("i dont know if range
+ * should start at 0 or 1") as a refusal: no escalation, plus the same-depth
+ * card, for a student who had reasoned correctly. The design calls that out as
+ * the worse error direction — it withholds help from someone who earned it.
+ */
 describe("isAttempt", () => {
-  it("counts anything that engages with the problem", () => {
-    const engaged = [
-      "oh it should be a plus",
-      "maybe because minus takes away instead of combining",
-      "wait is it because - subtracts?",
-      "i tried changing it to += but it broke",
-      "whats an operator",
-      "hmm",
-      "code wont run",
-    ];
-    for (const message of engaged) {
-      expect(isAttempt(message)).toBe(true);
-    }
+  const ATTEMPTS = [
+    "oh it should be a plus",
+    "maybe because minus takes away instead of combining",
+    "wait is it because - subtracts?",
+    "i tried changing it to += but it broke",
+    "whats an operator",
+    "hmm",
+    "code wont run",
+    "not sure if it's + or -, but I'll guess +",
+    "im not sure but maybe it subtracts",
+    "i dont know if range should start at 0 or 1",
+    "i have no idea why but i think the loop runs one time too many",
+    "dunno, maybe it needs to be <= instead of <",
+    "no clue why but changing it to 0 fixed it",
+  ];
+
+  const GIVE_UPS = [
+    "i dont know",
+    "i don't know",
+    "idk",
+    "IDK",
+    "  no idea  ",
+    "just tell me the answer",
+    "I really have no idea at all, can you just show me the answer",
+    "no clue",
+    "i give up",
+    "dunno",
+    "",
+    "   \n  ",
+  ];
+
+  it.each(ATTEMPTS)("counts %j as a real attempt", (message) => {
+    expect(isAttempt(message)).toBe(true);
   });
 
-  it("does not count giving up", () => {
-    const giveUps = [
-      "i dont know",
-      "i don't know",
-      "idk",
-      "IDK",
-      "  no idea  ",
-      "just tell me the answer",
-      "I really have no idea at all, can you just show me the answer",
-    ];
-    for (const message of giveUps) {
-      expect(isAttempt(message)).toBe(false);
-    }
+  it.each(GIVE_UPS)("counts %j as giving up", (message) => {
+    expect(isAttempt(message)).toBe(false);
   });
 
-  it("does not count an empty message", () => {
-    expect(isAttempt("")).toBe(false);
-    expect(isAttempt("   \n  ")).toBe(false);
+  it("takes a hedge followed by a guess, not merely a hedge somewhere in it", () => {
+    // The distinguishing pair: identical opening, opposite verdicts. The
+    // second clause is the whole difference.
+    expect(isAttempt("dunno")).toBe(false);
+    expect(isAttempt("dunno, maybe it needs to be <= instead of <")).toBe(true);
   });
 
-  it("counts a hedged guess, which is still a guess", () => {
-    // The give-up list is matched as a substring, so a phrase that commonly
-    // opens a real attempt must not be on it.
-    expect(isAttempt("not sure if it's + or -, but I'll guess +")).toBe(true);
-    expect(isAttempt("im not sure but maybe it subtracts")).toBe(true);
+  it("still catches a refusal padded on both sides", () => {
+    expect(isAttempt("I really have no idea at all, can you just show me the answer")).toBe(false);
+  });
+
+  it("ignores trailing punctuation on a bare refusal", () => {
+    expect(isAttempt("idk.")).toBe(false);
+    expect(isAttempt("i dont know!!!")).toBe(false);
   });
 });
 

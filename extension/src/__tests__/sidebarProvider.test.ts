@@ -1,6 +1,7 @@
 import * as vscode from "vscode";
 import { EduPeerSidebarProvider } from "../sidebarProvider";
 import { AuthError, RateLimitError } from "../apiClient";
+import { formatTestFailureQuestion } from "../pedagogy";
 
 const mock = vscode as any;
 
@@ -255,6 +256,51 @@ describe("startup", () => {
     expect(latest(h.posted, "authState").label).toBe("Not signed in");
   });
 
+  /**
+   * Final review, Minor 7: on the first "ready" the thread key is still "",
+   * so `postThread("")` minted a permanent phantom entry in `threads` and
+   * posted an empty `restoreChat` that `sendFocus` superseded a moment later.
+   */
+  it("mints no phantom thread for the empty startup key", async () => {
+    const h = await build();
+    expect(h.provider["threads"].has("")).toBe(false);
+  });
+
+  it("posts the transcript once at startup, not twice", async () => {
+    const posted: any[] = [];
+    let receive: any;
+    const doc = mock.__makeDocument(CODE, "python", "/tmp/startup-once/demo.py");
+    mock.window.activeTextEditor = mock.__makeEditor(doc);
+    const provider = new EduPeerSidebarProvider(
+      mock.Uri.file("/ext"),
+      { globalState: { get: (_k: string, f: any) => f, update: async () => undefined } } as any,
+      makeApi() as any,
+      { getBadges: jest.fn(async () => []) } as any,
+      { getSession: () => undefined, onDidChange: jest.fn() } as any,
+      undefined
+    );
+    provider.resolveWebviewView({
+      webview: {
+        options: {},
+        html: "",
+        cspSource: "x:",
+        asWebviewUri: (u: any) => u,
+        postMessage: (m: any) => {
+          posted.push(m);
+          return Promise.resolve(true);
+        },
+        onDidReceiveMessage: (fn: any) => ((receive = fn), { dispose: jest.fn() }),
+      },
+      show: jest.fn(),
+      onDidDispose: jest.fn(() => ({ dispose: jest.fn() })),
+    } as any);
+
+    await receive({ type: "ready" });
+
+    // The one that survives is `sendFocus`'s, for the block actually in focus.
+    expect(posted.filter((m) => m.type === "restoreChat")).toHaveLength(1);
+  });
+
   it("surfaces the review button only when one is due", async () => {
     const h = await build({
       getReview: jest.fn(async () => ({ due: true, concepts: ["loops"], exercise: "" })),
@@ -338,7 +384,10 @@ describe("the attempt gate", () => {
     h.posted.length = 0;
     await h.send({ type: "askHint", question: "idk", code: CODE, mode: "hint" });
     const gate = h.posted.find((m) => m.type === "hint" && m.mode === "attempt-gate");
-    expect(gate.hint).toContain("haven't changed anything");
+    // They typed something, so the card no longer opens by telling them they
+    // typed nothing — it asks for the one thing that unlocks the next hint.
+    expect(gate.hint).toContain("Tell me what you tried");
+    expect(gate.hint).not.toContain("haven't changed anything");
     expect(gate.hint_level).toBe(0);
   });
 
@@ -398,8 +447,13 @@ describe("the attempt gate", () => {
   it("sends no diff when nothing changed", async () => {
     const h = await build();
     await askPastTheGate(h);
-    await h.send({ type: "askHint", question: "still stuck", code: CODE, mode: "hint" });
+    // "idk", not "still stuck": the latter is an attempt, which takes the
+    // `answered` branch — and that branch also carries an empty edit_summary,
+    // so this test passed either way and asserted nothing about the path in
+    // its own name.
+    await h.send({ type: "askHint", question: "idk", code: CODE, mode: "hint" });
     expect(hintRequest(h.api).edit_summary).toBe("");
+    expect(hintRequest(h.api).escalate).toBe(false);
   });
 
   it("never gates a non-hint mode", async () => {
@@ -1438,11 +1492,18 @@ describe("the thread key survives losing the active editor", () => {
 });
 
 /**
- * Round-1 review, Important 3: the commit message claims reset clears the
- * thread you are in, not all of them, but nothing would have failed if
- * `threads.delete(key)` had been `threads.clear()`.
+ * Final review, Important 4 (a ruling from the human partner): reset used to
+ * delete one thread while `attempts.clear()` took no key and the backend's
+ * /reset dropped every hint level for the user. Resetting in `total()` left
+ * `average()`'s transcript on screen stamped `hint 3` while its next ask
+ * started at level 1 — the exact transcript/level mismatch this branch exists
+ * to remove. Reset now clears everything, which is also what the panel has
+ * always told the student it does.
+ *
+ * This replaces "reset clears only the current thread", which asserted the
+ * behaviour the ruling reverses.
  */
-describe("reset clears only the current thread", () => {
+describe("reset clears every thread, not just the one on screen", () => {
   beforeEach(() => mock.__reset());
 
   const TWO_FUNCS = [
@@ -1454,7 +1515,7 @@ describe("reset clears only the current thread", () => {
     "    return 2",
   ].join("\n");
 
-  it("leaves another function's thread untouched", async () => {
+  it("wipes another function's transcript too, so no thread outlives its ladder", async () => {
     const { provider, doc } = await setupProvider(
       TWO_FUNCS,
       1,
@@ -1475,11 +1536,40 @@ describe("reset clears only the current thread", () => {
       bubbles: [{ role: "tutor", text: "about second" }],
     });
 
+    // Reset while the cursor is in `second`.
     await provider.resetSession();
 
     expect(provider["threads"].has(secondKey)).toBe(false);
-    expect(provider["threads"].get(firstKey)?.bubbles).toEqual([
-      { role: "tutor", text: "about first" },
+    // `first`'s ladder is gone (attempts.clear() takes no key), so its
+    // transcript must not survive to be read beside a depth that no longer
+    // exists.
+    expect(provider["threads"].has(firstKey)).toBe(false);
+  });
+
+  it("leaves the first ask after a reset escalating from scratch in every thread", async () => {
+    const { provider, doc, api } = await setupProvider(
+      TWO_FUNCS,
+      1,
+      "/tmp/threads/reset-ladder.py"
+    );
+    await provider["sendFocus"]();
+    await provider["handleAsk"]("why does this return 1?", "code", "hint");
+
+    // A different function, so a different ladder — then reset from here.
+    mock.window.activeTextEditor = mock.__makeEditor(doc, 5);
+    await provider["sendFocus"]();
+    await provider.resetSession();
+
+    // Back in the first function: its ladder was cleared with everything
+    // else, so this reads as a first ask.
+    mock.window.activeTextEditor = mock.__makeEditor(doc, 1);
+    await provider["sendFocus"]();
+    await provider["handleAsk"]("and now?", "code", "hint");
+
+    expect(api.streamHint.mock.calls.at(-1)[0].escalate).toBe(true);
+    expect(provider["threads"].get(provider["threadKey"])!.history).toEqual([
+      { role: "student", content: "and now?" },
+      { role: "tutor", content: "What does len(n) return when n is empty?" },
     ]);
   });
 });
@@ -1543,6 +1633,405 @@ describe("the sticky thread key", () => {
 
     expect(provider["threadKey"]).toBe(key);
     expect(posted.find((m: any) => m.type === "restoreChat")).toBeUndefined();
+  });
+});
+
+/**
+ * Final review, Critical 1: `restoreChat` tears the panel down to another
+ * thread's bubbles, so the explain-first card and its Skip button are gone
+ * from the screen — but the host went on holding `pendingAsk`. The student's
+ * next question was then popped off as an *explanation* of the function they
+ * had just left: never answered, and filed into the wrong transcript. The
+ * webview half (composerMode) is covered in webviewMain.test.ts.
+ */
+describe("a thread swap drops the exercise the panel was waiting on", () => {
+  beforeEach(() => mock.__reset());
+
+  const TWO_FUNCS = [
+    "def first():",
+    "    return 1",
+    "",
+    "",
+    "def second():",
+    "    return 2",
+  ].join("\n");
+
+  it("does not consume the next question as an explanation of the function they left", async () => {
+    const { provider, posted, doc, api } = await setupProvider(
+      TWO_FUNCS,
+      1,
+      "/tmp/pending/explain-swap.py"
+    );
+    await provider["sendFocus"]();
+
+    // Asking about `first` trips the explain-first gate, which parks the ask.
+    await provider["handleAskFromWebview"]("why does first return 1?", "code", "hint");
+    expect(latest(posted, "explainFirst")).toBeDefined();
+    expect(provider["pendingAsk"]).toBeDefined();
+
+    // The student clicks into `second`. Nothing is in flight, so the swap is
+    // immediate and the card disappears.
+    mock.window.activeTextEditor = mock.__makeEditor(doc, 5);
+    await provider["sendFocus"]();
+
+    expect(provider["pendingAsk"]).toBeUndefined();
+
+    // Their next question arrives while the webview is still in explain mode
+    // (a stale webview, or one that missed the reset). The host must not
+    // answer it with `first`'s parked question.
+    await provider["handleExplainAnswer"]("why does second return 2?");
+
+    expect(api.streamHint).not.toHaveBeenCalled();
+  });
+
+  it("drops a paused prediction rather than marking it against another function", async () => {
+    const { provider, doc, api } = await setupProvider(
+      TWO_FUNCS,
+      1,
+      "/tmp/pending/predict-swap.py"
+    );
+    await provider["sendFocus"]();
+    provider.startPrediction("print(x)", "code");
+
+    mock.window.activeTextEditor = mock.__makeEditor(doc, 5);
+    await provider["sendFocus"]();
+
+    await provider["handlePredictAnswer"]("it prints 3");
+    expect(api.streamHint).not.toHaveBeenCalled();
+  });
+
+  it("drops a paused trace and a paused review too", async () => {
+    const { provider, doc } = await setupProvider(TWO_FUNCS, 1, "/tmp/pending/trace-swap.py");
+    await provider["sendFocus"]();
+    provider["pendingTrace"] = { snippet: "s", code: "c", variables: ["i", "total"] };
+    provider["pendingReview"] = "an exercise from days ago";
+
+    mock.window.activeTextEditor = mock.__makeEditor(doc, 5);
+    await provider["sendFocus"]();
+
+    expect(provider["pendingTrace"]).toBeUndefined();
+    expect(provider["pendingReview"]).toBeUndefined();
+  });
+});
+
+/**
+ * Final review, Important 3: `handleAsk` ran `isAttempt` over whatever string
+ * it was handed, and three entry points hand it canned text — "analyse
+ * selection", the Quick Fix on a diagnostic, and the test watcher's "Talk it
+ * through". None contains a give-up phrase, so all three scored as attempts
+ * and clicking one repeatedly walked the ladder to pseudocode with the student
+ * having typed nothing. That is the hint-abuse path the tracker exists to
+ * close.
+ */
+describe("machine-generated questions are not student attempts", () => {
+  beforeEach(() => mock.__reset());
+
+  it("does not walk the ladder for a repeated right-click on an unchanged selection", async () => {
+    const h = await build();
+
+    await h.provider.askExternal("What is wrong with this selection?", CODE);
+    expect(hintRequest(h.api).escalate).toBe(true); // the first ask always is
+    h.posted.length = 0;
+    await h.provider.askExternal("What is wrong with this selection?", CODE);
+
+    expect(hintRequest(h.api).escalate).toBe(false);
+    expect(h.posted.find((m: any) => m.mode === "attempt-gate")).toBeDefined();
+  });
+
+  it("does not count the Quick Fix's canned question as an attempt", async () => {
+    const h = await build();
+
+    const canned = `What is wrong with these lines?\n\n${CODE}`;
+    await h.provider.askExternal(canned, CODE);
+    await h.provider.askExternal(canned, CODE);
+
+    expect(hintRequest(h.api).escalate).toBe(false);
+  });
+
+  it("does not count the test watcher's failure report as an attempt", async () => {
+    const h = await build();
+
+    const question = formatTestFailureQuestion("test_average", "AssertionError: 0 != 3");
+    await h.provider.askExternal(question, CODE, "hint");
+    await h.provider.askExternal(question, CODE, "hint");
+
+    expect(hintRequest(h.api).escalate).toBe(false);
+  });
+
+  it("still escalates on a question the student actually typed", async () => {
+    // The control: the gate closes on machine text without closing on people.
+    const h = await build();
+    await askPastTheGate(h);
+
+    await h.send({
+      type: "askHint",
+      question: "maybe len(n) is zero when the list is empty",
+      code: CODE,
+      mode: "hint",
+    });
+
+    expect(hintRequest(h.api).escalate).toBe(true);
+  });
+});
+
+/**
+ * Final review, Important 3 (the folded-in deferred finding): the explain-first
+ * flow judged `frameExplainedQuestion`'s combined "explanation + question"
+ * string, so a give-up phrase in either half condemned the whole ask. Each raw
+ * message is now judged on its own.
+ */
+describe("the explain-first gate judges what the student typed", () => {
+  beforeEach(() => mock.__reset());
+
+  /** Re-arm the gate without disturbing the ladder it sits in front of. */
+  async function armTheGateAgain(h: Harness) {
+    await askPastTheGate(h);
+    h.provider["explainedFiles"].clear();
+    h.posted.length = 0;
+  }
+
+  it("does not let a shrugged explanation condemn a real question", async () => {
+    const h = await build();
+    await armTheGateAgain(h);
+
+    await h.send({ type: "askHint", question: "maybe len(n) is zero", code: CODE, mode: "hint" });
+    expect(latest(h.posted, "explainFirst")).toBeDefined();
+    await h.send({ type: "explainAnswer", explanation: "idk" });
+
+    expect(hintRequest(h.api).escalate).toBe(true);
+  });
+
+  it("counts the explanation when the question itself was a shrug", async () => {
+    const h = await build();
+    await armTheGateAgain(h);
+
+    await h.send({ type: "askHint", question: "idk", code: CODE, mode: "hint" });
+    await h.send({ type: "explainAnswer", explanation: "i think it divides by the length" });
+
+    expect(hintRequest(h.api).escalate).toBe(true);
+  });
+
+  it("holds the depth when both halves are a shrug", async () => {
+    // The framing wrapper reads as prose, so judging it instead of the two raw
+    // messages scored this pair as a real attempt.
+    const h = await build();
+    await armTheGateAgain(h);
+
+    await h.send({ type: "askHint", question: "idk", code: CODE, mode: "hint" });
+    await h.send({ type: "explainAnswer", explanation: "idk" });
+
+    expect(hintRequest(h.api).escalate).toBe(false);
+  });
+
+  it("carries the typed question through a skip", async () => {
+    const h = await build();
+    await armTheGateAgain(h);
+
+    await h.send({ type: "askHint", question: "maybe len(n) is zero", code: CODE, mode: "hint" });
+    await h.send({ type: "explainSkip" });
+
+    expect(hintRequest(h.api).escalate).toBe(true);
+  });
+
+  it("does not turn a skipped shrug into an attempt", async () => {
+    const h = await build();
+    await armTheGateAgain(h);
+
+    await h.send({ type: "askHint", question: "idk", code: CODE, mode: "hint" });
+    await h.send({ type: "explainSkip" });
+
+    expect(hintRequest(h.api).escalate).toBe(false);
+  });
+});
+
+/**
+ * Final review, Important 5 (a ruling from the human partner): `threadKey` is
+ * sticky and moves only on a named block, but the ladder still keyed off
+ * `lastDocumentKey`, which `resolveFocus` collapses to the bare file uri the
+ * moment a selection outranks the enclosing symbol. Selecting two lines
+ * *inside* a function dropped the level 3 → 1 and bounced it back on deselect,
+ * while the transcript correctly held. The ladder now rides the same sticky
+ * key the conversation does.
+ */
+describe("the hint ladder follows the sticky thread key", () => {
+  beforeEach(() => mock.__reset());
+
+  /** `first` is four lines, so two of them can be selected from inside it. */
+  const TWO_FUNCS = [
+    "def first():",
+    "    total = 0",
+    "    total += 1",
+    "    return total",
+    "",
+    "",
+    "def second():",
+    "    return 2",
+  ].join("\n");
+
+  /**
+   * Select two lines inside `first`. `resolveFocus` ranks an explicit
+   * selection above the enclosing symbol, so the focus collapses to a
+   * file-level "selection" while the student never left the function.
+   */
+  function selectTwoLinesInside(doc: any) {
+    mock.window.activeTextEditor = {
+      document: doc,
+      selection: new mock.Selection(new mock.Position(1, 4), new mock.Position(2, 15)),
+      setDecorations: jest.fn(),
+      revealRange: jest.fn(),
+    };
+  }
+
+  it("sends one problem_key either side of a selection inside the same function", async () => {
+    const { provider, doc, api } = await setupProvider(TWO_FUNCS, 1, "/tmp/ladder/selection.py");
+    await provider["sendFocus"]();
+    await provider["handleAsk"]("why is total wrong?", "code", "hint");
+    const firstKey = hintRequest(api).problem_key;
+    expect(firstKey).toContain("#first");
+
+    selectTwoLinesInside(doc);
+    await provider["sendFocus"]();
+    // The divergence this test exists for: the block key really did collapse
+    // to the bare file, while the conversation correctly stayed put.
+    expect(provider["lastDocumentKey"]).not.toContain("#");
+    expect(provider["threadKey"]).toBe(firstKey);
+
+    await provider["handleAsk"]("and now?", "code", "hint");
+
+    expect(hintRequest(api).problem_key).toBe(firstKey);
+  });
+
+  it("records the attempt under the sticky key, not the collapsed one", async () => {
+    const fileKey = "file:///tmp/ladder/record.py";
+    const { provider, doc } = await setupProvider(TWO_FUNCS, 1, "/tmp/ladder/record.py");
+    await provider["sendFocus"]();
+    await provider["handleAsk"]("why is total wrong?", "code", "hint");
+
+    selectTwoLinesInside(doc);
+    await provider["sendFocus"]();
+    await provider["handleAsk"]("and now?", "code", "hint");
+
+    // The tracker knows this problem by the thread's name...
+    expect(provider["attempts"].evaluate(provider["threadKey"], "x", Date.now()).signal).not.toBe(
+      "first"
+    );
+    // ...and has never heard of the file-level key the selection collapsed to.
+    // Splitting the ladder across the two is what dropped the level 3 → 1 on
+    // select and bounced it back on deselect.
+    expect(provider["attempts"].evaluate(fileKey, "x", Date.now()).signal).toBe("first");
+  });
+
+  it("still gives two functions two different ladders", async () => {
+    const { provider, doc, api } = await setupProvider(TWO_FUNCS, 1, "/tmp/ladder/two.py");
+    await provider["sendFocus"]();
+    await provider["handleAsk"]("why is total wrong?", "code", "hint");
+    const firstKey = hintRequest(api).problem_key;
+
+    mock.window.activeTextEditor = mock.__makeEditor(doc, 7);
+    await provider["sendFocus"]();
+    await provider["handleAsk"]("and this one?", "code", "hint");
+
+    expect(hintRequest(api).problem_key).not.toBe(firstKey);
+    expect(hintRequest(api).escalate).toBe(true);
+  });
+});
+
+/**
+ * Final review, Minor 6: `handleAsk`'s finally posted the deferred swap
+ * unconditionally. A cursor that went A → B → A during a stream left
+ * `pendingThreadSwap` set, so the finally re-posted A's stored bubbles — which
+ * only contain the answer that just streamed in if the webview's `persistChat`
+ * round trip has already drained. It usually has not, so the student watched
+ * their answer vanish.
+ */
+describe("a cursor round trip during a stream leaves the panel alone", () => {
+  beforeEach(() => mock.__reset());
+
+  const TWO_FUNCS = [
+    "def first():",
+    "    return 1",
+    "",
+    "",
+    "def second():",
+    "    return 2",
+  ].join("\n");
+
+  it("does not re-post the thread the webview is already rendering", async () => {
+    let resolveStream: (value: any) => void = () => {};
+    const { provider, posted, doc, api } = await setupProvider(
+      TWO_FUNCS,
+      1,
+      "/tmp/threads/round-trip.py"
+    );
+    api.streamHint = jest.fn(() => new Promise((resolve) => { resolveStream = resolve; }));
+    await provider["sendFocus"]();
+    const startKey = provider["threadKey"];
+
+    const askPromise = provider["handleAsk"]("why does this return 1?", "code", "hint");
+
+    // A → B → A, all while the answer is still streaming.
+    mock.window.activeTextEditor = mock.__makeEditor(doc, 5);
+    await provider["sendFocus"]();
+    mock.window.activeTextEditor = mock.__makeEditor(doc, 1);
+    await provider["sendFocus"]();
+    expect(provider["threadKey"]).toBe(startKey);
+
+    posted.length = 0;
+    resolveStream({ hint: "because it returns 1", hint_level: 1, concept_tags: [] });
+    await askPromise;
+
+    expect(posted.find((m: any) => m.type === "restoreChat")).toBeUndefined();
+  });
+});
+
+/**
+ * Final review, Minor 10: `startReview` read `this.thread` after its own await,
+ * the same aliasing the streaming path was already fixed for, and held no
+ * in-flight flag — so a focus change during the fetch both wiped the panel
+ * under the spinner and filed the exercise into whichever thread arrived.
+ */
+describe("a review exercise belongs to the thread that asked for it", () => {
+  beforeEach(() => mock.__reset());
+
+  const TWO_FUNCS = [
+    "def first():",
+    "    return 1",
+    "",
+    "",
+    "def second():",
+    "    return 2",
+  ].join("\n");
+
+  it("does not land in whichever function is on screen when it arrives", async () => {
+    let resolveReview: (value: any) => void = () => {};
+    const { provider, posted, doc, api } = await setupProvider(
+      TWO_FUNCS,
+      1,
+      "/tmp/threads/review-race.py"
+    );
+    api.getReview = jest.fn(() => new Promise((resolve) => { resolveReview = resolve; }));
+    await provider["sendFocus"]();
+    const firstKey = provider["threadKey"];
+
+    const reviewPromise = provider["startReview"]();
+
+    mock.window.activeTextEditor = mock.__makeEditor(doc, 5);
+    posted.length = 0;
+    await provider["sendFocus"]();
+    const secondKey = provider["threadKey"];
+    expect(secondKey).not.toBe(firstKey);
+    // The panel must not clear out from under the spinner.
+    expect(posted.find((m: any) => m.type === "restoreChat")).toBeUndefined();
+
+    resolveReview({ due: true, concepts: ["loops"], exercise: "Write a loop that sums a list." });
+    await reviewPromise;
+
+    expect(provider["threads"].get(firstKey)!.history).toEqual([
+      { role: "tutor", content: "Write a loop that sums a list." },
+    ]);
+    expect(provider["threads"].get(secondKey)?.history ?? []).toEqual([]);
+    // ...and the withheld swap fires once it settles.
+    expect(latest(posted, "restoreChat")).toBeDefined();
   });
 });
 

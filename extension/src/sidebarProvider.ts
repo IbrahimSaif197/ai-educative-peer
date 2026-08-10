@@ -83,7 +83,14 @@ export class EduPeerSidebarProvider implements vscode.WebviewViewProvider {
    */
   private pendingThreadSwap = false;
   private lastLanguageId = "python";
-  /** Identifies the document the attempt tracker is following. */
+  /**
+   * The block the cursor is literally in, `uri#label` or `uri`.
+   *
+   * No longer the hint ladder's key — that follows `threadKey` now, so the
+   * transcript on screen and the level beside it cannot describe different
+   * problems. Its one remaining reader is `lastFileKey`, which the
+   * explain-first gate keys on.
+   */
   private lastDocumentKey = "";
   /** The open document, ignoring which block the cursor is in. */
   private get lastFileKey(): string {
@@ -108,8 +115,15 @@ export class EduPeerSidebarProvider implements vscode.WebviewViewProvider {
    * conversation again.
    */
   private explainedFiles = new Set<string>();
-  /** The ask that is paused behind the explain-first gate. */
-  private pendingAsk?: { question: string; code: string };
+  /**
+   * The ask that is paused behind the explain-first gate.
+   *
+   * `attempted` is the verdict on the question the student actually typed,
+   * taken before `questionForMode` wrapped it. Judging the wrapper, or the
+   * later "explanation + question" framing, let a give-up phrase in one half
+   * score the whole ask as a refusal.
+   */
+  private pendingAsk?: { question: string; code: string; attempted: boolean };
   /** The snippet awaiting the student's output prediction. */
   private pendingPredict?: { snippet: string; code: string };
   /** The desk-check exercise awaiting the student's filled-in grid. */
@@ -199,7 +213,12 @@ export class EduPeerSidebarProvider implements vscode.WebviewViewProvider {
       switch (msg.type) {
         case "ready":
           this.postAuthState();
-          this.postThread(this.threadKey);
+          // On the very first "ready" there is no thread yet: posting one
+          // would create a permanent phantom "" entry in `threads` and send an
+          // empty `restoreChat` that `sendFocus` immediately supersedes.
+          if (this.threadKey !== "") {
+            this.postThread(this.threadKey);
+          }
           await this.sendFocus();
           await this.sendBadges();
           this.postOffline(!this.api.isAvailable);
@@ -312,7 +331,12 @@ export class EduPeerSidebarProvider implements vscode.WebviewViewProvider {
   public async resetSession() {
     // Anything already in flight now belongs to a cleared conversation.
     this.sessionGeneration++;
-    this.threads.delete(this.threadKey);
+    // Every thread, not just the one on screen. `attempts.clear()` below takes
+    // no key and the backend's /reset drops every hint level for the user, so
+    // wiping a single transcript left every other function's chat on screen
+    // stamped with a depth its next ask would no longer start from. The panel
+    // already promises the whole session ("we're back at hint 1").
+    this.threads.clear();
     this.explainedFiles.clear();
     this.pendingAsk = undefined;
     this.pendingPredict = undefined;
@@ -340,6 +364,13 @@ export class EduPeerSidebarProvider implements vscode.WebviewViewProvider {
 
   private async startReview() {
     this.post({ type: "loading", value: true });
+    // Captured before the await, for the same reason `handleAsk` captures it:
+    // the cursor can move to another function while the review is being
+    // fetched, and the exercise belongs to the thread that asked for it.
+    const thread = this.thread;
+    // Held for the same reason too — so a focus change does not clear the
+    // panel out from under the spinner.
+    this.askInFlight = true;
     try {
       const res = await this.api.getReview(this.lastLanguageId, true);
       if (!res.due || !res.exercise) {
@@ -352,7 +383,7 @@ export class EduPeerSidebarProvider implements vscode.WebviewViewProvider {
         });
         return;
       }
-      this.thread.history.push({ role: "tutor", content: res.exercise });
+      thread.history.push({ role: "tutor", content: res.exercise });
       // Remembered so the student's answer is marked against the exercise,
       // not against whatever file is open in the editor.
       this.pendingReview = res.exercise;
@@ -364,7 +395,9 @@ export class EduPeerSidebarProvider implements vscode.WebviewViewProvider {
         mode: "review-exercise",
       });
     } finally {
+      this.askInFlight = false;
       this.post({ type: "loading", value: false });
+      this.flushPendingThreadSwap();
     }
   }
 
@@ -450,17 +483,20 @@ export class EduPeerSidebarProvider implements vscode.WebviewViewProvider {
       mode = "explain-error";
     }
     const filled = questionForMode(mode, question);
+    // Judged on what the student typed, not on the canned wrapper
+    // `questionForMode` may have put around it.
+    const attempted = isAttempt(question);
     if (mode === "hint") {
       const fileKey = this.lastFileKey;
       if (!this.explainedFiles.has(fileKey)) {
         this.explainedFiles.add(fileKey);
-        this.pendingAsk = { question: filled, code: code ?? "" };
+        this.pendingAsk = { question: filled, code: code ?? "", attempted };
         this.post({ type: "userMessage", text: filled });
         this.post({ type: "explainFirst", prompt: EXPLAIN_FIRST_PROMPT });
         return;
       }
     }
-    await this.handleAsk(filled, code, mode);
+    await this.handleAsk(filled, code, mode, { attempted });
   }
 
   private async handleExplainAnswer(explanation: string) {
@@ -472,10 +508,16 @@ export class EduPeerSidebarProvider implements vscode.WebviewViewProvider {
       this.post({ type: "userMessage", text });
       await this.handleAsk(frameExplainedQuestion(text, pending.question), pending.code, "hint", {
         echoUser: false,
+        // Either raw message on its own is enough. Judging the framed
+        // "explanation + question" string instead meant a shrug in one half
+        // condemned the other, in the direction the design warns against.
+        attempted: isAttempt(text) || pending.attempted,
       });
     } else {
+      // A blank explanation is a skip.
       await this.handleAsk(pending.question, pending.code, "hint", {
         echoUser: false,
+        attempted: pending.attempted,
       });
     }
   }
@@ -486,6 +528,9 @@ export class EduPeerSidebarProvider implements vscode.WebviewViewProvider {
     if (!pending) return;
     await this.handleAsk(pending.question, pending.code, "hint", {
       echoUser: false,
+      // They typed nothing here, but the question waiting behind the gate is
+      // still their own words.
+      attempted: pending.attempted,
     });
   }
 
@@ -503,6 +548,19 @@ export class EduPeerSidebarProvider implements vscode.WebviewViewProvider {
        * of them is asking about.
        */
       aboutOpenFile?: boolean;
+      /**
+       * Whether the student typed something that engaged with the problem.
+       *
+       * Computed by the call sites that carry a student-typed message and
+       * defaulted to `false` here, because most callers do not. `handleAsk`
+       * used to run `isAttempt` over whatever string it was handed, so the
+       * canned questions behind "analyse selection", the Quick Fix on a
+       * diagnostic and the test watcher's "Talk it through" all scored as
+       * attempts - three clicks walked the ladder to pseudocode with the
+       * student having typed nothing, the exact path this gate exists to
+       * close.
+       */
+      attempted?: boolean;
     } = {}
   ) {
     if (!question || !question.trim()) {
@@ -540,15 +598,18 @@ export class EduPeerSidebarProvider implements vscode.WebviewViewProvider {
     );
     const attemptCode = aboutOpenFile ? this.lastFocusCode || code || "" : code || "";
 
+    // The ladder rides the sticky thread key, so the transcript on screen and
+    // the depth beside it always describe the same problem. Keying it on the
+    // block the cursor is literally in collapsed the level to the file's the
+    // moment a selection resolved above the enclosing symbol: 3 → 1 on select,
+    // back to 3 on deselect, while the chat correctly held. Read once, before
+    // the first await, for the same reason the thread is.
+    const problemKey = this.threadKey;
+
     // Only progressive hints are gated on having actually tried something.
     const attempt =
       mode === "hint"
-        ? this.attempts.evaluate(
-            this.lastDocumentKey,
-            attemptCode,
-            Date.now(),
-            isAttempt(question)
-          )
+        ? this.attempts.evaluate(problemKey, attemptCode, Date.now(), opts.attempted === true)
         : undefined;
     if (attempt?.signal === "unchanged") {
       this.post({
@@ -577,7 +638,7 @@ export class EduPeerSidebarProvider implements vscode.WebviewViewProvider {
         hint_level: 1,
         // The ladder is keyed on the problem, not the bytes, so editing the
         // code deepens the hint instead of restarting at level 1.
-        problem_key: this.lastDocumentKey,
+        problem_key: problemKey,
         language: this.lastLanguageId,
         mode,
         history: thread.history.slice(-MAX_HISTORY_TURNS),
@@ -613,7 +674,7 @@ export class EduPeerSidebarProvider implements vscode.WebviewViewProvider {
         return;
       }
       if (mode === "hint") {
-        this.attempts.record(this.lastDocumentKey, attemptCode);
+        this.attempts.record(problemKey, attemptCode);
         this.levelEmitter.fire(res.hint_level);
       }
       thread.history.push({ role: "student", content: question });
@@ -634,13 +695,26 @@ export class EduPeerSidebarProvider implements vscode.WebviewViewProvider {
     } finally {
       this.askInFlight = false;
       this.post({ type: "loading", value: false });
-      if (this.pendingThreadSwap) {
-        // The cursor moved to another function while this ask was streaming;
-        // the swap was withheld so the panel wasn't wiped out from under a
-        // student watching the answer arrive. Show it now that it's settled.
-        this.pendingThreadSwap = false;
-        this.postThread(this.threadKey);
-      }
+      this.flushPendingThreadSwap();
+    }
+  }
+
+  /**
+   * Show a thread swap that was withheld while an ask was in flight.
+   *
+   * The swap is deferred rather than posted the moment the cursor moves, so
+   * the panel is never wiped out from under a student watching an answer
+   * arrive. Skipped when the webview is already rendering this thread: a
+   * cursor that went A → B → A during the stream leaves the panel correct
+   * already, and re-posting there races `persistChat`'s round trip — the
+   * bubbles the host holds would not yet include the answer that just
+   * streamed in, so the student would watch it vanish.
+   */
+  private flushPendingThreadSwap(): void {
+    if (!this.pendingThreadSwap) return;
+    this.pendingThreadSwap = false;
+    if (this.threadKey !== this.renderedKey) {
+      this.postThread(this.threadKey);
     }
   }
 
@@ -807,9 +881,24 @@ export class EduPeerSidebarProvider implements vscode.WebviewViewProvider {
     });
   }
 
-  /** Post the thread for `key` and remember it as what the webview is showing. */
+  /**
+   * Post the thread for `key` and remember it as what the webview is showing.
+   *
+   * Every paused exercise goes with it. `restoreChat` tears the panel down to
+   * the new thread's bubbles, so the card and the buttons each of these was
+   * waiting on are gone from the screen — but the host went on holding the
+   * ask behind them. The student's next question was then popped off as an
+   * answer to a prompt they could no longer see, about a different function:
+   * consumed as an explanation, never answered, and filed into the wrong
+   * transcript. The webview clears its half (`composerMode`) on the same
+   * message.
+   */
   private postThread(key: string): void {
     this.renderedKey = key;
+    this.pendingAsk = undefined;
+    this.pendingPredict = undefined;
+    this.pendingTrace = undefined;
+    this.pendingReview = undefined;
     this.post({ type: "restoreChat", messages: this.threadFor(key).bubbles });
   }
 

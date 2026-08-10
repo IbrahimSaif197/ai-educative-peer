@@ -164,6 +164,105 @@ describe("restoring a transcript", () => {
   });
 });
 
+/**
+ * Final review, Critical 1: `restoreChat` swaps the transcript for another
+ * function's, and `clearChat()` takes the explain-first card and its Skip
+ * button with it — but `composerMode` outlived them. The student's next
+ * question was posted as `explainAnswer`, consumed by the host as an
+ * explanation of the function they had just left, and never answered. Same
+ * shape for every other composer mode. The host half (the `pending*` fields)
+ * is covered in sidebarProvider.test.ts.
+ */
+describe("a restored transcript resets the composer", () => {
+  it("sends the next message as a question, not as an explanation", () => {
+    post({ type: "explainFirst", prompt: "What do you think this does?" });
+    expect($(".actions")).not.toBeNull();
+
+    post({ type: "restoreChat", messages: [] });
+    // The card and its Skip button went with the transcript...
+    expect($(".actions")).toBeNull();
+
+    (el("input") as HTMLTextAreaElement).value = "why does bar loop twice?";
+    (el("send") as HTMLButtonElement).click();
+
+    // ...and so did the composer mode they set.
+    expect(lastSent("askHint").question).toBe("why does bar loop twice?");
+    expect(lastSent("explainAnswer")).toBeUndefined();
+  });
+
+  it("clears a pending prediction composer", () => {
+    post({ type: "predictFirst", snippet: "print(x)" });
+    post({ type: "restoreChat", messages: [] });
+
+    (el("input") as HTMLTextAreaElement).value = "why does this crash?";
+    (el("send") as HTMLButtonElement).click();
+
+    expect(lastSent("askHint")).toBeDefined();
+    expect(lastSent("predictAnswer")).toBeUndefined();
+  });
+
+  it("clears the translate composer offered at depth three", () => {
+    post({ type: "hint", hint: "h", hint_level: 3, concept_tags: [], mode: "hint" });
+    ($$(".actions button")[0] as HTMLButtonElement).click(); // "Submit my translation"
+
+    post({ type: "restoreChat", messages: [] });
+
+    (el("input") as HTMLTextAreaElement).value = "why does this crash?";
+    (el("send") as HTMLButtonElement).click();
+
+    expect(lastSent("askHint").mode).toBe("hint");
+  });
+
+  it("disarms the quiz answer flag", () => {
+    (el("quiz") as HTMLButtonElement).click();
+
+    post({ type: "restoreChat", messages: [] });
+    post({ type: "hint", hint: "why does it work?", hint_level: 0, concept_tags: [], mode: "reflect" });
+
+    (el("input") as HTMLTextAreaElement).value = "because it sums first";
+    (el("send") as HTMLButtonElement).click();
+
+    expect(lastSent("askHint").mode).toBe("hint");
+  });
+
+  it("disarms the review answer flag", () => {
+    (el("reviewBtn") as HTMLButtonElement).click();
+
+    post({ type: "restoreChat", messages: [] });
+    post({
+      type: "hint",
+      hint: "Write a loop that sums a list.",
+      hint_level: 1,
+      concept_tags: [],
+      mode: "review-exercise",
+    });
+
+    (el("input") as HTMLTextAreaElement).value = "here is my loop";
+    (el("send") as HTMLButtonElement).click();
+
+    expect(lastSent("askHint")).toBeDefined();
+    expect(lastSent("reviewAnswer")).toBeUndefined();
+  });
+
+  // Final review, Minor 9.
+  it("moves the render cache with the transcript", () => {
+    post({ type: "userMessage", text: "about foo" });
+    expect(saved.turns).toHaveLength(1);
+
+    post({ type: "restoreChat", messages: [] });
+
+    // Only `persist()` used to call setState, so hiding and showing the panel
+    // repainted the previous function's conversation until "ready" corrected
+    // it.
+    expect(saved.turns).toEqual([]);
+  });
+
+  it("caches a non-empty restored transcript too", () => {
+    post({ type: "restoreChat", messages: [{ role: "student", text: "about bar" }] });
+    expect(saved.turns).toEqual([{ role: "student", text: "about bar" }]);
+  });
+});
+
 describe("the code preview", () => {
   it("renders one numbered row per line", () => {
     post({

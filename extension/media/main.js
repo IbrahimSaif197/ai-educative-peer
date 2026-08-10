@@ -560,6 +560,19 @@
         }
         isRestoring = false;
         refreshPlaceholder();
+        // The transcript on screen is now a different conversation, so the
+        // composer must be too. clearChat() removed the explain-first card and
+        // its Skip button, but composerMode outlived them: the next thing the
+        // student typed was posted as an explanation of the function they had
+        // just left, and their real question was never asked. Same reset
+        // "resetDone" does, for the same reason.
+        setComposerMode("hint");
+        expectReflectAnswer = false;
+        expectReviewAnswer = false;
+        // The render cache has to move with it too, or hiding and showing the
+        // panel repaints the previous function's transcript until "ready"
+        // corrects it.
+        vscode.setState({ turns });
         break;
       }
 
