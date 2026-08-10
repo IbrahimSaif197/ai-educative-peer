@@ -537,6 +537,73 @@ class TestEscalationControl:
         assert 'data: {"type": "meta", "hint_level": 1}' in res.text
 
 
+class TestLadderWithTheRealProblemKey:
+    """The production combination: a Firestore store and a URI `problem_key`.
+
+    Every other ladder test here omits `problem_key`, so `_ladder_key` fell
+    back to `code_fingerprint` — a SHA-1 hex string — and ran against the
+    in-memory store. Neither half of what shipped was covered. The extension
+    sends `doc.uri.toString()`, `_ladder_key` passes it through untouched, and
+    `FirestoreSessionStore` used to interpolate it into a document ID, where
+    "/" is a path separator. Every read and write was rejected and both errors
+    were swallowed, so the student was answered at level 1 on every ask and
+    never reached level 2 — the rung that explains rather than asks.
+    """
+
+    URI_KEY = "file:///c%3A/Users/s/proj/demos/demo.py#average"
+
+    @pytest.fixture()
+    def fs_client(self):
+        from fastapi.testclient import TestClient
+        import main as app_main
+        import auth
+        from session_store import FirestoreSessionStore
+        from tests.test_session_store import FakeFirestore
+
+        app_main.store = FirestoreSessionStore(FakeFirestore())
+        app_main.app.dependency_overrides[auth.get_current_uid] = lambda: "test-user-1"
+        with TestClient(app_main.app) as c:
+            yield c
+        app_main.app.dependency_overrides.clear()
+
+    def _payload(self, **over):
+        return {**VALID_HINT_PAYLOAD, "problem_key": self.URI_KEY, **over}
+
+    def test_the_level_climbs_and_caps(self, fs_client):
+        levels = [
+            fs_client.post("/hint", json=self._payload()).json()["hint_level"]
+            for _ in range(4)
+        ]
+        assert levels == [1, 2, 3, 3]
+
+    def test_editing_the_code_deepens_the_hint(self, fs_client):
+        # The reason the ladder is keyed on the URI at all: an edit must
+        # advance the level, not restart it at 1.
+        fs_client.post("/hint", json=self._payload())
+        edited = self._payload(code="def add(a, b):\n    return a + b")
+        assert fs_client.post("/hint", json=edited).json()["hint_level"] == 2
+
+    def test_a_non_escalating_ask_holds_the_level_it_reached(self, fs_client):
+        fs_client.post("/hint", json=self._payload())
+        fs_client.post("/hint", json=self._payload())
+        held = self._payload(escalate=False)
+        assert fs_client.post("/hint", json=held).json()["hint_level"] == 2
+
+    def test_two_functions_in_one_file_climb_separately(self, fs_client):
+        fs_client.post("/hint", json=self._payload())
+        fs_client.post("/hint", json=self._payload())
+        other = self._payload(
+            problem_key="file:///c%3A/Users/s/proj/demos/demo.py#total"
+        )
+        assert fs_client.post("/hint", json=other).json()["hint_level"] == 1
+
+    def test_reset_clears_a_uri_keyed_ladder(self, fs_client):
+        fs_client.post("/hint", json=self._payload())
+        fs_client.post("/hint", json=self._payload())
+        fs_client.post("/reset")
+        assert fs_client.post("/hint", json=self._payload()).json()["hint_level"] == 1
+
+
 class TestFailedHintDoesNotSpendALevel:
     """A hint the student never saw must not cost them a rung of the ladder."""
 

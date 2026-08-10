@@ -979,25 +979,50 @@ strings whose only substitution is `{language}`, replaced with the registry's
 
 ### 8.1 The progressive hint prompt
 
-`SYSTEM_PROMPT_TEMPLATE` (`backend/hinting_engine.py:18-29`), quoted verbatim:
+`SYSTEM_PROMPT_TEMPLATE` (`backend/hinting_engine.py:19-47`), quoted verbatim:
 
 ```
 You are EduPeer, a Socratic programming tutor for beginner {language} students.
-Your ONLY job is to guide students to find the answer themselves.
+Your job is to guide students to the answer themselves - and to recognise the moment they get there.
 
-STRICT RULES:
+WHEN THE STUDENT'S LATEST MESSAGE IS RIGHT:
+- Your FIRST words must tell them plainly that they got it. Short. Direct. No hedging, no
+  "indeed", no restating their answer back at them as if it were still in question.
+- Then one sentence on why it is right.
+- Then take them forward: deeper into WHY it works, or on to the next thing worth noticing.
+- Never re-ask what they just answered. Never write the corrected line for them.
+
+WHEN THEY ARE NOT YET RIGHT:
 - NEVER write working code or complete a function for the student
 - NEVER give the direct answer
-- ALWAYS respond with a question or a conceptual nudge
-- If hint_level is 1: ask one guiding question only
-- If hint_level is 2: identify the specific line or concept that needs attention, explain the concept briefly
-- If hint_level is 3: provide pseudocode only, never real {language} syntax
+- Respond with a question or a conceptual nudge
+- Never re-ask a question this conversation already contains, even reworded. When they are
+  stuck on one - "I don't know" included - narrow it instead: a smaller sub-question, one
+  value traced by hand, or what they expect a single line to do. Repeating yourself teaches
+  them nothing and reads as if you were not listening.
+- When their message asks YOU something, engage with what they asked before anything else.
+  A question about a concept or a built-in gets a real answer; only the answer to their own
+  bug stays withheld.
+- hint_level 1: one guiding question only
+- hint_level 2: name the specific line or concept, explain the concept briefly
+- hint_level 3: pseudocode only, never real {language} syntax
+
+ALWAYS:
 - Keep responses under 150 words
-- End every response with "What do you think should happen next?"
+- Sound like a person, not a form. Close with a question only when you are actually waiting on
+  them, and word it freshly every time. Never end with a stock sentence.
 ```
 
-The three constraining lines are the first three bullets. The level-specific
-behaviour is bullets four to six.
+Two branches, chosen by the model from the student's latest message. The
+`WHEN THEY ARE NOT YET RIGHT` branch carries the constraining lines (the two
+`NEVER`s), the two anti-repetition rules, and the level-specific behaviour in
+its last three bullets.
+
+The anti-repetition pair exists because a held level used to produce the same
+question twice: the ladder is only *allowed* to move on an attempt, so a
+student saying "I don't know" stays at one depth by design, and without these
+rules the tutor filled that turn by re-asking. Section 12 covers why the level
+itself was, separately, stuck at 1 for every Firestore-backed student.
 
 **What varies by hint level.** Nothing in the system prompt changes: all three
 level rules are always present. The level is communicated in the *user*
@@ -1335,21 +1360,38 @@ interaction document; the collection grows without bound.
 
 ### Collection: `sessions`
 
-**Document ID:** `f"{user_id}__{ladder_key}"` (`backend/session_store.py:124-125`)
-— the uid, two underscores, and the ladder key chosen by `_ladder_key`
-(`backend/main.py:174-185`): the client-supplied `problem_key` (the document
-URI) when one is sent, otherwise the SHA-1 hex fingerprint of the code.
+**Document ID:** `sha1(f"{user_id}\x00{ladder_key}")`, hex
+(`backend/session_store.py:124-144`) — an opaque digest of the uid and the
+ladder key chosen by `_ladder_key` (`backend/main.py:174-185`): the
+client-supplied `problem_key` (the document URI) when one is sent, otherwise
+the SHA-1 hex fingerprint of the code.
+
+The ID is hashed rather than interpolated because the usual ladder key *is* a
+document URI — `file:///c%3A/.../demo.py#average` — and Firestore reads `/` as
+a path separator. The former `f"{user_id}__{ladder_key}"` produced a resource
+name with an odd number of segments, so the server rejected every read and
+write with `400 ... lacks a collection id`. Both call sites swallow their
+exceptions, so this surfaced only as behaviour: `peek_hint_level` fell through
+to its hardcoded `return 1` and `commit_hint_level` stored nothing, leaving
+every Firestore-backed student pinned at hint level 1 forever. The in-memory
+store keys on a tuple and was never affected, which is why the whole test
+suite passed.
 
 | Field | Type | Written by | Read by | Purpose |
 | --- | --- | --- | --- | --- |
-| `user_id` | string | `commit_hint_level:152` | `reset` query | Owner, and the field the reset query filters on. |
-| `fingerprint` | string | same | nothing (it is already in the doc ID) | The ladder key this level belongs to. |
-| `hint_level` | int, 1–3 | same | `peek_hint_level:138` | The progressive level. |
+| `user_id` | string | `commit_hint_level:171` | `reset` query | Owner, and the field the reset query filters on. |
+| `fingerprint` | string | same | nothing programmatic | The ladder key this level belongs to. The document ID is now a digest, so this field is the only legible record of which problem a row belongs to. |
+| `hint_level` | int, 1–3 | same | `peek_hint_level:157` | The progressive level. |
 | `updated_at` | server timestamp | same | nothing | Audit only. |
 
 These writes are **overwrites**, not merges — `ref.set(...)` is called without
-`merge=True` (`backend/session_store.py:150-158`). Since all four
+`merge=True` (`backend/session_store.py:169-177`). Since all four
 fields are supplied every time, nothing is lost.
+
+Changing the ID scheme orphaned every document written under the old one.
+Nothing needed migrating: those rows were unreachable by construction, and a
+student whose ladder restarts at 1 is starting from where the bug had them
+stuck anyway.
 
 ### Collection: `sessions_meta`
 
@@ -1373,9 +1415,9 @@ Both writes pass `merge=True`.
 | `interactions.add(doc)` | `firebase_service.py:267` | No. |
 | `interactions.where("user_id","==",uid).order_by("timestamp", DESCENDING).limit(10)` | `firebase_service.py:461-467` | **Yes** — equality filter plus order-by on a different field requires a composite index on `(user_id ASC, timestamp DESC)`. |
 | `interactions.where("user_id","==",uid).limit(10)` | `firebase_service.py:470` | No — single-field index suffices. |
-| `sessions.document(f"{uid}__{key}").get()/.set()` | `session_store.py:134-138`, `147-158` | No. |
-| `sessions.where("user_id","==",uid).stream()` | `session_store.py:208-210` | No — single equality filter. |
-| `sessions_meta.document(uid).get()/.set()` | `session_store.py:183-200`, `218-220` | No. |
+| `sessions.document(sha1(uid + key)).get()/.set()` | `session_store.py:152-156`, `165-177` | No. |
+| `sessions.where("user_id","==",uid).stream()` | `session_store.py:227-229` | No — single equality filter. |
+| `sessions_meta.document(uid).get()/.set()` | `session_store.py:202-219`, `237-239` | No. |
 
 **What happens when the composite index is absent.** The ordered query is
 wrapped in its own `try` (`backend/firebase_service.py:462-470`). Firestore
@@ -2453,7 +2495,7 @@ The `Groq` client is replaced with a `MagicMock` returning a canned string.
 | `TestActivityStrip` (5) | `test_length_matches_window`, `test_oldest_first_ending_today`, `test_counts_are_picked_up_by_date`, `test_days_outside_the_window_are_dropped`, `test_garbage_counts_become_zero` | The 14-entry strip, its ordering and its window. |
 | `TestBuildProgressNewFields` (2) | `test_includes_calibration_levels_and_activity`, `test_empty_profile_still_produces_the_new_keys` | The v2 fields are always present. |
 
-#### `backend/tests/test_session_store.py` — 56 tests, 513 lines
+#### `backend/tests/test_session_store.py` — 64 tests, 583 lines
 
 | Class | Tests | What they assert |
 | --- | --- | --- |
@@ -2466,6 +2508,7 @@ The `Groq` client is replaced with a `MagicMock` returning a canned string.
 | `TestResolveLevel` (6) | `test_escalating_from_nothing_is_level_one`, `test_escalating_advances_by_one`, `test_escalating_stops_at_three`, `test_not_escalating_reuses_the_level`, `test_not_escalating_from_nothing_floors_at_one`, `test_a_corrupt_high_level_is_clamped` | The pure ladder function shared by both stores. |
 | `TestPeekAndCommit` (8) | `test_peek_does_not_persist_anything`, `test_commit_makes_the_next_peek_advance`, `test_peek_without_escalating_reuses_the_committed_level`, `test_commit_clamps_out_of_range_levels`, `test_peek_is_scoped_per_user_and_fingerprint`, `test_commit_respects_the_entry_bound`, `test_next_hint_level_is_peek_plus_commit`, `test_reset_clears_committed_levels` | Peek is read-only; only commit spends a level. |
 | `TestFirestorePeekAndCommit` (7) | `test_peek_writes_nothing`, `test_peek_on_a_missing_document_is_level_one`, `test_peek_without_escalating_writes_nothing`, `test_commit_writes_the_level`, `test_commit_clamps_before_writing`, `test_peek_degrades_to_one_on_error`, `test_commit_swallows_errors` | The same contract against a stubbed Firestore client, asserting on the actual writes performed. |
+| `TestFirestoreDocumentIds` (8) | `test_a_uri_key_yields_an_id_firestore_will_accept`, `test_the_ladder_advances_for_a_uri_key`, `test_a_held_level_persists_for_a_uri_key`, `test_two_symbols_in_one_file_are_independent`, `test_reset_still_clears_a_uri_keyed_ladder`, `test_a_slash_in_the_user_id_is_contained_too`, `test_the_user_and_problem_halves_cannot_bleed_into_each_other`, `test_the_readable_key_is_still_stored_as_a_field` | That the real ladder key — a `file:///…#symbol` URI — survives a Firestore round trip. The fake client enforces the server's document-ID rules (`_assert_valid_document_id`); the version that did not let a permanently broken ladder pass every test. |
 
 #### `backend/tests/test_languages.py` — 38 tests, 69 lines
 
@@ -3359,11 +3402,11 @@ publication claim.
 
 **Status: holds.**
 
-Evidence: `FirestoreSessionStore` (`backend/session_store.py:59-157`) stores
-hint levels in a `sessions` collection keyed `{uid}__{fingerprint}` and the
-open-session flag in `sessions_meta` keyed by uid. `build_session_store`
+Evidence: `FirestoreSessionStore` (`backend/session_store.py:107-241`) stores
+hint levels in a `sessions` collection keyed on `sha1(uid + ladder_key)` and
+the open-session flag in `sessions_meta` keyed by uid. `build_session_store`
 selects it whenever Firestore initialised successfully
-(`backend/session_store.py:160-165`). Session state therefore survives a
+(`backend/session_store.py:244-249`). Session state therefore survives a
 backend restart, which is the stated reason for the design
 (`backend/session_store.py:60`).
 
