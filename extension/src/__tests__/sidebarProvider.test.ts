@@ -1,5 +1,6 @@
 import * as vscode from "vscode";
 import { EduPeerSidebarProvider } from "../sidebarProvider";
+import { AttemptTracker } from "../attemptTracker";
 import { AuthError, RateLimitError } from "../apiClient";
 import { formatTestFailureQuestion } from "../pedagogy";
 
@@ -2120,12 +2121,30 @@ describe("answer on request", () => {
   });
 
   it("does not spend a rung", async () => {
-    // Not a hint, so `attempts.evaluate` never runs: the first real hint that
-    // follows still starts the ladder at 1.
+    // `mode` on the outgoing request is set from the caller-supplied
+    // parameter regardless of whether the ladder ran, so asserting on it
+    // alone (as the other tests in this block do — routing is already
+    // covered there) would not catch a regression that broadened the ladder
+    // gate in `handleAsk` from `mode === "hint"` to
+    // `mode === "hint" || mode === "answer"`. Spying on the tracker itself is
+    // what actually watches the ladder: `evaluate` must not run for the
+    // answer-mode ask, and `record` — the call that spends the rung — must
+    // not either. The first real hint that follows should then still find no
+    // prior attempt for this problem key and start the ladder at 1.
+    const evaluateSpy = jest.spyOn(AttemptTracker.prototype, "evaluate");
+    const recordSpy = jest.spyOn(AttemptTracker.prototype, "record");
     const h = await build();
+
     await h.send({ type: "askHint", question: "show me the solution", code: CODE, mode: "hint" });
-    expect(hintRequest(h.api).mode).toBe("answer");
+    expect(evaluateSpy).not.toHaveBeenCalled();
+    expect(recordSpy).not.toHaveBeenCalled();
+
     await askPastTheGate(h);
     expect(hintRequest(h.api).mode).toBe("hint");
+    expect(evaluateSpy).toHaveBeenCalledTimes(1);
+    expect(recordSpy).toHaveBeenCalledTimes(1);
+
+    evaluateSpy.mockRestore();
+    recordSpy.mockRestore();
   });
 });
