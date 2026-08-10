@@ -906,3 +906,68 @@ class TestAnswerMode:
         # It is not on the ladder, so the level it happens to carry is inert.
         from hinting_engine import effective_mode
         assert effective_mode("answer", 4) == "answer"
+
+
+class TestThePromptsAnswerTheQuestionAsked:
+    """Rules added after a transcript where the tutor did none of this.
+
+    The observed failures, in one session: an ANSWER card that opened "the bug
+    is in line 12" and then corrected line 13; a "corrected" line 12 that was
+    character-for-character what the student had already written; an answer
+    about empty lists when the whole thread had been about `enumerate`; a bare
+    "Other bugs are present in the file"; and a worked example that answered
+    "fix line 11" with an eight-step labelling exercise built from the
+    student's own loop with the variables renamed.
+
+    Each assertion below pins the rule that closes one of those. They are
+    string checks on the prompt, which is weak evidence that the model obeys -
+    but strong evidence that a later edit did not quietly delete the rule.
+    """
+
+    def test_the_answer_names_and_changes_the_same_line(self):
+        from hinting_engine import ANSWER_TEMPLATE
+        assert "MUST be the same line" in ANSWER_TEMPLATE
+
+    def test_the_answer_rejects_an_unchanged_correction(self):
+        from hinting_engine import ANSWER_TEMPLATE
+        assert "must differ from" in ANSWER_TEMPLATE
+        assert "character-for-character" in ANSWER_TEMPLATE
+
+    def test_the_answer_is_scoped_to_what_they_asked(self):
+        from hinting_engine import ANSWER_TEMPLATE
+        assert "fix line 11" in ANSWER_TEMPLATE
+        assert "NOT whichever defect you happen to notice first" in ANSWER_TEMPLATE
+
+    def test_the_answer_may_not_hand_wave_at_other_bugs(self):
+        from hinting_engine import ANSWER_TEMPLATE
+        assert "other bugs are present in the file" in ANSWER_TEMPLATE
+
+    def test_the_answer_may_decline_to_invent_a_fault(self):
+        from hinting_engine import ANSWER_TEMPLATE
+        assert "Do not manufacture a fault" in ANSWER_TEMPLATE
+
+    def test_the_worked_example_answers_a_direct_request_first(self):
+        from hinting_engine import WORKED_EXAMPLE_TEMPLATE
+        assert "ONE sentence first" in WORKED_EXAMPLE_TEMPLATE
+
+    def test_the_worked_example_must_not_be_their_loop_renamed(self):
+        from hinting_engine import WORKED_EXAMPLE_TEMPLATE
+        assert "Renaming their" in WORKED_EXAMPLE_TEMPLATE
+
+    def test_the_worked_example_is_one_program(self):
+        from hinting_engine import WORKED_EXAMPLE_TEMPLATE
+        assert "ONE program" in WORKED_EXAMPLE_TEMPLATE
+
+    def test_a_hint_defines_a_word_the_student_says_they_do_not_know(self):
+        from hinting_engine import SYSTEM_PROMPT_TEMPLATE
+        assert "I don't know what X is" in SYSTEM_PROMPT_TEMPLATE
+
+    def test_every_rewritten_template_still_formats(self):
+        # These are .format(language=...)-ed; an unescaped brace raises here.
+        from hinting_engine import (
+            ANSWER_TEMPLATE,
+            SYSTEM_PROMPT_TEMPLATE,
+            WORKED_EXAMPLE_TEMPLATE,
+        )
+        for template in (ANSWER_TEMPLATE, SYSTEM_PROMPT_TEMPLATE, WORKED_EXAMPLE_TEMPLATE):
+            assert template.format(language="Python")

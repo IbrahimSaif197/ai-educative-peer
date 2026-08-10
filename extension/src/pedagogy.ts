@@ -20,11 +20,15 @@ export type TutorMode =
  * The top of the hint ladder. Rungs 1-3 are the Socratic ladder; rung 4 *is*
  * the worked example, reached by asking again at rung 3.
  *
- * The counterpart of `MAX_HINT_LEVEL` in `backend/models.py`. Two languages
- * cannot share one declaration, so the pair is kept in step by hand: change
- * one and change the other. Everything client-side that renders or clamps a
- * depth reads this rather than a literal — a bare `3` in the status bar is
- * what left it saying "hint 3/3" beside a panel showing four filled rungs.
+ * The counterpart of `MAX_HINT_LEVEL` in `backend/models.py`. A VS Code
+ * extension and a FastAPI service share no build step, so the value is
+ * declared once per language — but it is not left to whoever edits next to
+ * remember both: `pedagogy.test.ts` reads `backend/models.py` and fails if
+ * the two disagree. Change one, and the suite tells you about the other.
+ *
+ * Everything client-side that renders or clamps a depth reads this rather
+ * than a literal — a bare `3` in the status bar is what left it saying
+ * "hint 3/3" beside a panel showing four filled rungs.
  */
 export const MAX_HINT_LEVEL = 4;
 

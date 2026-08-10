@@ -1,4 +1,8 @@
+import * as fs from "fs";
+import * as path from "path";
+
 import {
+  MAX_HINT_LEVEL,
   codeFingerprint,
   formatExceptionQuestion,
   frameExplainedQuestion,
@@ -9,6 +13,26 @@ import {
   looksLikeErrorText,
   questionForMode,
 } from "../pedagogy";
+
+describe("MAX_HINT_LEVEL matches the backend", () => {
+  // The ladder's top is declared twice - once per language - because a VS Code
+  // extension and a FastAPI service share no build step. A comment asking the
+  // next person to change both is not a mechanism; this is. If the two drift,
+  // the panel and the server disagree about how deep the student is, which is
+  // exactly the class of bug that shipped a status bar reading "hint 3/3"
+  // beside a panel showing four filled rungs.
+  const modelsPy = path.join(__dirname, "..", "..", "..", "backend", "models.py");
+
+  it("finds the backend declaration", () => {
+    expect(fs.existsSync(modelsPy)).toBe(true);
+    expect(fs.readFileSync(modelsPy, "utf8")).toMatch(/^MAX_HINT_LEVEL\s*=\s*\d+$/m);
+  });
+
+  it("agrees with backend/models.py", () => {
+    const match = fs.readFileSync(modelsPy, "utf8").match(/^MAX_HINT_LEVEL\s*=\s*(\d+)$/m);
+    expect(Number(match![1])).toBe(MAX_HINT_LEVEL);
+  });
+});
 
 describe("codeFingerprint", () => {
   it("is stable for the same input", () => {
