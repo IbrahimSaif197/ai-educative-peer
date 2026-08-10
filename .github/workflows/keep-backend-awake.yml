@@ -1,48 +1,101 @@
 # Render's free plan stops the service after ~15 minutes idle and takes ~50s to
-# wake. The extension abandons a request after 20s, so the first student to ask
-# a question after an idle period silently gets the offline fallback tutor.
-# Pinging /health keeps the instance up.
+# wake. The extension now survives that (it retries a timeout on a 75s clock and
+# says what it is waiting for), but a student still should not pay a minute for
+# being first. This keeps the instance up so they rarely do.
 #
-# Caveats worth knowing before relying on this:
-#   - GitHub's scheduled runs are best-effort and are routinely late by 5-15
-#     minutes under load, which can exceed Render's idle window. A dedicated
-#     pinger (cron-job.org, UptimeRobot) is more punctual.
-#   - Scheduled workflows are disabled automatically after 60 days with no
-#     commits to the repository.
-#   - One always-on free service consumes roughly 730 of the 750 free instance
-#     hours per month, so this leaves no room for a second free service.
+# WHY THIS IS A LONG-RUNNING LOOP RATHER THAN A FREQUENT CRON
+#
+# The obvious `cron: */10` does not work. GitHub's scheduler is best-effort and
+# under load it simply skips: on 2026-08-10 a */10 schedule produced gaps of 55,
+# 61, 74 and 91 minutes — every one of them far past Render's 15-minute idle
+# window, so the service was asleep for most of the day.
+#
+# One job that stays up and pings on its own clock does not depend on the
+# scheduler at all. It runs just under GitHub's 6-hour job ceiling, then hands
+# off to a fresh run. The cron below is only a safety net for when that chain
+# breaks (a cancelled run, a runner failure, an outage).
+#
+# This is free only because the repository is public — public repos get
+# unmetered Actions minutes. If it ever goes private again, delete this file:
+# at one billed minute per run, minimum, a loop like this would eat the whole
+# free allowance in under two days. A dedicated pinger (cron-job.org,
+# UptimeRobot) is the cleaner tool and does not lean on Actions for something
+# Actions is not really for.
+#
+# Note: GitHub disables scheduled workflows after 60 days with no commits to the
+# repository, which would also stop the safety net.
 name: Keep backend awake
 
 on:
   schedule:
-    - cron: "*/10 * * * *"
+    # Safety net only — the running job normally hands off before this fires.
+    - cron: "17 */4 * * *"
   workflow_dispatch:
 
-# A late run must not stack up behind an in-flight one.
+# Never kill a live pinger to start another. A new run queues instead, and takes
+# over when the current one ends; GitHub keeps only the newest queued run, so
+# the handoff and the safety net cannot stack into two concurrent loops.
 concurrency:
   group: keep-backend-awake
-  cancel-in-progress: true
+  cancel-in-progress: false
+
+permissions:
+  actions: write # to hand off to the next run
 
 jobs:
   ping:
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    # GitHub's hard job ceiling is 6 hours. Stop short so the handoff below
+    # actually runs instead of being killed mid-step.
+    timeout-minutes: 345
+    env:
+      HEALTH_URL: https://edupeer-backend.onrender.com/health
+      INTERVAL_SECONDS: 300
+      RUN_FOR_SECONDS: 20100 # 5h35m, leaving room under the 345m timeout
     steps:
-      - name: Ping /health
+      - name: Ping /health until it is time to hand off
         run: |
-          # --max-time 90 covers a cold start; the retries cover a wake that
-          # takes longer than that or a deploy happening mid-ping.
-          body=$(curl -fsS --max-time 90 --retry 3 --retry-delay 30 \
-                   --retry-all-errors \
-                   https://edupeer-backend.onrender.com/health)
-          echo "$body"
+          set -uo pipefail
+          deadline=$(( SECONDS + RUN_FOR_SECONDS ))
+          ok=0
+          fail=0
 
-          # A woken service that cannot reach Firestore still answers 200, so
-          # curl -f alone would call this a success while nothing persists.
-          case "$body" in
-            *'"firestore":"ok"'*)
-              echo "::notice::Backend awake, Firestore connected." ;;
-            *)
-              echo "::error::Backend is up but Firestore is unavailable — check the service-account key in Render's environment."
-              exit 1 ;;
-          esac
+          while [ "$SECONDS" -lt "$deadline" ]; do
+            # --max-time 90 covers a cold start; the retries cover a wake that
+            # runs longer than that, or a deploy landing mid-ping.
+            if body=$(curl -fsS --max-time 90 --retry 2 --retry-delay 20 \
+                        --retry-all-errors "$HEALTH_URL"); then
+              case "$body" in
+                *'"firestore":"ok"'*)
+                  ok=$(( ok + 1 ))
+                  ;;
+                *)
+                  # A woken service that cannot reach Firestore still answers
+                  # 200, so a bare curl -f would call this healthy while
+                  # nothing persists.
+                  fail=$(( fail + 1 ))
+                  echo "::warning::Backend is up but Firestore is unavailable — check the service-account key in Render."
+                  ;;
+              esac
+            else
+              fail=$(( fail + 1 ))
+              echo "::warning::Ping failed at $(date -u +%H:%M:%SZ)."
+            fi
+            sleep "$INTERVAL_SECONDS"
+          done
+
+          echo "::notice::Pings this run — ok: $ok, failed: $fail."
+          # Only a total failure is worth a red run. Isolated misses are
+          # expected around deploys and are already warnings.
+          if [ "$ok" -eq 0 ]; then
+            echo "::error::Every ping this run failed. The backend looks down."
+            exit 1
+          fi
+
+      - name: Hand off to the next run
+        # `always()` so a failed or timed-out run still starts its successor —
+        # otherwise one bad window silently ends the chain until the cron fires.
+        if: always()
+        run: gh workflow run keep-backend-awake.yml --ref "${{ github.ref_name }}"
+        env:
+          GH_TOKEN: ${{ github.token }}
