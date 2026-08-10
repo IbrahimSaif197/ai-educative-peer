@@ -31,7 +31,7 @@ describe("buildProgressHtml", () => {
 
   it("renders struggle bars at the right width", () => {
     const html = buildProgressHtml(
-      report({ concept_struggles: [{ concept: "recursion", encounters: 3, avg_level: 3 }] })
+      report({ concept_struggles: [{ concept: "recursion", encounters: 3, avg_level: 4 }] })
     );
     expect(html).toContain("recursion");
     // Geometry lives in SVG attributes, not style attributes, so the panel
@@ -41,9 +41,22 @@ describe("buildProgressHtml", () => {
 
   it("scales a partial struggle bar", () => {
     const html = buildProgressHtml(
-      report({ concept_struggles: [{ concept: "loops", encounters: 2, avg_level: 1.5 }] })
+      report({ concept_struggles: [{ concept: "loops", encounters: 2, avg_level: 2 }] })
     );
     expect(html).toContain('width="50"');
+  });
+
+  /**
+   * `_update_concept_stats` counts level-4 hints, so an average above 3 is
+   * ordinary. Scaling against 3 pinned every deep concept at a full bar and
+   * read out "average hint depth 3.5 of 3" to a screen reader.
+   */
+  it("scales concept bars against the top rung, not a stale max of three", () => {
+    const html = buildProgressHtml(
+      report({ concept_struggles: [{ concept: "recursion", encounters: 3, avg_level: 3.5 }] })
+    );
+    expect(html).toContain("average hint depth 3.5 of 4");
+    expect(html).toContain('width="88"');
   });
 
   it("shows the review banner only when due", () => {

@@ -7,6 +7,7 @@
  */
 
 import * as vscode from "vscode";
+import { MAX_HINT_LEVEL } from "./pedagogy";
 
 export interface StatusSnapshot {
   hintLevel: number;
@@ -29,7 +30,7 @@ export function renderStatus(snapshot: StatusSnapshot): { text: string; tooltip:
   } else if (snapshot.thinking) {
     parts.push("$(sync~spin)");
   } else if (snapshot.hintLevel >= 1) {
-    parts.push(`hint ${Math.min(3, snapshot.hintLevel)}/3`);
+    parts.push(`hint ${Math.min(MAX_HINT_LEVEL, snapshot.hintLevel)}/${MAX_HINT_LEVEL}`);
   }
   if (snapshot.streakDays > 0) {
     parts.push(`${snapshot.streakDays}d`);
@@ -40,7 +41,7 @@ export function renderStatus(snapshot: StatusSnapshot): { text: string; tooltip:
 
   const tooltipLines = [
     snapshot.hintLevel >= 1
-      ? `Hint depth on this problem: ${Math.min(3, snapshot.hintLevel)} of 3`
+      ? `Hint depth on this problem: ${Math.min(MAX_HINT_LEVEL, snapshot.hintLevel)} of ${MAX_HINT_LEVEL}`
       : "No hints used on this problem yet",
     snapshot.streakDays > 0
       ? `Practice streak: ${snapshot.streakDays} day${snapshot.streakDays === 1 ? "" : "s"}`

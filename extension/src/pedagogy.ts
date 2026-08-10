@@ -16,6 +16,18 @@ export type TutorMode =
   | "trace-check"
   | "answer";
 
+/**
+ * The top of the hint ladder. Rungs 1-3 are the Socratic ladder; rung 4 *is*
+ * the worked example, reached by asking again at rung 3.
+ *
+ * The counterpart of `MAX_HINT_LEVEL` in `backend/models.py`. Two languages
+ * cannot share one declaration, so the pair is kept in step by hand: change
+ * one and change the other. Everything client-side that renders or clamps a
+ * depth reads this rather than a literal — a bare `3` in the status bar is
+ * what left it saying "hint 3/3" beside a panel showing four filled rungs.
+ */
+export const MAX_HINT_LEVEL = 4;
+
 export const EXPLAIN_FIRST_PROMPT =
   "Before I give you a hint — in your own words, what do you think this code is doing? " +
   "Explaining first helps it stick. (You can skip this.)";

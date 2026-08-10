@@ -114,6 +114,108 @@ describe("authenticated requests", () => {
   });
 });
 
+/**
+ * A new extension against a backend that predates `answer` mode. `TutorMode`
+ * there has no such member, so FastAPI answers 422 — a perfectly normal HTTP
+ * response, so the client stays "available" and the offline tutor never runs.
+ * Left alone, the student reads `Backend error (422): {"detail":[...]}` in a
+ * banner. Same convention as `ProgressReport.calibration`: degrade, don't
+ * surface the skew.
+ */
+describe("version skew — an old backend has never heard of answer mode", () => {
+  const hint = { hint: "What does len(n) return?", hint_level: 1, concept_tags: [] };
+
+  function sequence(responses: Array<{ status: number; body: any }>): jest.Mock {
+    const queue = [...responses];
+    const mock = jest.fn(async () => {
+      const next = queue.shift() ?? responses[responses.length - 1];
+      return {
+        ok: next.status >= 200 && next.status < 300,
+        status: next.status,
+        headers: { get: () => null },
+        json: async () => next.body,
+        text: async () => JSON.stringify(next.body),
+      };
+    });
+    (global as any).fetch = mock;
+    return mock;
+  }
+
+  it("getHint retries an answer-mode 422 as a hint instead of showing raw JSON", async () => {
+    const fetchMock = sequence([
+      { status: 422, body: { detail: [{ msg: "unexpected value; permitted: 'hint', …" }] } },
+      { status: 200, body: hint },
+    ]);
+    const res = await new ApiClient(BASE, makeTokens()).getHint({
+      code: "x=1",
+      question: "just tell me the answer",
+      hint_level: 1,
+      mode: "answer",
+    });
+    expect(res.hint).toBe(hint.hint);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(JSON.parse(fetchMock.mock.calls[1][1].body).mode).toBe("hint");
+  });
+
+  it("getHint surfaces a 422 that is not about the mode", async () => {
+    // A 422 on an ordinary hint is a real contract breach, not version skew.
+    sequence([{ status: 422, body: { detail: "code too long" } }]);
+    await expect(
+      new ApiClient(BASE, makeTokens()).getHint({ code: "x", question: "q", hint_level: 1 })
+    ).rejects.toThrow(/422/);
+  });
+
+  it("getHint gives up after one downgrade rather than looping", async () => {
+    const fetchMock = sequence([{ status: 422, body: { detail: "nope" } }]);
+    await expect(
+      new ApiClient(BASE, makeTokens()).getHint({
+        code: "x",
+        question: "q",
+        hint_level: 1,
+        mode: "answer",
+      })
+    ).rejects.toThrow(/422/);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("streamHint downgrades too, so the answer still streams", async () => {
+    const encoder = new TextEncoder();
+    const frames = [
+      `data: ${JSON.stringify({ type: "meta", hint_level: 1, mode: "hint" })}\n\n`,
+      `data: ${JSON.stringify({ type: "done", hint: "streamed", concept_tags: [] })}\n\n`,
+    ];
+    let call = 0;
+    const fetchMock = jest.fn(async () => {
+      if (call++ === 0) {
+        return { ok: false, status: 422, headers: { get: () => null }, body: null };
+      }
+      const queue = [...frames];
+      return {
+        ok: true,
+        status: 200,
+        headers: { get: () => null },
+        body: {
+          getReader: () => ({
+            read: jest.fn(async () =>
+              queue.length
+                ? { value: encoder.encode(queue.shift()!), done: false }
+                : { value: undefined, done: true }
+            ),
+            cancel: jest.fn(async () => undefined),
+          }),
+        },
+      };
+    });
+    (global as any).fetch = fetchMock;
+    const res = await new ApiClient(BASE, makeTokens()).streamHint(
+      { code: "x", question: "tell me the answer", hint_level: 1, mode: "answer" },
+      () => {}
+    );
+    expect(res.hint).toBe("streamed");
+    expect(JSON.parse((fetchMock.mock.calls[1] as any)[1].body).mode).toBe("hint");
+  });
+});
+
 describe("parseSseChunk", () => {
   it("parses complete events and keeps the remainder", () => {
     const { events, rest } = parseSseChunk(

@@ -2148,3 +2148,60 @@ describe("answer on request", () => {
     recordSpy.mockRestore();
   });
 });
+
+describe("the card is labelled with the mode the backend actually ran", () => {
+  beforeEach(() => mock.__reset());
+
+  /**
+   * Rung 4 *is* the worked example: the request goes out as `hint`, and the
+   * backend answers `mode: "worked-example"`. Posting the request mode instead
+   * titles a worked example "hint 4" and — because `media/main.js` gates the
+   * "Label the steps" action on `mode === "worked-example"` — leaves
+   * subgoal-labelling unreachable now that the button that used to produce
+   * that mode is gone.
+   */
+  it("posts the response mode, not the mode the request asked for", async () => {
+    const h = await build({
+      streamHint: jest.fn(async () => ({
+        hint: "Here is the same idea on a different problem…",
+        hint_level: 4,
+        concept_tags: ["loops"],
+        mode: "worked-example",
+      })),
+    });
+    await askPastTheGate(h);
+    expect(latest(h.posted, "hint").mode).toBe("worked-example");
+  });
+
+  it("falls back to the request mode when an older backend sends none", async () => {
+    const h = await build({
+      streamHint: jest.fn(async () => ({ hint: "h", hint_level: 2, concept_tags: [] })),
+    });
+    await askPastTheGate(h);
+    expect(latest(h.posted, "hint").mode).toBe("hint");
+  });
+
+  /**
+   * The guard against fixing the label by re-keying the ladder: `record` and
+   * the level event are keyed on the *request* mode. Keying them on the
+   * response mode would stop rung 4 spending the rung, and the ladder would
+   * sit at 4 forever.
+   */
+  it("still spends the rung when the backend answers with a different mode", async () => {
+    const levels: number[] = [];
+    const recordSpy = jest.spyOn(AttemptTracker.prototype, "record");
+    const h = await build({
+      streamHint: jest.fn(async () => ({
+        hint: "worked example",
+        hint_level: 4,
+        concept_tags: [],
+        mode: "worked-example",
+      })),
+    });
+    h.provider.onDidChangeHintLevel((level) => levels.push(level));
+    await askPastTheGate(h);
+    expect(recordSpy).toHaveBeenCalledTimes(1);
+    expect(levels).toEqual([4]);
+    recordSpy.mockRestore();
+  });
+});

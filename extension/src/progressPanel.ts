@@ -1,4 +1,5 @@
 import type { ActivityDay, ConceptStat, ProgressReport } from "./apiClient";
+import { MAX_HINT_LEVEL } from "./pedagogy";
 
 /**
  * Pure HTML builder for the progress dashboard (tested in jest).
@@ -25,7 +26,10 @@ function statTile(label: string, value: string | number): string {
   </div>`;
 }
 
-function conceptBars(items: ConceptStat[], maxLevel = 3): string {
+// `_update_concept_stats` counts rung-4 hints, so an average above 3 is
+// ordinary rather than a glitch. Scaling against 3 pinned every deep concept
+// at a full bar and told a screen reader "average hint depth 3.5 of 3".
+function conceptBars(items: ConceptStat[], maxLevel = MAX_HINT_LEVEL): string {
   if (!items.length) {
     return `<p class="empty">Nothing here yet. Ask a few questions and this fills in.</p>`;
   }
@@ -36,7 +40,7 @@ function conceptBars(items: ConceptStat[], maxLevel = 3): string {
         <span class="row__label">${escapeHtml(item.concept)}</span>
         <span class="row__track">
           <svg viewBox="0 0 100 6" preserveAspectRatio="none" role="img"
-               aria-label="${escapeHtml(item.concept)}: average hint depth ${escapeHtml(item.avg_level)} of 3">
+               aria-label="${escapeHtml(item.concept)}: average hint depth ${escapeHtml(item.avg_level)} of ${maxLevel}">
             <rect x="0" y="0" width="100" height="6" rx="3" class="track"></rect>
             <rect x="0" y="0" width="${pct}" height="6" rx="3" class="fill"></rect>
           </svg>

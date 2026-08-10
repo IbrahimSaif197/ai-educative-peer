@@ -702,7 +702,15 @@ export class EduPeerSidebarProvider implements vscode.WebviewViewProvider {
         hint: res.hint,
         hint_level: res.hint_level,
         concept_tags: res.concept_tags,
-        mode,
+        // The mode the backend *ran*, not the one asked for: at the top of the
+        // ladder a `hint` request comes back as `worked-example`, and the card
+        // is titled — and its "Label the steps" action gated — from this.
+        // Falls back to the request mode for a backend too old to report one.
+        //
+        // Only the label moves. `attempts.record` and the level event above
+        // stay keyed on the request mode: re-key them here and rung 4 stops
+        // spending its rung, which strands the ladder at 4 forever.
+        mode: res.mode ?? mode,
       });
       await this.sendBadges();
     } catch (err: any) {
