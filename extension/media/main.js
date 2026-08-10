@@ -38,6 +38,7 @@
     "review-exercise": "Review",
     "subgoal-label": "Step labels",
     "trace-check": "Trace check",
+    answer: "Answer",
     "attempt-gate": "Same depth",
     "rate-limited": "Slow down",
     offline: "Offline nudge",
@@ -45,6 +46,9 @@
 
   /** Modes that are the tutor withholding rather than teaching. */
   const FLAGGED_MODES = new Set(["attempt-gate", "rate-limited", "offline"]);
+
+  /** Modes that occupy a rung on the hint ladder, so the card shows its depth. */
+  const LADDER_MODES = new Set(["hint", "worked-example"]);
 
   let currentCode = "";
   let signedIn = false;
@@ -161,7 +165,7 @@
       // Tracked so the held state (below) has a single dot to put its static
       // ring on: the last filled one, i.e. the current depth.
       let lastOnDot = null;
-      for (let i = 1; i <= 3; i++) {
+      for (let i = 1; i <= 4; i++) {
         const dot = document.createElement("span");
         const on = i <= turn.level;
         dot.className = on ? "ladder__dot is-on" : "ladder__dot";
@@ -483,7 +487,7 @@
       role: "tutor",
       text: msg.hint,
       eyebrow: mode === "hint" ? undefined : MODE_LABEL[mode] || mode,
-      level: mode === "hint" ? level : 0,
+      level: LADDER_MODES.has(mode) ? level : 0,
       tags: msg.concept_tags || [],
       flagged: FLAGGED_MODES.has(mode),
     });
@@ -508,16 +512,6 @@
           label: "Submit my translation",
           onClick: () =>
             setComposerMode("translate", "Paste your code translation of the pseudocode…"),
-        },
-        {
-          label: "Show a worked example",
-          onClick: () =>
-            vscode.postMessage({
-              type: "askHint",
-              question: "",
-              code: currentCode,
-              mode: "worked-example",
-            }),
         },
       ]);
     }
