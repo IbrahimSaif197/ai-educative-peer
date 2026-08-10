@@ -30,16 +30,17 @@ class TestHintingEngine:
         assert isinstance(tags, list)
         assert len(tags) >= 1
 
-    def test_appends_socratic_question_if_missing(self):
+    def test_does_not_append_a_stock_closing_sentence(self):
         engine = self._engine("Look at your loop carefully.")
         hint, _ = engine.generate_hint("for i in range(10):", "help", 1)
-        assert hint.endswith("What do you think should happen next?")
+        assert hint == "Look at your loop carefully."
 
-    def test_does_not_double_append_socratic_question(self):
+    def test_leaves_the_models_own_closing_question_alone(self):
+        # Only the append is going. Text the model chose to write is untouched.
         text = "Consider the index. What do you think should happen next?"
         engine = self._engine(text)
         hint, _ = engine.generate_hint("x[5]", "help", 2)
-        assert hint.count("What do you think should happen next?") == 1
+        assert hint == text
 
     def test_level_clamped_to_3(self):
         from hinting_engine import HintingEngine
@@ -120,10 +121,10 @@ class TestLLMConceptTags:
         _, tags = engine.generate_hint("for i in range(5):", "help with for-loop", 1)
         assert "for-loop" in tags
 
-    def test_closing_question_appended_after_strip(self):
+    def test_concepts_line_stripped_from_hint(self):
         engine = self._engine("Look closely.\n[concepts: loops]")
         hint, tags = engine.generate_hint("while True: pass", "help", 1)
-        assert hint.endswith("What do you think should happen next?")
+        assert hint == "Look closely."
         assert "[concepts" not in hint
         assert tags == ["loops"]
 
@@ -340,10 +341,16 @@ class TestStreamHint:
         assert engine.client.chat.completions.create.call_args.kwargs["stream"] is True
 
     def test_done_hint_matches_generate_hint_contract(self):
-        engine = self._engine(["Consider the index."])
-        events = list(engine.stream_hint("x[5]", "help", 2))
-        done = events[-1]
-        assert done["hint"].endswith("What do you think should happen next?")
+        text = "Consider the index."
+        stream_engine = self._engine([text])
+        streamed = list(stream_engine.stream_hint("x[5]", "help", 2))[-1]["hint"]
+
+        from hinting_engine import HintingEngine
+        one_shot = HintingEngine(api_key="test-key")
+        one_shot.client = _make_mock_client(text)
+        generated, _ = one_shot.generate_hint("x[5]", "help", 2)
+
+        assert streamed == generated == text
 
 
 class TestConversationHistory:
@@ -477,9 +484,13 @@ class TestSubgoalAndTraceModes:
         assert "What do you think should happen next?" not in hint
 
     def test_unknown_mode_falls_back_to_hint(self):
-        engine = self._engine("ok")
-        hint, _ = engine.generate_hint("x=1", "q", 1, mode="not-a-mode")
-        assert hint.endswith("What do you think should happen next?")
+        bogus = self._engine("ok")
+        bogus.generate_hint("x=1", "q", 1, mode="not-a-mode")
+
+        hint_mode = self._engine("ok")
+        hint_mode.generate_hint("x=1", "q", 1, mode="hint")
+
+        assert self._system_message(bogus) == self._system_message(hint_mode)
 
 
 class TestDesignTraceTable:

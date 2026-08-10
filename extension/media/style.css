@@ -746,60 +746,6 @@ input[type="text"].trace__cell {
   background: var(--ground);
 }
 
-/* ------------------------------------------------------------- confidence */
-
-.confidence {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: var(--s2);
-  margin: 0;
-  padding: 0;
-  border: 0;
-}
-
-.confidence__legend {
-  font-family: var(--mono);
-  font-size: var(--t-micro);
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
-  color: var(--muted);
-  padding: 0;
-  margin-right: var(--s2);
-  float: left;
-  width: 100%;
-}
-
-.conf {
-  font-family: inherit;
-  font-size: var(--t-micro);
-  padding: var(--s1) var(--s4);
-  border-radius: var(--radius-pill);
-  border: 1px solid var(--line);
-  background: transparent;
-  color: var(--muted);
-  cursor: pointer;
-  /* border-color and color are here because :hover changes both — without
-     them in the list, the selected state (background, transform) animates
-     and hover snaps. */
-  transition: background-color var(--t-quick) linear,
-    border-color var(--t-quick) linear,
-    color var(--t-quick) linear,
-    transform 180ms var(--ease-signature);
-}
-
-.conf:hover {
-  border-color: var(--coral);
-  color: var(--ink);
-}
-
-.conf[aria-pressed="true"] {
-  background: var(--coral);
-  color: var(--coral-ink);
-  border-color: transparent;
-  transform: scale(1.04);
-}
-
 /* ---------------------------------------------------------------- inputs */
 
 textarea,

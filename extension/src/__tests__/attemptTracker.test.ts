@@ -2,6 +2,7 @@ import {
   AttemptTracker,
   HINT_COOLDOWN_MS,
   MAX_EDIT_SUMMARY_CHARS,
+  isAttempt,
   nudgeForUnchangedCode,
   summarizeEdit,
 } from "../attemptTracker";
@@ -151,10 +152,23 @@ describe("AttemptTracker", () => {
 });
 
 describe("nudgeForUnchangedCode", () => {
-  it("tells the student what unlocks a deeper hint", () => {
+  it("leads with telling the tutor what you tried, the fastest way out", () => {
     const text = nudgeForUnchangedCode(30_000);
-    expect(text).toContain("haven't changed anything");
+    expect(text).toContain("Tell me what you tried");
     expect(text).toContain("30s");
+  });
+
+  it("no longer claims nothing was typed", () => {
+    // `unchanged` now requires a give-up phrase, so this card fires *after*
+    // the student typed something. "You haven't changed anything yet" both
+    // misdescribed that and pointed only at the two slowest ways out.
+    const text = nudgeForUnchangedCode(30_000);
+    expect(text).not.toContain("haven't changed anything");
+  });
+
+  it("still offers editing and waiting", () => {
+    const text = nudgeForUnchangedCode(30_000);
+    expect(text).toContain("editing the code");
   });
 
   it("never counts down below one second", () => {
@@ -163,5 +177,138 @@ describe("nudgeForUnchangedCode", () => {
 
   it("rounds part-seconds up", () => {
     expect(nudgeForUnchangedCode(4200)).toContain("5s");
+  });
+});
+
+/**
+ * The probe set is the acceptance contract for this function, both halves of
+ * it. A give-up phrase used to be matched as a bare substring, which scored a
+ * beginner's most natural way of phrasing a real guess ("i dont know if range
+ * should start at 0 or 1") as a refusal: no escalation, plus the same-depth
+ * card, for a student who had reasoned correctly. The design calls that out as
+ * the worse error direction — it withholds help from someone who earned it.
+ */
+describe("isAttempt", () => {
+  const ATTEMPTS = [
+    "oh it should be a plus",
+    "maybe because minus takes away instead of combining",
+    "wait is it because - subtracts?",
+    "i tried changing it to += but it broke",
+    "whats an operator",
+    "hmm",
+    "code wont run",
+    "not sure if it's + or -, but I'll guess +",
+    "im not sure but maybe it subtracts",
+    "i dont know if range should start at 0 or 1",
+    "i have no idea why but i think the loop runs one time too many",
+    "dunno, maybe it needs to be <= instead of <",
+    "no clue why but changing it to 0 fixed it",
+  ];
+
+  const GIVE_UPS = [
+    "i dont know",
+    "i don't know",
+    "idk",
+    "IDK",
+    "  no idea  ",
+    "just tell me the answer",
+    "I really have no idea at all, can you just show me the answer",
+    "no clue",
+    "i give up",
+    "dunno",
+    "",
+    "   \n  ",
+  ];
+
+  it.each(ATTEMPTS)("counts %j as a real attempt", (message) => {
+    expect(isAttempt(message)).toBe(true);
+  });
+
+  it.each(GIVE_UPS)("counts %j as giving up", (message) => {
+    expect(isAttempt(message)).toBe(false);
+  });
+
+  it("takes a hedge followed by a guess, not merely a hedge somewhere in it", () => {
+    // The distinguishing pair: identical opening, opposite verdicts. The
+    // second clause is the whole difference.
+    expect(isAttempt("dunno")).toBe(false);
+    expect(isAttempt("dunno, maybe it needs to be <= instead of <")).toBe(true);
+  });
+
+  it("still catches a refusal padded on both sides", () => {
+    expect(isAttempt("I really have no idea at all, can you just show me the answer")).toBe(false);
+  });
+
+  it("ignores trailing punctuation on a bare refusal", () => {
+    expect(isAttempt("idk.")).toBe(false);
+    expect(isAttempt("i dont know!!!")).toBe(false);
+  });
+
+  // The clause splitter deletes every character outside [a-z0-9], so a
+  // message made only of symbols or non-Latin script reduces to zero
+  // clauses. That used to fall into the same branch as an empty message and
+  // read as giving up — but "+" typed in answer to "what operator should you
+  // use instead of subtraction?" is the answer, not a refusal.
+  const NO_MATCHABLE_WORDS_ATTEMPTS = [
+    "+",
+    "<=",
+    "==",
+    "?",
+    "因为循环多跑了一次",
+  ];
+
+  it.each(NO_MATCHABLE_WORDS_ATTEMPTS)(
+    "counts %j as a real attempt even though it has no [a-z0-9] to match",
+    (message) => {
+      expect(isAttempt(message)).toBe(true);
+    }
+  );
+
+  it("still rejects a genuinely empty or whitespace-only message", () => {
+    expect(isAttempt("")).toBe(false);
+    expect(isAttempt("   \n  ")).toBe(false);
+  });
+});
+
+describe("AttemptTracker — answering counts as trying", () => {
+  const CODE = "x = 1";
+
+  it("escalates on an answer even though the code is untouched", () => {
+    const tracker = new AttemptTracker();
+    tracker.record("file", CODE, 1000);
+
+    const result = tracker.evaluate("file", CODE, 1100, true);
+
+    expect(result.signal).toBe("answered");
+    expect(result.escalate).toBe(true);
+    expect(result.editSummary).toBe("");
+    expect(result.cooldownRemainingMs).toBe(0);
+  });
+
+  it("still holds when they did not answer and did not edit", () => {
+    const tracker = new AttemptTracker();
+    tracker.record("file", CODE, 1000);
+
+    expect(tracker.evaluate("file", CODE, 1100, false).signal).toBe("unchanged");
+  });
+
+  it("prefers the real edit over the answer, so the diff survives", () => {
+    const tracker = new AttemptTracker();
+    tracker.record("file", CODE, 1000);
+
+    const result = tracker.evaluate("file", "x = 2", 1100, true);
+
+    expect(result.signal).toBe("changed");
+    expect(result.editSummary).toBe("1 - x = 1\n1 + x = 2");
+  });
+
+  it("lets three answers reach the top of the ladder", () => {
+    const tracker = new AttemptTracker();
+    tracker.record("file", CODE, 1000);
+
+    for (const at of [1100, 1200, 1300]) {
+      expect(tracker.evaluate("file", CODE, at, true).escalate).toBe(true);
+      tracker.record("file", CODE, at);
+    }
   });
 });

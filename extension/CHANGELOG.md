@@ -1,5 +1,25 @@
 # Changelog
 
+## 1.4.0
+
+- EduPeer answers you now. Tell it the right answer and it says so, explains
+  why in a sentence, and moves you on, instead of asking the question you
+  just answered. Every reply used to end with the same sentence, which is
+  what made it feel like a loop; it closes on a question only when it is
+  actually waiting on you.
+- Working something out in the chat now counts as trying, so hints get
+  deeper as you reason rather than only when you edit code. Saying "i dont
+  know" still doesn't.
+- The "explain it in your own words" prompt appears once per file instead of
+  returning every time you change a line.
+- Each function gets its own conversation — code that sits outside one shares
+  the file's — and conversations no longer outlive the window. The chat you
+  are reading and the hint level beside it finally describe the same thing.
+- Enter sends your message; Shift+Enter starts a new line.
+- "How sure are you?" is gone, and with it the calibration score on the
+  progress dashboard.
+- The "I fixed it" button is called "Quiz me", which is what it does.
+
 ## 1.3.1
 
 - Fix hints that outlived the mistake they described. A practice file's
