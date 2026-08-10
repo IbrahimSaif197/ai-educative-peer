@@ -391,7 +391,55 @@ class GroqBackend:
                 yield text
 
 
-def number_lines(code: str) -> str:
+# How many numbered lines of the student's file ride on a request.
+#
+# Under this, the whole file goes - which is every exercise file we have seen,
+# so the common case is unchanged. Over it, only a window around the block the
+# student is working on goes, because the rest was costing real money for no
+# benefit: a 240-line file spent 2,289 tokens on code in EVERY turn of a
+# conversation, three times the entire system prompt, to re-send methods nobody
+# was discussing.
+MAX_CODE_LINES_SENT = 120
+
+# Lines of the file kept either side of the focus block when the file is too
+# big to send whole. Generous on purpose: the imports at the top and the
+# caller two functions down are often exactly what makes a hint land, and
+# clipping to the block alone is how you get a tutor that cannot see why the
+# argument is the wrong type.
+FOCUS_CONTEXT_LINES = 25
+
+
+def _window(total: int, focus: Optional[dict], budget: int) -> Tuple[int, int]:
+    """The 1-based, inclusive span of lines to send.
+
+    Centred on the focus block, widened to the budget, and clamped to the file.
+    With no focus there is nothing to centre on, so the head of the file is the
+    least surprising choice - that is where imports and definitions live.
+    """
+    if not focus:
+        return 1, min(total, budget)
+    try:
+        start = max(1, int(focus.get("start_line", 1)))
+        end = min(total, int(focus.get("end_line", start)))
+    except (TypeError, ValueError):
+        return 1, min(total, budget)
+    if end < start:
+        return 1, min(total, budget)
+
+    lo = max(1, start - FOCUS_CONTEXT_LINES)
+    hi = min(total, end + FOCUS_CONTEXT_LINES)
+    if hi - lo + 1 > budget:
+        # A block too big to fit even on its own: keep its head. The signature
+        # and the first lines of the body are what make a function readable,
+        # and the budget is a hard cap - a 370-line "block" is exactly the
+        # case this whole function exists to stop from being sent whole.
+        hi = lo + budget - 1
+    return lo, hi
+
+
+def number_lines(
+    code: str, focus: Optional[dict] = None, max_lines: int = MAX_CODE_LINES_SENT
+) -> str:
     """The student's file with its editor line numbers down the left margin.
 
     `focus_instruction` below ends with "cite real line numbers when you point
@@ -407,10 +455,27 @@ def number_lines(code: str) -> str:
     client sends the whole document, so line 1 here has to be line 1 in the
     editor; anything dropped from the top silently shifts every number after
     it. Same `<n>: <text>` format `scan_code` and `generate_line_hint` use.
+
+    Over `max_lines` the file is windowed around `focus` rather than sent
+    whole — see `MAX_CODE_LINES_SENT`. The numbers stay absolute, so a hint
+    about line 180 still says 180, and each elision is announced: a model that
+    cannot see the top of the file must know that, or it will confidently
+    report that an import is missing when it is simply out of frame.
     """
     if not code.strip():
         return "(no code provided)"
-    return "\n".join(f"{i + 1}: {line}" for i, line in enumerate(code.splitlines()))
+    lines = code.splitlines()
+    if len(lines) <= max_lines:
+        return "\n".join(f"{i + 1}: {line}" for i, line in enumerate(lines))
+
+    lo, hi = _window(len(lines), focus, max_lines)
+    parts = []
+    if lo > 1:
+        parts.append(f"[lines 1-{lo - 1} of this file are not shown]")
+    parts.extend(f"{n}: {lines[n - 1]}" for n in range(lo, hi + 1))
+    if hi < len(lines):
+        parts.append(f"[lines {hi + 1}-{len(lines)} of this file are not shown]")
+    return "\n".join(parts)
 
 
 def focus_instruction(focus: Optional[dict]) -> str:
@@ -477,7 +542,10 @@ class HintingEngine:
     ) -> str:
         lang = get_language(language)
         nonce = secrets.token_hex(8)
-        code_block = number_lines(code)
+        # `focus` decides which window survives when the file is too big to
+        # send whole, so it has to reach the numbering rather than only the
+        # instruction below it.
+        code_block = number_lines(code, focus)
         code_part = self._wrap_untrusted(
             "student_code", nonce, f"language: {lang['display_name']}\n{code_block}"
         )

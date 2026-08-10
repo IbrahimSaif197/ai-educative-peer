@@ -563,6 +563,111 @@ class TestTheTutorCanSeeLineNumbers:
         assert "(no code provided)" in self._user_message(engine)
 
 
+class TestABigFileIsWindowedNotSentWhole:
+    """The whole document rode on every request, numbered, unbounded.
+
+    A 241-line student file spent 2,289 tokens on code in EVERY turn of a
+    conversation - three times the entire system prompt - to re-send methods
+    nobody was discussing. Over `MAX_CODE_LINES_SENT` the file is now
+    windowed around the block the student is working on.
+
+    The numbers must stay absolute through it: citing real line numbers is
+    the whole reason numbering exists (see the class above), and a window
+    that renumbers from 1 breaks exactly that. And an elision has to be
+    announced - a tutor that cannot see the top of the file will otherwise
+    report a missing import that is merely out of frame.
+    """
+
+    def _engine(self):
+        from hinting_engine import HintingEngine
+        engine = HintingEngine(api_key="test-key")
+        engine.client = _make_mock_client("ok")
+        return engine
+
+    def _user_message(self, engine):
+        messages = engine.client.chat.completions.create.call_args.kwargs["messages"]
+        return messages[-1]["content"]
+
+    def _file(self, n):
+        return "".join(f"line_{i} = {i}\n" for i in range(1, n + 1))
+
+    def _sent(self, code, focus=None):
+        engine = self._engine()
+        engine.generate_hint(code, "help", 1, focus=focus)
+        return self._user_message(engine)
+
+    def test_a_small_file_still_goes_whole(self):
+        # Every exercise file we have seen is under the bound, so the common
+        # case must be byte-for-byte what it was before windowing existed.
+        from hinting_engine import MAX_CODE_LINES_SENT
+        sent = self._sent(self._file(MAX_CODE_LINES_SENT))
+        assert "1: line_1 = 1" in sent
+        assert f"{MAX_CODE_LINES_SENT}: line_{MAX_CODE_LINES_SENT} = " in sent
+        assert "not shown" not in sent
+
+    def test_a_big_file_drops_the_lines_nobody_is_discussing(self):
+        from hinting_engine import MAX_CODE_LINES_SENT
+        sent = self._sent(self._file(400), focus={"start_line": 200, "end_line": 210})
+        assert "200: line_200 = 200" in sent
+        assert "210: line_210 = 210" in sent
+        assert "5: line_5 = 5" not in sent
+        assert "390: line_390 = 390" not in sent
+        body = [ln for ln in sent.splitlines() if ln[:1].isdigit()]
+        assert len(body) <= MAX_CODE_LINES_SENT
+
+    def test_the_numbers_stay_the_editors_numbers(self):
+        # The window starts partway down the file; if it renumbered from 1,
+        # every hint would send the student to the wrong line.
+        sent = self._sent(self._file(400), focus={"start_line": 200, "end_line": 201})
+        assert "200: line_200 = 200" in sent
+        assert "1: line_200" not in sent
+
+    def test_context_survives_around_the_focus(self):
+        # Clipping to the focus alone is how you get a tutor that cannot see
+        # why the argument two lines above is the wrong type.
+        sent = self._sent(self._file(400), focus={"start_line": 200, "end_line": 200})
+        assert "190: line_190 = 190" in sent
+        assert "210: line_210 = 210" in sent
+
+    def test_the_elision_is_announced_on_both_sides(self):
+        sent = self._sent(self._file(400), focus={"start_line": 200, "end_line": 210})
+        assert "lines 1-" in sent and "not shown" in sent
+        assert "-400 of this file are not shown" in sent
+
+    def test_no_focus_falls_back_to_the_head_of_the_file(self):
+        from hinting_engine import MAX_CODE_LINES_SENT
+        sent = self._sent(self._file(400))
+        assert "1: line_1 = 1" in sent
+        assert f"{MAX_CODE_LINES_SENT}: line_{MAX_CODE_LINES_SENT} = " in sent
+        assert "not shown" in sent
+
+    def test_a_focus_at_the_top_does_not_run_off_the_start(self):
+        sent = self._sent(self._file(400), focus={"start_line": 1, "end_line": 3})
+        assert "1: line_1 = 1" in sent
+        # Nothing above line 1 to elide. Bracketed, because the focus
+        # instruction says "you are working on lines 1-3" further down.
+        assert "[lines 1-" not in sent
+
+    def test_a_focus_at_the_end_does_not_run_off_the_finish(self):
+        sent = self._sent(self._file(400), focus={"start_line": 398, "end_line": 400})
+        assert "400: line_400 = 400" in sent
+        assert "not shown]" in sent
+        assert "-400 of this file are not shown" not in sent
+
+    def test_a_nonsense_focus_does_not_lose_the_file(self):
+        # An older extension, or a block that could not be resolved. Falling
+        # back to the head beats sending nothing.
+        for focus in ({"start_line": "x"}, {"end_line": 4}, {"start_line": 900}):
+            sent = self._sent(self._file(400), focus=focus)
+            assert "line_" in sent
+
+    def test_a_focus_bigger_than_the_budget_still_fits_the_budget(self):
+        from hinting_engine import MAX_CODE_LINES_SENT
+        sent = self._sent(self._file(400), focus={"start_line": 10, "end_line": 380})
+        body = [ln for ln in sent.splitlines() if ln[:1].isdigit()]
+        assert len(body) <= MAX_CODE_LINES_SENT
+
+
 class TestLineHintMayStaySilent:
     """The line hint fires on every cursor move, so it lands on correct lines
     constantly - and its prompt had no way to say "nothing to report here".
