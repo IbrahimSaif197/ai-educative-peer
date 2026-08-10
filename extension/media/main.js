@@ -42,10 +42,11 @@
     "attempt-gate": "Same depth",
     "rate-limited": "Slow down",
     offline: "Offline nudge",
+    waking: "Waking the server",
   };
 
   /** Modes that are the tutor withholding rather than teaching. */
-  const FLAGGED_MODES = new Set(["attempt-gate", "rate-limited", "offline"]);
+  const FLAGGED_MODES = new Set(["attempt-gate", "rate-limited", "offline", "waking"]);
 
   /** Modes that occupy a rung on the hint ladder, so the card shows its depth. */
   const LADDER_MODES = new Set(["hint", "worked-example"]);

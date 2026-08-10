@@ -1,4 +1,4 @@
-import { ApiClient, AuthError, RateLimitError, parseSseChunk } from "../apiClient";
+import { ApiClient, AuthError, RateLimitError, TimeoutError, parseSseChunk } from "../apiClient";
 
 const BASE = "http://localhost:8000";
 
@@ -494,5 +494,75 @@ describe("getLineHint — focus", () => {
     await api.getLineHint("x = 1", 1, "python");
 
     expect(JSON.parse(fetchMock.mock.calls[0][1].body)).not.toHaveProperty("focus");
+  });
+});
+
+describe("cold start — the backend was asleep", () => {
+  // Render's free plan sleeps after ~15 min idle and takes ~50s to wake, which
+  // a 20s deadline can never survive. One retry on a longer clock turns a
+  // guaranteed failure into a slow answer.
+  const abort = () => Object.assign(new Error("aborted"), { name: "AbortError" });
+
+  function client(fetchImpl: jest.Mock) {
+    (global as any).fetch = fetchImpl;
+    const api = new ApiClient("https://example.test", {
+      getIdToken: async () => "tok",
+    } as any);
+    return api;
+  }
+
+  it("retries once when the first attempt times out", async () => {
+    const fetchMock = jest
+      .fn()
+      .mockRejectedValueOnce(abort())
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        json: async () => ({ hint: "h", hint_level: 1, concept_tags: [] }),
+      });
+    const api = client(fetchMock);
+    const res = await api.getHint({ code: "x", question: "q" } as any);
+    expect(res.hint).toBe("h");
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("announces the wait so the panel can explain the pause", async () => {
+    const fetchMock = jest
+      .fn()
+      .mockRejectedValueOnce(abort())
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        json: async () => ({ hint: "h", hint_level: 1, concept_tags: [] }),
+      });
+    const api = client(fetchMock);
+    const seen: string[] = [];
+    api.onColdStart = () => seen.push("waking");
+    await api.getHint({ code: "x", question: "q" } as any);
+    expect(seen).toEqual(["waking"]);
+  });
+
+  it("gives up after the second timeout rather than retrying forever", async () => {
+    const fetchMock = jest.fn().mockRejectedValue(abort());
+    const api = client(fetchMock);
+    await expect(api.getHint({ code: "x", question: "q" } as any)).rejects.toThrow(
+      TimeoutError
+    );
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(api.isAvailable).toBe(false);
+  });
+
+  it("does not announce a cold start when the request simply succeeds", async () => {
+    const fetchMock = jest.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => ({ hint: "h", hint_level: 1, concept_tags: [] }),
+    });
+    const api = client(fetchMock);
+    const seen: string[] = [];
+    api.onColdStart = () => seen.push("waking");
+    await api.getHint({ code: "x", question: "q" } as any);
+    expect(seen).toEqual([]);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 });

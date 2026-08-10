@@ -176,6 +176,24 @@ export class EduPeerSidebarProvider implements vscode.WebviewViewProvider {
   ) {}
 
   /** Show or hide the offline banner in the sidebar. */
+  /**
+   * Tell the student why the wait got long, rather than leaving them on a
+   * spinner. The backend sleeps on Render's free plan and takes ~50s to wake,
+   * so the first ask after a quiet spell legitimately stalls — silence there
+   * reads as a hang, and the honest explanation costs one line.
+   */
+  private announceColdStart() {
+    this.post({
+      type: "hint",
+      hint:
+        "The server had gone to sleep and is starting up — this can take up to a minute.\n\n" +
+        "Your question is still on its way; nothing was lost.",
+      hint_level: 0,
+      concept_tags: [],
+      mode: "waking",
+    });
+  }
+
   public postOffline(offline: boolean) {
     this.post({ type: "offline", value: offline });
   }
@@ -206,6 +224,9 @@ export class EduPeerSidebarProvider implements vscode.WebviewViewProvider {
 
   public resolveWebviewView(webviewView: vscode.WebviewView): void {
     this.view = webviewView;
+    // Attached here rather than in the constructor: the message has nowhere to
+    // go until a webview exists, and `post` is a no-op without one.
+    this.api.onColdStart = () => this.announceColdStart();
     // The suppression signature describes what the LAST webview was showing,
     // and this one is showing nothing at all. Carrying it across leaves a
     // reopened sidebar stuck on "No active file" with an empty preview, an

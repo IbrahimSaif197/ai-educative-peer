@@ -210,6 +210,24 @@ export function parseSseChunk(buffer: string, chunk: string): { events: SseEvent
 export const REQUEST_TIMEOUT_MS = 20_000;
 
 /**
+ * The deadline for the one retry after a timeout, sized for a cold start.
+ *
+ * The backend runs on Render's free plan, which stops the service after ~15
+ * minutes idle and takes roughly 50 seconds to wake. Against a 20-second
+ * deadline that is not a slow request, it is a guaranteed failure: the first
+ * student to ask anything after a quiet spell waits 20s, gets the offline
+ * tutor, and reasonably concludes EduPeer is broken. A scheduled pinger
+ * narrows the window but never closes it — every deploy restarts the service
+ * too.
+ *
+ * So a timeout buys exactly one more attempt on a longer clock. A waking
+ * backend answers inside it; a genuinely dead one costs the student an extra
+ * minute once, after which `isAvailable` is false and later asks fail fast
+ * against the offline tutor instead of retrying again.
+ */
+export const COLD_START_TIMEOUT_MS = 75_000;
+
+/**
  * How long a stream may go without producing a chunk. The whole stream has no
  * overall deadline — a long hint legitimately takes a while — but silence does.
  */
@@ -263,6 +281,14 @@ export class ApiClient {
   private readonly availabilityListeners: Array<(up: boolean) => void> = [];
   private authHealthy = true;
   private readonly authListeners: Array<(ok: boolean) => void> = [];
+
+  /**
+   * Called when a request times out and is about to be retried on the
+   * cold-start clock. The wait can run to a minute, and a spinner that says
+   * nothing for that long reads as a hang — this lets the panel say what is
+   * actually happening. Optional: nothing breaks if no one is listening.
+   */
+  onColdStart?: () => void;
 
   constructor(private baseUrl: string, private readonly tokens: TokenProvider) {}
 
@@ -333,16 +359,26 @@ export class ApiClient {
     // deadline with nothing, so the caller's signal is applied by name and only
     // when it exists.
     const { signal, ...rest } = init;
-    const attempt = async (force: boolean) => {
+    const attempt = async (force: boolean, timeoutMs = REQUEST_TIMEOUT_MS) => {
       const token = await this.tokens.getIdToken(force);
       return fetch(`${this.baseUrl}${path}`, {
         ...rest,
-        signal: signal ?? timeoutSignal(REQUEST_TIMEOUT_MS),
+        signal: signal ?? timeoutSignal(timeoutMs),
         headers: { ...(init.headers as Record<string, string> | undefined), Authorization: `Bearer ${token}` },
       });
     };
+    const isTimeout = (e: unknown) => (e as { name?: string })?.name === "AbortError";
     try {
-      let res = await attempt(false);
+      let res: Response;
+      try {
+        res = await attempt(false);
+      } catch (err) {
+        // A caller-supplied signal is the caller's deadline to own — retrying
+        // under it would ignore a cancellation the student asked for.
+        if (!isTimeout(err) || signal) throw err;
+        this.onColdStart?.();
+        res = await attempt(false, COLD_START_TIMEOUT_MS);
+      }
       if (res.status === 401) {
         res = await attempt(true);
       }
