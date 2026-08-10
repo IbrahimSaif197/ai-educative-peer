@@ -1,5 +1,19 @@
 # Changelog
 
+## 1.5.0
+
+- The hint ladder has a fourth rung, and it is a worked example. Getting stuck
+  at hint 3 used to mean the same pseudocode back on every further ask; ask
+  again now and you get the concept worked through on a different problem.
+  Ask again after that and you get another one.
+- The "Show a worked example" button is gone. The ladder reaches it on its
+  own, which is where you were most likely to miss the button anyway.
+- Ask outright — "just tell me the answer" — and you get it: the bug named on
+  its line, only the lines that change, and why the original was wrong. It
+  works at any depth and costs you nothing on the ladder.
+- The depth chart on the dashboard counts the fourth rung instead of filing it
+  under the third, so "needed pseudocode" is no longer overstated.
+
 ## 1.4.0
 
 - EduPeer answers you now. Tell it the right answer and it says so, explains
