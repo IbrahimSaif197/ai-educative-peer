@@ -2041,3 +2041,55 @@ it("offers a quiz, not a claim that you fixed it", async () => {
   expect(h.html).not.toContain("I fixed it");
   expect(h.html).not.toContain("How sure are you?");
 });
+
+describe("selecting text is not an edit", () => {
+  beforeEach(() => mock.__reset());
+
+  const TWO_FUNCS = [
+    "def first():",
+    "    total = 0",
+    "    total += 1",
+    "    return total",
+    "",
+    "",
+    "def second():",
+    "    return 2",
+  ].join("\n");
+
+  function selectTwoLinesInside(doc: any) {
+    mock.window.activeTextEditor = {
+      document: doc,
+      selection: new mock.Selection(new mock.Position(1, 4), new mock.Position(2, 15)),
+      setDecorations: jest.fn(),
+      revealRange: jest.fn(),
+    };
+  }
+
+  it("sends no edit_summary when the student only selected some lines", async () => {
+    const { provider, doc, api } = await setupProvider(TWO_FUNCS, 1, "/tmp/selectdiff/a.py");
+    await provider["sendFocus"]();
+    await provider["handleAsk"]("why is total wrong?", "code", "hint");
+
+    // Selecting collapses the focus to the two lines while the thread key
+    // stays on `first`. The code compared has to stay on `first` too, or the
+    // tracker reads "the function became two lines" as an edit.
+    selectTwoLinesInside(doc);
+    await provider["sendFocus"]();
+    await provider["handleAsk"]("and now?", "code", "hint");
+
+    expect(hintRequest(api).edit_summary).toBe("");
+  });
+
+  it("still reports a real edit made while a selection is live", async () => {
+    const { provider, doc, api } = await setupProvider(TWO_FUNCS, 1, "/tmp/selectdiff/b.py");
+    await provider["sendFocus"]();
+    await provider["handleAsk"]("why is total wrong?", "code", "hint");
+
+    doc.__setText(TWO_FUNCS.replace("total += 1", "total += 2"));
+    selectTwoLinesInside(doc);
+    await provider["sendFocus"]({ force: true });
+    await provider["handleAsk"]("i changed it", "code", "hint");
+
+    expect(hintRequest(api).edit_summary).toContain("total += 2");
+  });
+});

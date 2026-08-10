@@ -98,8 +98,18 @@ export class EduPeerSidebarProvider implements vscode.WebviewViewProvider {
   }
   /** The block the student is working on; drives the panel and every ask. */
   private lastFocus?: FocusScope;
-  /** Exactly the focus block's text. Attempt tracking compares against this. */
-  private lastFocusCode = "";
+  /**
+   * The text of the block `threadKey` names, which attempt tracking diffs.
+   *
+   * It moves with `threadKey`, not with the focus, and the two must never
+   * drift apart. When it followed the focus, selecting a couple of lines
+   * inside a function left the key on the function while the text collapsed
+   * to the selection — same key, different text — so the tracker read it as
+   * an edit and sent the model a diff of a function being replaced by two
+   * lines. The student had changed nothing, and the tutor answered their next
+   * question against a rewrite that never happened.
+   */
+  private threadBlockCode = "";
   /** The full document, still sent as `code` so the model keeps its context. */
   private lastFullCode = "";
   /** Suppresses a re-post when nothing the student can see has changed. */
@@ -596,7 +606,7 @@ export class EduPeerSidebarProvider implements vscode.WebviewViewProvider {
       aboutOpenFile ? this.lastFullCode || code || "" : code || "",
       this.lastLanguageId
     );
-    const attemptCode = aboutOpenFile ? this.lastFocusCode || code || "" : code || "";
+    const attemptCode = aboutOpenFile ? this.threadBlockCode || code || "" : code || "";
 
     // The ladder rides the sticky thread key, so the transcript on screen and
     // the depth beside it always describe the same problem. Keying it on the
@@ -763,12 +773,14 @@ export class EduPeerSidebarProvider implements vscode.WebviewViewProvider {
     const editor = vscode.window.activeTextEditor;
     if (!editor) {
       this.lastFocus = undefined;
-      this.lastFocusCode = "";
       this.lastFullCode = "";
       this.lastFocusSignature = "";
       this.lastCursorLine = 0;
       this.lastDocumentKey = "";
-      // `threadKey` is left exactly as it was. Losing the active editor is
+      // `threadKey` and `threadBlockCode` are left exactly as they were, for
+      // the same reason and as a pair — clearing the text but not the key
+      // would make the next ask diff the block against "" and report the
+      // whole function as deleted. Losing the active editor is
       // not changing function — swapping it here would move the store to a
       // phantom "" bucket while the panel keeps showing the transcript it
       // already has, and anything typed while the file is gone would land in
@@ -804,7 +816,6 @@ export class EduPeerSidebarProvider implements vscode.WebviewViewProvider {
     this.lastFocusSignature = signature;
 
     this.lastFocus = focus;
-    this.lastFocusCode = focusCode;
     this.lastFullCode = doc.getText();
     // The ladder is per problem, and a different function is a different
     // problem — being stuck on `main` should not start at hint 3 because you
@@ -822,14 +833,29 @@ export class EduPeerSidebarProvider implements vscode.WebviewViewProvider {
     // `threadKey`. A selection or a click on a blank line does not move it.
     const previousThreadKey = this.threadKey;
     const fileKey = doc.uri.toString();
+    // `threadBlockCode` is the text of whatever block the key names, on every
+    // branch below — never the focus's text when the two have come apart.
     if (focus.kind === "symbol" || focus.kind === "heuristic") {
       this.threadKey = this.lastDocumentKey;
+      this.threadBlockCode = focusCode;
     } else if (this.threadKey !== fileKey && !this.threadKey.startsWith(`${fileKey}#`)) {
       // `threadKey` has never been set for this document (a fresh provider,
       // or the student just switched files): fall back to the file-level key
       // so there is always a valid thread, rather than keep whatever
       // function's key was left over from a different document.
       this.threadKey = fileKey;
+      this.threadBlockCode = focusCode;
+    } else {
+      // The focus collapsed to a selection or a bare window while the
+      // conversation stayed put. Re-resolve at the naked cursor to get the
+      // block the key actually names, as it stands right now. Reading the
+      // collapsed focus here is what made selecting two lines look like the
+      // function had been replaced by them; snapshotting instead would hide a
+      // genuine edit made while the selection is live, and that edit is
+      // exactly what the tutor needs to answer "I tried that" against.
+      const at = editor.selection.active;
+      const blockFocus = await resolveFocus(doc, new vscode.Selection(at, at));
+      this.threadBlockCode = focusText(doc, blockFocus);
     }
     // A different function is a different conversation. Swap the transcript
     // so the student is never reading one function's thread beside another
