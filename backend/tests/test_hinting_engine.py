@@ -1035,6 +1035,7 @@ class TestTheProviderSeam:
             "", [{"role": "user", "content": "U"}]
         )
 
+    @pytest.mark.real_backend
     def test_anthropic_backend_joins_text_blocks_and_ignores_others(self):
         # `content` is a list of blocks. Reading [0].text blindly breaks the
         # day anything but text leads, so the backend filters by type.
@@ -1053,6 +1054,7 @@ class TestTheProviderSeam:
 
         assert backend.complete("S", [{"role": "user", "content": "U"}], 400) == "Hello world"
 
+    @pytest.mark.real_backend
     def test_anthropic_backend_sends_system_as_its_own_argument(self):
         from hinting_engine import AnthropicBackend
 
@@ -1071,6 +1073,7 @@ class TestTheProviderSeam:
         # A system message left in `messages` is a 400 from the API.
         assert all(m["role"] != "system" for m in kwargs["messages"])
 
+    @pytest.mark.real_backend
     def test_anthropic_backend_streams_only_text_deltas(self):
         from hinting_engine import AnthropicBackend
 

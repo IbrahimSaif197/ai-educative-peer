@@ -254,7 +254,8 @@ package: the global `fetch` (Node 18+, used throughout `apiClient.ts` and
 
 | Name | Read at | Required | Default | Secret? | What breaks if missing |
 | --- | --- | --- | --- | --- | --- |
-| `GROQ_API_KEY` | `backend/hinting_engine.py:619` | **Yes** | none | **Secret** | `build_engine()` raises `RuntimeError("GROQ_API_KEY is not set")` at `backend/hinting_engine.py:621`. This runs at import of `main.py` (`backend/main.py:56`), so the backend does not start at all. |
+| `ANTHROPIC_API_KEY` | `backend/hinting_engine.py` | **Yes**, unless `GROQ_API_KEY` is set | none | **Secret** | Selects `AnthropicBackend` (`claude-haiku-4-5`). Read at import of `main.py`, so a misconfigured deploy fails at startup rather than on the first hint. |
+| `GROQ_API_KEY` | `backend/hinting_engine.py` | Only as the fallback | none | **Secret** | Read solely when `ANTHROPIC_API_KEY` is absent, so the service keeps answering during the key rollover. `build_engine()` raises `RuntimeError` only when neither is set. |
 | `FIREBASE_PROJECT_ID` | `backend/firebase_service.py:216` | No (degrades) | none | Public identifier | `FirebaseService.__init__` raises internally, is caught at `backend/firebase_service.py:230-232`, prints `[firebase] initialization failed:` and leaves `self._client = None`. The backend still starts; all persistence becomes a no-op and `build_session_store` falls back to `InMemorySessionStore` (`backend/session_store.py:225-230`). |
 | `FIREBASE_PRIVATE_KEY` | `backend/firebase_service.py:217` | No (degrades) | none | **Secret** | Same as above. Literal `\n` sequences are converted to real newlines at read time. |
 | `FIREBASE_CLIENT_EMAIL` | `backend/firebase_service.py:218` | No (degrades) | none | Semi-public (service-account address) | Same as above. |
