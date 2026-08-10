@@ -237,8 +237,11 @@ const GIVE_UP_PADDING = new Set([
  * misjudgement here withholds help from someone who earned it, so the
  * judgement is deterministic.
  *
- * The list's content is unchanged from the version that was matched as a bare
- * substring; only the matching rule below changed.
+ * The list's entries were rewritten for the padding-stripped core they are
+ * now matched against: "i dont know" became "dont know", "i give up" became
+ * "give up", and "just tell me" widened to the bare "tell me". The matching
+ * rule below changed too, from a bare substring test to requiring the
+ * stripped clause to match in full.
  */
 const GIVE_UP = new Set([
   "dont know",
@@ -298,6 +301,6 @@ function isSurrender(clause: string): boolean {
  */
 export function isAttempt(message: string): boolean {
   const clauses = clausesOf(message);
-  if (clauses.length === 0) return false;
+  if (clauses.length === 0) return (message ?? "").trim().length > 0;
   return !clauses.every(isSurrender);
 }

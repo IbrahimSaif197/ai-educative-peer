@@ -243,6 +243,31 @@ describe("isAttempt", () => {
     expect(isAttempt("idk.")).toBe(false);
     expect(isAttempt("i dont know!!!")).toBe(false);
   });
+
+  // The clause splitter deletes every character outside [a-z0-9], so a
+  // message made only of symbols or non-Latin script reduces to zero
+  // clauses. That used to fall into the same branch as an empty message and
+  // read as giving up — but "+" typed in answer to "what operator should you
+  // use instead of subtraction?" is the answer, not a refusal.
+  const NO_MATCHABLE_WORDS_ATTEMPTS = [
+    "+",
+    "<=",
+    "==",
+    "?",
+    "因为循环多跑了一次",
+  ];
+
+  it.each(NO_MATCHABLE_WORDS_ATTEMPTS)(
+    "counts %j as a real attempt even though it has no [a-z0-9] to match",
+    (message) => {
+      expect(isAttempt(message)).toBe(true);
+    }
+  );
+
+  it("still rejects a genuinely empty or whitespace-only message", () => {
+    expect(isAttempt("")).toBe(false);
+    expect(isAttempt("   \n  ")).toBe(false);
+  });
 });
 
 describe("AttemptTracker — answering counts as trying", () => {
