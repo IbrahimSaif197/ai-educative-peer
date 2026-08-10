@@ -450,6 +450,130 @@ class TestEditSummary:
         assert "9 + total = 0" in self._user_message(engine)
 
 
+class TestTheTutorCanSeeLineNumbers:
+    """`focus_instruction` ends with "cite real line numbers when you point at
+    code", and the tutor was handed an unnumbered block to do it from.
+
+    So it counted lines by eye across the whole file and got them wrong
+    constantly - opening with "On line 5, you're looping over the list" when
+    line 5 was a different function's `def` and the loop was on line 11. A
+    wrong line number is worse than none: it sends the student to code that
+    has nothing to do with the point being made, and every following turn
+    argues about a line neither of them is looking at.
+
+    `scan_code` (:386) and `generate_line_hint` (:466) have numbered their
+    input from the start. This is the same thing for the tutor the student
+    actually talks to.
+    """
+
+    FILE = (
+        "def add_numbers(a, b):\n"
+        "    return a + b\n"
+        "\n"
+        "\n"
+        "def average(numbers):\n"
+        "    total = 0\n"
+        "    for i in range(len(numbers)):\n"
+        "        total = total + numbers[i]\n"
+    )
+
+    def _engine(self, response_text: str = "ok"):
+        from hinting_engine import HintingEngine
+        engine = HintingEngine(api_key="test-key")
+        engine.client = _make_mock_client(response_text)
+        return engine
+
+    def _user_message(self, engine):
+        messages = engine.client.chat.completions.create.call_args.kwargs["messages"]
+        return messages[-1]["content"]
+
+    def test_each_line_carries_its_editor_number(self):
+        engine = self._engine()
+        engine.generate_hint(self.FILE, "help", 1)
+        content = self._user_message(engine)
+        assert "1: def add_numbers(a, b):" in content
+        assert "5: def average(numbers):" in content
+        assert "7:     for i in range(len(numbers)):" in content
+
+    def test_leading_blank_lines_do_not_shift_the_numbering(self):
+        # The client sends the whole document, so line 1 here has to be line 1
+        # in the editor. Stripping the code first shifted every number after a
+        # leading blank line - and the tutor quoted the shifted ones back.
+        engine = self._engine()
+        engine.generate_hint("\n\nx = 1\n", "help", 1)
+        assert "3: x = 1" in self._user_message(engine)
+
+    def test_indentation_survives_the_numbering(self):
+        # "line 8 is indented under the for" is a thing the tutor says; it
+        # cannot say it if the numbering ate the leading spaces.
+        engine = self._engine()
+        engine.generate_hint(self.FILE, "help", 1)
+        assert "8:         total = total + numbers[i]" in self._user_message(engine)
+
+    def test_blank_lines_are_numbered_too(self):
+        # Skipping them would put every later line one number out.
+        engine = self._engine()
+        engine.generate_hint(self.FILE, "help", 1)
+        assert "\n3: \n" in self._user_message(engine) or "3: " in self._user_message(engine)
+        assert "5: def average(numbers):" in self._user_message(engine)
+
+    def test_every_mode_gets_the_numbering(self):
+        engine = self._engine()
+        engine.generate_hint(self.FILE, "help", 1, mode="explain-error")
+        assert "5: def average(numbers):" in self._user_message(engine)
+
+    def test_streaming_gets_the_numbering(self):
+        engine = self._engine()
+        chunk = MagicMock()
+        chunk.choices[0].delta.content = "hi"
+        engine.client.chat.completions.create.return_value = [chunk]
+        list(engine.stream_hint(self.FILE, "q", 1))
+        assert "5: def average(numbers):" in self._user_message(engine)
+
+    def test_empty_code_still_says_so(self):
+        engine = self._engine()
+        engine.generate_hint("   \n  ", "help", 1)
+        assert "(no code provided)" in self._user_message(engine)
+
+
+class TestLineHintMayStaySilent:
+    """The line hint fires on every cursor move, so it lands on correct lines
+    constantly - and its prompt had no way to say "nothing to report here".
+
+    The schema was `{"hint":"<=12 words>","concept":"<tag>"}` with the
+    instruction "respond with ONE Socratic nudge", unconditionally. So resting
+    the cursor on a correct `total = 0` produced an invented doubt
+    ("initialize with first number") that was not only wrong but worse than
+    the code it questioned. `scan_code`'s prompt has had "If nothing is
+    suspicious, output {"flags":[]}" all along; this is the same escape hatch.
+
+    The client is already built for it: `inlineTutor.ts:415-423` clears the
+    hint and shows an empty lens when the hint comes back blank.
+    """
+
+    def test_the_prompt_offers_an_empty_hint(self):
+        from hinting_engine import LINE_HINT_SYSTEM_PROMPT_TEMPLATE
+        prompt = LINE_HINT_SYSTEM_PROMPT_TEMPLATE.format(language="Python")
+        assert '"hint":""' in prompt.replace(" ", "")
+        assert "fine" in prompt.lower() or "nothing" in prompt.lower()
+
+    def test_an_empty_hint_survives_the_round_trip(self):
+        from hinting_engine import HintingEngine
+        engine = HintingEngine(api_key="test-key")
+        engine.client = _make_mock_client('{"hint":"","concept":"general"}')
+        hint, concept = engine.generate_line_hint("x = 1\n", 1)
+        assert hint == ""
+        assert concept == "general"
+
+    def test_a_real_hint_is_unaffected(self):
+        from hinting_engine import HintingEngine
+        engine = HintingEngine(api_key="test-key")
+        engine.client = _make_mock_client('{"hint":"What if the list is empty?","concept":"loops"}')
+        hint, concept = engine.generate_line_hint("x = 1\n", 1)
+        assert hint == "What if the list is empty?"
+        assert concept == "loops"
+
+
 class TestSubgoalAndTraceModes:
     def _engine(self, response_text: str):
         from hinting_engine import HintingEngine
