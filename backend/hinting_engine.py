@@ -194,8 +194,12 @@ Rules:
 
 LINE_HINT_SYSTEM_PROMPT_TEMPLATE = """You are EduPeer. The student is writing {language}. Given the line the student is currently editing and surrounding context,
 respond with ONE Socratic nudge of at most 12 words. No code. No direct answer. No trailing question mark required.
+If the line is fine as it stands, output {{"hint":"","concept":"general"}} and nothing else. Most lines are fine.
+Say nothing rather than inventing a doubt about correct code: a nudge on a line that is already right teaches the
+student to distrust work they got right, and the alternative you reach for to fill the space is usually worse than
+what they wrote.
 Also output the primary concept tag. Output STRICT JSON only:
-{{"hint":"<<=12 words>>","concept":"<tag>"}}"""
+{{"hint":"<<=12 words, or empty>>","concept":"<tag>"}}"""
 
 SESSION_SUMMARY_PROMPT = """You are EduPeer. Summarise what a student practised this session.
 Given their questions and the concepts involved, write EXACTLY 3 short bullet lines,
@@ -231,6 +235,28 @@ MODEL_NAME = "llama-3.3-70b-versatile"
 
 # How many prior conversation turns are replayed to the model.
 MAX_HISTORY_TURNS = 6
+
+
+def number_lines(code: str) -> str:
+    """The student's file with its editor line numbers down the left margin.
+
+    `focus_instruction` below ends with "cite real line numbers when you point
+    at code", and until this existed the tutor was handed a bare block and
+    asked to do exactly that. So it counted lines by eye across the whole file
+    and got them wrong constantly - opening a hint with "On line 5, you're
+    looping over the list" when line 5 was another function's `def`. A wrong
+    line number is worse than no line number: it sends the student to code
+    that has nothing to do with the point, and every turn after it argues
+    about a line neither of them is looking at.
+
+    Numbered before any stripping, and blank lines are numbered too. The
+    client sends the whole document, so line 1 here has to be line 1 in the
+    editor; anything dropped from the top silently shifts every number after
+    it. Same `<n>: <text>` format `scan_code` and `generate_line_hint` use.
+    """
+    if not code.strip():
+        return "(no code provided)"
+    return "\n".join(f"{i + 1}: {line}" for i, line in enumerate(code.splitlines()))
 
 
 def focus_instruction(focus: Optional[dict]) -> str:
@@ -298,7 +324,7 @@ class HintingEngine:
     ) -> str:
         lang = get_language(language)
         nonce = secrets.token_hex(8)
-        code_block = code.strip() if code.strip() else "(no code provided)"
+        code_block = number_lines(code)
         code_part = self._wrap_untrusted(
             "student_code", nonce, f"language: {lang['display_name']}\n{code_block}"
         )
