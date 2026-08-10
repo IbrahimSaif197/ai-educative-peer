@@ -403,7 +403,7 @@ in Section 11).
 | `_update_streak(last_active_date, streak_days, today) -> Tuple[str, int]` | 77 | `(new_last_active_iso, new_streak)`. |
 | `_update_concept_stats(stats, concept_tags, hint_level, today, count_level=True) -> Dict` | 90 | A copy with one interaction folded in. `encounters` always rises; `rated_encounters`, `level_sum`, `max_level` and `last_struggled` only when `count_level` is true (i.e. `hint` mode), so a level-1 non-hint turn cannot look like a solved-first-try. |
 | `_update_calibration(calibration, verdict) -> Dict` | 128 | A copy with one verdict counted. |
-| `_update_hint_level_counts(counts, hint_level) -> Dict[str, int]` | 141 | A copy with the level (clamped 1–3) incremented. |
+| `_update_hint_level_counts(counts, hint_level) -> Dict[str, int]` | 141 | A copy with the level (clamped 1–`MAX_HINT_LEVEL`, i.e. 1–4) incremented. |
 | `_update_activity(activity, today, keep_days=30) -> Dict[str, int]` | 150 | Today incremented, entries older than `keep_days` dropped. |
 | `_merge_activity(a, b) -> Dict[str, int]` | 166 | Per-day sums of two maps. |
 | `_merge_counters(a, b, keys) -> Dict[str, int]` | 179 | Per-key sums for the named keys. |
@@ -466,7 +466,7 @@ from Firestore, which is why it is fully unit-tested.
 | `classify_calibration(confidence, hint_level) -> Optional[str]` | 100 | `"overconfident"`, `"underconfident"`, `"calibrated"` or `None`. |
 | `calibration_summary(data) -> Dict` | 116 | `{samples, score, calibrated, overconfident, underconfident, enough_data}`. |
 | `review_due_concepts(concept_stats, today, limit=3) -> List[str]` | 144 | Concept tags struggled with 3–7 days ago, most encounters first. |
-| `hint_level_counts(data) -> Dict[str, int]` | 165 | `{"1": n, "2": n, "3": n}`, negatives and non-integers coerced to 0. |
+| `hint_level_counts(data) -> Dict[str, int]` | 165 | One key per rung, `{"1": n, "2": n, "3": n, "4": n}` (derived from `MAX_HINT_LEVEL`), negatives and non-integers coerced to 0. |
 | `activity_strip(data, today, days=14) -> List[dict]` | 178 | `{date, count}` per day, oldest first. |
 | `build_progress(data, today) -> Dict` | 196 | The full `/progress` payload. |
 
@@ -483,10 +483,10 @@ the "is a session already open" flag.
 | `code_fingerprint(code: str) -> str` | 9 | SHA-1 hex digest of the code after stripping leading/trailing whitespace and right-stripping each line. |
 | `raw_code_hash(code: str) -> str` | 14 | SHA-1 hex digest of the code byte for byte. Used to key `SCAN_CACHE` and `LINE_HINT_CACHE`, which store absolute line numbers that a whitespace-insensitive fingerprint would let go stale. |
 | `SESSION_IDLE_SECONDS` | 29 | `1800.0`. How long an open session survives without activity before the next ask counts as a new session. |
-| `resolve_level(current: int, escalate: bool) -> int` | 32 | The level an ask should answer at: `min(3, current + 1)` when escalating, otherwise `max(1, min(3, current))`. The single source of truth for the ladder, shared by both stores. |
+| `resolve_level(current: int, escalate: bool) -> int` | 32 | The level an ask should answer at: `min(MAX_HINT_LEVEL, current + 1)` when escalating, otherwise `max(1, min(MAX_HINT_LEVEL, current))` — 4 rungs, the top one being the worked example. The single source of truth for the ladder, shared by both stores. |
 | `InMemorySessionStore.__init__(max_entries=10000, idle_seconds=SESSION_IDLE_SECONDS)` | 48 | Bounded LRU of levels, plus a per-uid map of the last activity time used to lapse idle sessions. |
 | `InMemorySessionStore.peek_hint_level(user_id, fingerprint, escalate=True) -> int` | 55 | The level the next ask should answer at, **without persisting anything**. |
-| `InMemorySessionStore.commit_hint_level(user_id, fingerprint, level) -> None` | 63 | Records that `level` was actually delivered; clamps to 1–3 and applies LRU eviction. |
+| `InMemorySessionStore.commit_hint_level(user_id, fingerprint, level) -> None` | 63 | Records that `level` was actually delivered; clamps to 1–`MAX_HINT_LEVEL` and applies LRU eviction. |
 | `InMemorySessionStore.next_hint_level(user_id, fingerprint) -> int` | 71 | Peek + commit in one step. |
 | `InMemorySessionStore.current_hint_level(user_id, fingerprint) -> int` | 78 | Peek + commit without escalating. |
 | `InMemorySessionStore.begin_session(user_id) -> bool` | 88 | `True` the first time and again whenever the previous ask was more than `idle_seconds` (30 minutes) ago; `False` while the student keeps working. Every call refreshes the last-activity stamp. |
@@ -673,22 +673,23 @@ source documents actually merged (`backend/main.py:167-171`).
 | --- | --- | --- | --- |
 | `code` | string | `""` | `max_length = 40000` (`MAX_CODE_CHARS`) |
 | `question` | string | **required** | Must be non-empty after `.strip()`, else 400; `max_length = 4000` (`MAX_QUESTION_CHARS`) |
-| `hint_level` | int | `1` | `>= 1`, `<= 3`. Only used for non-`hint` modes |
+| `hint_level` | int | `1` | `>= 1`, `<= 4` (`MAX_HINT_LEVEL`). Only used for non-`hint` modes |
 | `problem_key` | string | `""` | `max_length = 512` (`MAX_PROBLEM_KEY_CHARS`). What the hint ladder is keyed on; empty falls back to `code_fingerprint(code)` (`_ladder_key`, `backend/main.py:174-185`) |
 | `language` | string | `"python"` | Any string; normalised server-side |
-| `mode` | enum | `"hint"` | One of the ten `TutorMode` values (`backend/models.py:10-14`) |
+| `mode` | enum | `"hint"` | One of the eleven `TutorMode` values (`backend/models.py:12-16`) |
 | `history` | array of `{role, content}` | `[]` | `role` must be `"student"` or `"tutor"` (`backend/models.py:5-7`) |
 | `escalate` | bool | `true` | Only consulted in `hint` mode |
 | `edit_summary` | string | `""` | `max_length = 2000` |
 | `confidence` | int | `0` | `>= 0`, `<= 3`; 0 means "not given" |
 
-**Response 200** (`HintResponse`, `backend/models.py:76-79`):
+**Response 200** (`HintResponse`, `backend/models.py:149-156`):
 
 | Field | Type | Notes |
 | --- | --- | --- |
 | `hint` | string | The tutor reply with the `[concepts: ...]` line stripped |
-| `hint_level` | int | The level actually used, 1–3 |
+| `hint_level` | int | The level actually used, 1–4 |
 | `concept_tags` | array of string | 1–6 tags |
+| `mode` | string | The mode that actually **ran**, `effective_mode(req.mode, level)` — not always `req.mode`, since a `hint` on the top rung runs the worked example. Defaults to `"hint"`. The panel labels each card from this and gates the "Label the steps" action on it (`extension/media/main.js:519-527`), so a client that ignores it titles a worked example "hint 4". Sent on the `meta` SSE event too (`backend/main.py:294`), and read back in `ApiClient.streamHint`. Absent from a backend older than this field, so `sidebarProvider` falls back to the requested mode. |
 
 **Errors:**
 
@@ -713,8 +714,11 @@ response is `text/event-stream` (`backend/main.py:308`).
 **Event sequence.** Each event is one `data: <json>\n\n` block
 (`backend/main.py:275-276`).
 
-1. **Always first** — `{"type": "meta", "hint_level": <int>}`
-   (`backend/main.py:279`).
+1. **Always first** — `{"type": "meta", "hint_level": <int>, "mode": "<mode>"}`
+   (`backend/main.py:294`). `mode` is `effective_mode(req.mode, level)`, the
+   same value `/hint` returns in `HintResponse.mode`; the `done` event does not
+   repeat it, so `ApiClient.streamHint` captures it here and carries it into
+   the resolved `HintResponse`.
 2. **Zero or more** — `{"type": "delta", "text": "<partial text>"}`
    (`backend/hinting_engine.py:612`). The generator withholds the trailing
    `STREAM_HOLDBACK_CHARS = 40` characters so the `[concepts: ...]` footer
@@ -772,7 +776,7 @@ does **not** fail the request.
 | `session_summaries` | array of `{text, date}` | Last 5 |
 | `review_due` | bool | |
 | `calibration` | `{samples, score, calibrated, overconfident, underconfident, enough_data}` | |
-| `hint_level_counts` | `{"1": int, "2": int, "3": int}` | |
+| `hint_level_counts` | `{"1": int, "2": int, "3": int, "4": int}` | One key per rung of the ladder |
 | `activity` | array of `{date, count}` | Exactly 14 entries, oldest first |
 
 **Errors:** 401 only. An unreadable Firestore returns `{}` from
@@ -894,25 +898,35 @@ An empty snippet returns the default (all-empty) response with no LLM call
 
 ## 7. Tutoring modes
 
-Ten modes are accepted by the API (`backend/models.py:10-14`) and mapped to
-prompt templates (`backend/hinting_engine.py:146-157`). The client mirrors the
-list in `extension/src/pedagogy.ts:6-16`.
+Eleven modes are accepted by the API (`backend/models.py:12-16`) and mapped to
+prompt templates (`backend/hinting_engine.py:168-180`). The client mirrors the
+list in `extension/src/pedagogy.ts:6-17`.
 
 **Only `hint` advances the hint level.** Every other mode passes
 `req.hint_level` straight through (`backend/main.py:200-201`).
 
+**The mode that runs is not always the mode requested.** `effective_mode`
+(`backend/hinting_engine.py:198-214`) turns a `hint` on the top rung into the
+worked example, and the response reports what actually ran in
+`HintResponse.mode`. Two of the client's behaviours are keyed on that value
+rather than on the request: the eyebrow on the card, and the "Label the steps"
+action row. The request mode still owns the ladder — `attempts.record` and the
+level event in `sidebarProvider.handleAsk` stay keyed on it, or rung 4 would
+never spend its rung.
+
 | Mode | Trigger | Pedagogical purpose | Advances level? | Prohibitions in its prompt |
 | --- | --- | --- | --- | --- |
-| `hint` | Typing in the composer and pressing **Ask** (`extension/media/main.js:367-373`); also the default for external asks | The progressive 1→2→3 Socratic ladder | **Yes**, subject to the attempt gate | "NEVER write working code or complete a function for the student"; "NEVER give the direct answer"; at level 3, "provide pseudocode only, never real {language} syntax" |
+| `hint` | Typing in the composer and pressing **Ask** (`extension/media/main.js:409-445`); also the default for external asks | The progressive 1→2→3→4 Socratic ladder. Rungs 1–3 run the Socratic prompt; rung 4 *is* the worked example, so the request goes out as `hint` and the response comes back `mode: "worked-example"` | **Yes**, subject to the attempt gate | "NEVER write working code or complete a function for the student"; "NEVER give the direct answer"; at level 3, "provide pseudocode only, never real {language} syntax" |
 | `reflect` | The **I fixed it** button (`extension/media/main.js:387-391`); the `edupeer.reflectQuiz` command; the toast shown when a previously flagged file scans clean (`extension/src/inlineTutor.ts:400-419`) | Checks understanding of *why* a fix works, not that it works | No | "NEVER write working code" |
-| `translate` | The **Submit my translation** action row, offered only after a level-3 reply (`extension/media/main.js:428-434`) | Marks the student's own translation of pseudocode into real code | No | "Point out each mismatch as a question, never as corrected code"; "NEVER write working code or fix their code for them" |
-| `worked-example` | The **Show a worked example** action row, offered after a level-3 reply (`extension/media/main.js:435-444`) | A fully worked solution to a *different* problem exercising the same concept | No | "The example must NOT solve the student's actual problem or reuse their variable names"; "Do NOT label what each step accomplishes - the student will do that" |
-| `subgoal-label` | The **Label the steps** action row, offered after any worked example (`extension/media/main.js:448-456`) | The student names the purpose of each step; sub-goal labelling is what makes worked examples transfer | No | "Do NOT supply the correct labels yourself, and do NOT restate the example" |
+| `translate` | The **Submit my translation** action row, offered only after a level-3 reply (`extension/media/main.js:509-517`) | Marks the student's own translation of pseudocode into real code | No | "Point out each mismatch as a question, never as corrected code"; "NEVER write working code or fix their code for them" |
+| `worked-example` | **Not a button.** Asking again at level 3 puts the ladder on rung 4, and `effective_mode` (`backend/hinting_engine.py:198-214`) swaps the `hint` prompt for this one. The response reports `mode: "worked-example"`; the client never sends it | A fully worked solution to a *different* problem exercising the same concept | It **is** level 4 — the ladder advanced to reach it | "The example must NOT solve the student's actual problem or reuse their variable names"; "Do NOT label what each step accomplishes - the student will do that" |
+| `subgoal-label` | The **Label the steps** action row, gated on a card whose *response* mode is `worked-example` (`extension/media/main.js:519-527`) — which is why the client must read `HintResponse.mode` rather than echo the mode it asked with | The student names the purpose of each step; sub-goal labelling is what makes worked examples transfer | No | "Do NOT supply the correct labels yourself, and do NOT restate the example" |
 | `explain-error` | The `edupeer.explainError` command; the debugger companion on an exception stop; **automatic detection** when the composer text matches an error-shaped pattern (`extension/src/sidebarProvider.ts:316-318`) | Teaches how to read the error, not how to fix it | No | "Do NOT reveal the fix"; "NEVER write working code" |
 | `explain-concept` | The `edupeer.explainSelection` command and the Quick Fix "explain this line" | Plain-language explanation of a selected construct | No | "Do NOT judge or fix their code" |
 | `predict-output` | The `edupeer.predictOutput` command; also the fallback when `/trace` returns `steps: 0` (`extension/src/sidebarProvider.ts:265-267`) | The student predicts behaviour before running | No | "If it is wrong, do NOT reveal the actual output"; "NEVER write working code" |
 | `trace-check` | Submitting the filled desk-check grid (`extension/media/main.js:326-331`) | Marks a hand-trace and names the first diverging row | No | "NEVER give the corrected table, and never write working code" |
-| `review-exercise` | The **Review** button, shown when `/review` reports a due concept (`extension/media/main.js:411-416`); also the student's written answer to that exercise (`extension/media/main.js:366-372`) | Spaced retrieval of a concept struggled with 3–7 days ago | No | "never provide {language} code to copy" |
+| `review-exercise` | The **Review** button, shown when `/review` reports a due concept (`extension/media/main.js:472-477`); also the student's written answer to that exercise (`extension/media/main.js:426-433`) | Spaced retrieval of a concept struggled with 3–7 days ago | No | "never provide {language} code to copy" |
+| `answer` | **Not a button.** The student types the request outright — `isAnswerRequest` (`extension/src/attemptTracker.ts:320-353`) matches a padding-stripped clause against a fixed set ("tell me the answer", "show me the solution", "fix it", …) and `handleAskFromWebview` re-routes the ask (`extension/src/sidebarProvider.ts:495-501`) | They asked plainly, so they get it: the bug named in one sentence, only the changed lines, and why the original was wrong. A grudging answer is worse than none | **No** — routed *before* the attempt gate, so it neither advances nor spends a rung, and it skips the explain-first gate | "Never the whole function, never the whole file"; "do not half-withhold" |
 
 ### Answering a review exercise
 
@@ -1029,7 +1043,10 @@ level rules are always present. The level is communicated in the *user*
 message, whose first line is literally `hint_level: <n>`
 (`backend/hinting_engine.py:275`), and the message ends with "Respond according
 to the STRICT RULES for the given hint_level." (`backend/hinting_engine.py:279`).
-The level is clamped to 1–3 before use (`backend/hinting_engine.py:513`).
+The level is clamped to 1–`MAX_HINT_LEVEL` before use (`clamp_hint_level`,
+`backend/hinting_engine.py:190-196`). Only levels 1–3 ever reach this template:
+`effective_mode` sends level 4 to `WORKED_EXAMPLE_TEMPLATE` instead, which is
+why the Socratic prompt still carries three level rules and not four.
 
 **What varies by language.** Two things: `{language}` becomes the display name
 (e.g. "Python", "C++"), and the first line inside the student-code block is
@@ -1320,7 +1337,7 @@ the end of this section.
 | `last_active_date` | ISO date string | same | `_update_streak:78` | Streak anchor. |
 | `streak_days` | int | same | `build_progress:208`, badge rules | Consecutive-day count. |
 | `calibration` | `{calibrated, overconfident, underconfident}` (ints) | same | `calibration_summary:116` | Confidence-vs-outcome counters; only `hint` mode contributes a verdict (`firebase_service.py:314-317`). |
-| `hint_level_counts` | `{"1","2","3"}` → int | same | `hint_level_counts:165` | Depth distribution for the dashboard; only `hint` mode increments it (`firebase_service.py:318-322`). |
+| `hint_level_counts` | `{"1","2","3","4"}` → int | same | `hint_level_counts:165` | Depth distribution for the dashboard, one key per rung (`LEVEL_KEYS`, derived from `MAX_HINT_LEVEL`); only `hint` mode increments it (`firebase_service.py:318-322`). |
 | `activity` | map of ISO date → int | same, trimmed to 30 days | `activity_strip:178` | Per-day question counts. |
 | `goal` | `{text, concepts, set_at}` or `null` | `set_goal_sync:451` | `build_progress:200`, `_pacing_for:218` | Free-text learning goal and its mapped tags. |
 | `session_summaries` | array of `{text, date}`, last 20 kept | `append_session_summary_sync:485` | `build_progress:213` (last 5) | Three-bullet session notes. |
@@ -1381,7 +1398,7 @@ suite passed.
 | --- | --- | --- | --- | --- |
 | `user_id` | string | `commit_hint_level:171` | `reset` query | Owner, and the field the reset query filters on. |
 | `fingerprint` | string | same | nothing programmatic | The ladder key this level belongs to. The document ID is now a digest, so this field is the only legible record of which problem a row belongs to. |
-| `hint_level` | int, 1–3 | same | `peek_hint_level:157` | The progressive level. |
+| `hint_level` | int, 1–4 | same | `peek_hint_level:157` | The progressive level. |
 | `updated_at` | server timestamp | same | nothing | Audit only. |
 
 These writes are **overwrites**, not merges — `ref.set(...)` is called without
@@ -1599,8 +1616,8 @@ before the LLM call and persists nothing:
 1. If `mode != "hint"`, return `req.hint_level` unchanged — no state is
    touched. Non-hint modes never advance anything.
 2. Otherwise call `store.peek_hint_level(uid, _ladder_key(req), req.escalate)`,
-   which applies `resolve_level`: `min(3, current + 1)` when escalating,
-   `max(1, min(3, current))` when not.
+   which applies `resolve_level`: `min(MAX_HINT_LEVEL, current + 1)` when
+   escalating, `max(1, min(MAX_HINT_LEVEL, current))` when not.
 
 `_ladder_key` (`backend/main.py:174-185`) decides what the ladder is keyed on:
 `req.problem_key` (the document URI the extension sends), falling back to
@@ -1625,11 +1642,15 @@ A first-ever non-escalating ask still consumes level 1: the next escalating ask
 goes to 2, not back to 1. Tested at
 `backend/tests/test_session_store.py::TestInMemoryCurrentHintLevel::test_first_current_call_consumes_level_one`.
 
-**Level ceiling: 3.** Enforced in three places — `resolve_level`
-(`backend/session_store.py:32-41`), the clamp inside `commit_hint_level`
-(`backend/session_store.py:66`, `154`), and
-`max(1, min(3, int(hint_level)))` in the engine before prompt assembly
-(`backend/hinting_engine.py:513`).
+**Level ceiling: `MAX_HINT_LEVEL` = 4** (`backend/models.py:35`). Enforced in
+three places — `resolve_level` (`backend/session_store.py:32-47`), the clamp
+inside `commit_hint_level` (`backend/session_store.py:72`, `179`), and
+`clamp_hint_level` in the engine before prompt assembly
+(`backend/hinting_engine.py:190-196`). Reaching the ceiling is not a dead end:
+`effective_mode` runs the worked example there, so the fourth ask is the last
+teaching move rather than a repeat of the third. The extension's own copy of
+the number is `MAX_HINT_LEVEL` in `extension/src/pedagogy.ts` — two languages,
+one value, kept in step by hand.
 
 ### The client-side attempt gate
 
@@ -1879,7 +1900,7 @@ queued old refresh token:
 | Field | Operation |
 | --- | --- |
 | `total_interactions`, `sessions`, `solved_at_level_1` | **Added** |
-| `calibration` (all three counters), `hint_level_counts` (all three levels) | **Added** per key (`_merge_counters`) |
+| `calibration` (all three counters), `hint_level_counts` (all four levels) | **Added** per key (`_merge_counters`) |
 | `activity` | **Added** per date (`_merge_activity`) |
 | `concept_tags_seen`, `badges` | **Unioned** via `set()` |
 | `languages_used` | **Unioned** and sorted |
@@ -2110,7 +2131,9 @@ active editor's language is one of the ten
 
 `renderStatus` (`extension/src/statusBar.ts:19-46`) is a pure function; its
 text is `$(mortar-board) EduPeer` plus, in order: `offline` **or**
-`hint {n}/3` when a hint has been given, `{n}d` for a non-zero streak, and
+`hint {n}/4` when a hint has been given (the denominator and the clamp are
+`MAX_HINT_LEVEL` from `extension/src/pedagogy.ts`, so the bar and the panel's
+ladder always agree), `{n}d` for a non-zero streak, and
 `$(history)` when a review is due. The background turns
 `statusBarItem.warningBackground` while offline
 (`extension/src/statusBar.ts:76-78`).
@@ -2148,6 +2171,24 @@ reply exists (Section 12), so this two-call path costs exactly one level: the
 failed stream commits nothing, and the fallback `/hint` commits the level it
 was peeked at. Pinned by
 `test_a_failed_stream_then_a_hint_fallback_spends_only_one_level`.
+
+### A mode the backend has never heard of
+
+A new extension can meet an older backend, whose `TutorMode` literal rejects
+`answer` outright — FastAPI answers 422. That is an ordinary HTTP response, so
+`isAvailable` stays true and neither the offline tutor nor the fallback above
+catches it: `streamHint` throws `stream failed (422)`, `getHint` then throws
+`Backend error (422): {"detail":[...]}`, and the student reads raw validation
+JSON in an error banner.
+
+Both methods therefore retry a 422 **once** with `mode: "hint"`
+(`withoutNewMode`, `extension/src/apiClient.ts`), and stamp `"hint"` on the
+returned `mode` so the panel does not title a Socratic hint "Answer". Only
+modes in `DOWNGRADABLE_MODES` are retried — every other mode has been in
+`TutorMode` since v1, so a 422 for one of those is a real contract breach and
+still surfaces. The retried request no longer carries a downgradable mode, so
+it cannot loop. Same convention as `ProgressReport.calibration`: a field or
+value the other side may not know about degrades rather than surfacing.
 
 ### When the backend is unreachable
 
@@ -2414,7 +2455,7 @@ Auth is overridden with `dependency_overrides` to a fixed uid.
 | Class | Tests | What they assert |
 | --- | --- | --- |
 | `TestHealth` | `test_returns_ok` | `/health` returns 200 with the literal status and service strings. |
-| `TestHintEndpoint` (13) | `test_valid_request_returns_200`, `test_response_has_required_fields`, `test_hint_level_starts_at_1`, `test_hint_level_increments_on_repeat`, `test_hint_level_caps_at_3`, `test_empty_question_returns_400`, `test_whitespace_question_returns_400`, `test_missing_question_returns_422`, `test_different_code_resets_counter`, `test_different_user_independent_counter`, `test_hint_contains_socratic_question`, `test_concept_tags_is_list`, `test_empty_code_accepted` | The `/hint` contract: response shape, the 1→2→3 progression and its ceiling, per-user and per-fingerprint isolation, and the two validation failures. |
+| `TestHintEndpoint` (13) | `test_valid_request_returns_200`, `test_response_has_required_fields`, `test_hint_level_starts_at_1`, `test_hint_level_increments_on_repeat`, `test_hint_level_caps_at_4`, `test_empty_question_returns_400`, `test_whitespace_question_returns_400`, `test_missing_question_returns_422`, `test_different_code_resets_counter`, `test_different_user_independent_counter`, `test_hint_contains_socratic_question`, `test_concept_tags_is_list`, `test_empty_code_accepted` | The `/hint` contract: response shape, the 1→2→3→4 progression and its ceiling, per-user and per-fingerprint isolation, and the two validation failures. |
 | `TestTutorModesEndpoint` (4) | `test_mode_defaults_to_hint_and_advances_level`, `test_non_hint_mode_does_not_advance_level`, `test_reflect_mode_uses_reflect_prompt`, `test_invalid_mode_rejected` | Only `hint` mode is progressive; an unknown mode is a 422. |
 | `TestHintStream` (4) | `test_stream_emits_meta_deltas_and_done`, `test_stream_advances_hint_level`, `test_stream_llm_failure_yields_error_event`, `test_stream_empty_question_400` | The SSE event order, that streaming advances the level, and that an LLM failure appears as an `error` event. |
 | `TestProgressEndpoints` (6) | `test_progress_returns_shape_for_new_user`, `test_review_not_due_returns_no_exercise`, `test_review_due_generates_exercise`, `test_goal_round_trip`, `test_reset_returns_summary_field`, `test_reset_summarizes_recent_interactions` | `/progress`, `/review`, `/goal` and `/reset` payload shapes and the summary path. |
@@ -2562,7 +2603,7 @@ model.
 
 ### Extension test files
 
-#### `extension/src/__tests__/apiClient.test.ts` — 31 tests, 316 lines
+#### `extension/src/__tests__/apiClient.test.ts` — 35 tests, 316 lines
 
 `ApiClient.health` (2): `returns true when /health responds 200`,
 `returns false when fetch throws (backend down)`.
@@ -2592,15 +2633,22 @@ model.
 `degrades rather than throwing when throttled`.
 `hint request fields` (2): `forwards escalate, edit_summary and confidence`,
 `omits the new fields entirely when unset` — the backwards-compatibility case.
+`version skew — an old backend has never heard of answer mode` (4):
+`getHint retries an answer-mode 422 as a hint instead of showing raw JSON`,
+`getHint surfaces a 422 that is not about the mode`,
+`getHint gives up after one downgrade rather than looping`,
+`streamHint downgrades too, so the answer still streams`.
 
-#### `extension/src/__tests__/streamHint.test.ts` — 15 tests, 215 lines
+#### `extension/src/__tests__/streamHint.test.ts` — 17 tests, 215 lines
 
 The SSE read loop in `ApiClient.streamHint`, which had no test before the
 2026-08-06 audit: `fetch` is stubbed with a body whose reader yields scripted
 chunks, so the tests can assert on the reader as well as on the result.
 
-`streamHint` (15): `resolves with the hint and tags from the done event`,
+`streamHint` (17): `resolves with the hint and tags from the done event`,
 `reports the level from meta, not the level the client asked with`,
+`reports the mode from meta, so a rung-4 worked example is not labelled a hint`,
+`leaves the mode unset when an older backend's meta omits it`,
 `forwards every event to the callback in order`,
 `reassembles an event split across two chunks`,
 `handles several events arriving in one chunk`,
@@ -2716,11 +2764,14 @@ cases pin the flanking-delimiter rule the audit added.
 `wraps a negative seed back into range`,
 `always ends with the tutor's closing question`, `handles empty code`.
 
-#### `extension/src/__tests__/progressPanel.test.ts` — 20 tests, 194 lines
+#### `extension/src/__tests__/progressPanel.test.ts` — 21 tests, 194 lines
 
-`buildProgressHtml` (9): `renders stat tiles`, `renders badges`,
+`buildProgressHtml` (10): `renders stat tiles`, `renders badges`,
 `renders struggle bars at the right width` (asserts `width="100"`),
 `scales a partial struggle bar` (asserts `width="50"`),
+`scales concept bars against the top rung, not a stale max of three`
+(asserts `width="88"` and an aria-label reading "of 4" — `avg_level` can
+legitimately exceed 3 now),
 `shows the review banner only when due`,
 `escapes html in user-controlled fields`,
 `escapes html in concept names and badges`,
@@ -2747,11 +2798,13 @@ cases pin the flanking-delimiter rule the audit added.
 `appends normally under the cap`.
 `failureTail` (2): `returns the last non-empty lines`, `drops blank lines`.
 
-#### `extension/src/__tests__/statusBar.test.ts` — 12 tests, 60 lines
+#### `extension/src/__tests__/statusBar.test.ts` — 13 tests, 60 lines
 
 `renderStatus`: `names the extension even when there is nothing to report`,
 `shows the hint depth once a hint has been given`,
-`hides the depth before the first hint`, `clamps a depth beyond level 3`,
+`hides the depth before the first hint`,
+`shows the fourth rung rather than capping at the third`,
+`clamps a depth beyond the top rung`,
 `shows a streak in days`, `omits a zero streak`,
 `flags a due review with an icon`, `reports offline instead of a stale depth`,
 `explains each part in the tooltip`, `uses the singular for a one-day streak`,
@@ -3747,7 +3800,7 @@ including `demos/demo.py`.
 | 5 | **Confidence chips selected** | Click **Some idea** before asking. The chip fills with the button colour and `aria-pressed` becomes true. Capture before pressing Ask, since the selection resets on send. |
 | 6 | **Level 1 hint with concept tags** | Answer or skip the gate. The tutor turn shows the eyebrow "Hint 1", the rendered reply, and `#`-prefixed concept tags underneath. The stepper shows segment 1 filled. |
 | 7 | **Level 2 hint** | Edit any line of `demos/demo.py`, then ask again. Eyebrow reads "Hint 2"; two stepper segments are filled and the second is a blend toward the warning colour. |
-| 8 | **Level 3 hint with pseudocode and action rows** | Edit again and ask a third time. Eyebrow "Hint 3", all three segments filled with the third in the warning colour, pseudocode rendered in a fenced code block, and an action row offering "Submit my translation" and "Show a worked example". This is the best single screenshot for the Markdown rendering work. |
+| 8 | **Level 3 hint with pseudocode and action row** | Edit again and ask a third time. Eyebrow "Hint 3", three of the four ladder dots filled with the third in the warning colour, pseudocode rendered in a fenced code block, and an action row offering "Submit my translation". This is the best single screenshot for the Markdown rendering work. |
 | 9 | **Streaming in progress** | Ask any question and capture within the first second: the tutor bubble is being filled and a blinking caret follows the text. Timing-sensitive; a screen recording is easier than a still. |
 | 10 | **Badge disclosure expanded** | Ask at least one question (awards "First Question"), then click the badge summary in the header to expand the list. |
 
@@ -3755,7 +3808,7 @@ including `demos/demo.py`.
 
 | # | What to capture | How to reproduce |
 | --- | --- | --- |
-| 11 | **Worked example with unlabelled numbered steps** | Reach level 3, then click "Show a worked example". Follow with the "Label the steps" action row that appears beneath it. |
+| 11 | **Worked example with unlabelled numbered steps** | Reach level 3, then edit a line and ask a fourth time — there is no button for this; rung 4 *is* the worked example. The card's eyebrow reads "Worked example", all four ladder dots are filled, and the reply is a numbered list of unlabelled steps for a *different* problem. A "Label the steps" action row appears beneath it. |
 | 12 | **Sub-goal labelling feedback** | Click "Label the steps", type labels such as "1. sets up the counter, 2. adds each item", press Ask. Eyebrow reads "Step labels". |
 | 13 | **Desk-check trace grid, empty** | Select a loop in `demos/demo.py` (for example the `for` loop in `average`), right-click → **EduPeer: Trace This Code**. Capture the grid with its column headers and blank inputs before filling anything in. |
 | 14 | **Desk-check trace grid, filled** | Fill in a few cells, leave one blank deliberately, and capture before clicking "Check my trace" — the blank cell demonstrates the `?` handling. |
