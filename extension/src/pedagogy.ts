@@ -13,7 +13,8 @@ export type TutorMode =
   | "predict-output"
   | "review-exercise"
   | "subgoal-label"
-  | "trace-check";
+  | "trace-check"
+  | "answer";
 
 export const EXPLAIN_FIRST_PROMPT =
   "Before I give you a hint — in your own words, what do you think this code is doing? " +

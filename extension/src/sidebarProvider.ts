@@ -1,7 +1,7 @@
 import * as crypto from "crypto";
 import * as vscode from "vscode";
 import { ApiClient, AuthError, ChatTurn, RateLimitError } from "./apiClient";
-import { AttemptTracker, isAttempt, nudgeForUnchangedCode } from "./attemptTracker";
+import { AttemptTracker, isAnswerRequest, isAttempt, nudgeForUnchangedCode } from "./attemptTracker";
 import { AuthManager } from "./authManager";
 import { stripBugMarkers } from "./bugMarkers";
 import { FirebaseClient } from "./firebaseClient";
@@ -491,6 +491,13 @@ export class EduPeerSidebarProvider implements vscode.WebviewViewProvider {
     // not a level-1 hint.
     if (mode === "hint" && looksLikeErrorText(question)) {
       mode = "explain-error";
+    }
+    // Asked outright for the answer. Routed here, before the attempt gate, so
+    // it neither advances nor spends a rung — and so the three of these
+    // phrases that also sit in `GIVE_UP` never reach it to be scored as
+    // giving up.
+    if (mode === "hint" && isAnswerRequest(question)) {
+      mode = "answer";
     }
     const filled = questionForMode(mode, question);
     // Judged on what the student typed, not on the canned wrapper

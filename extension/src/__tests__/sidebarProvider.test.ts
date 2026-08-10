@@ -2093,3 +2093,39 @@ describe("selecting text is not an edit", () => {
     expect(hintRequest(api).edit_summary).toContain("total += 2");
   });
 });
+
+describe("answer on request", () => {
+  beforeEach(() => mock.__reset());
+
+  it("routes an outright request to answer mode", async () => {
+    const h = await build();
+    await h.send({ type: "askHint", question: "just tell me the answer", code: CODE, mode: "hint" });
+    expect(hintRequest(h.api).mode).toBe("answer");
+  });
+
+  it("leaves an ordinary question in hint mode", async () => {
+    const h = await build();
+    await askPastTheGate(h, "what does range do");
+    expect(hintRequest(h.api).mode).toBe("hint");
+  });
+
+  it("skips the explain-first gate", async () => {
+    // Explain-first guards hint mode only. An answer request must not be held
+    // behind "explain it in your own words" before the student sees anything —
+    // note this test deliberately uses h.send directly rather than
+    // askPastTheGate, because the gate firing at all is the failure.
+    const h = await build();
+    await h.send({ type: "askHint", question: "just tell me the answer", code: CODE, mode: "hint" });
+    expect(latest(h.posted, "explainFirst")).toBeUndefined();
+  });
+
+  it("does not spend a rung", async () => {
+    // Not a hint, so `attempts.evaluate` never runs: the first real hint that
+    // follows still starts the ladder at 1.
+    const h = await build();
+    await h.send({ type: "askHint", question: "show me the solution", code: CODE, mode: "hint" });
+    expect(hintRequest(h.api).mode).toBe("answer");
+    await askPastTheGate(h);
+    expect(hintRequest(h.api).mode).toBe("hint");
+  });
+});
