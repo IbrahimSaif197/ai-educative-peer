@@ -247,7 +247,7 @@ class TestHintStream:
         assert res.status_code == 200
         assert res.headers["content-type"].startswith("text/event-stream")
         events = self._events(res.text)
-        assert events[0] == {"type": "meta", "hint_level": 1}
+        assert events[0] == {"type": "meta", "hint_level": 1, "mode": "hint"}
         assert events[1]["type"] == "delta"
         assert events[-1]["type"] == "done"
         assert events[-1]["concept_tags"] == ["loops"]
@@ -534,7 +534,7 @@ class TestEscalationControl:
         monkeypatch.setattr(app_main.engine, "stream_hint", fake_stream)
         client.post("/hint/stream", json=VALID_HINT_PAYLOAD)
         res = client.post("/hint/stream", json={**VALID_HINT_PAYLOAD, "escalate": False})
-        assert 'data: {"type": "meta", "hint_level": 1}' in res.text
+        assert 'data: {"type": "meta", "hint_level": 1, "mode": "hint"}' in res.text
 
 
 class TestLadderWithTheRealProblemKey:
@@ -944,3 +944,37 @@ class TestRateLimiting:
         for _ in range(30):
             client.post("/hint", json=VALID_HINT_PAYLOAD)
         assert client.get("/health").status_code == 200
+
+
+class TestTheResponseCarriesItsEffectiveMode:
+    """The panel labels a card from the response, not from its own request.
+
+    Without this the backend can silently switch a level-4 ask to a worked
+    example and the panel still prints "hint 4" over it.
+    """
+
+    def test_an_ordinary_hint_reports_hint_mode(self, client):
+        res = client.post("/hint", json=VALID_HINT_PAYLOAD)
+        assert res.json()["mode"] == "hint"
+
+    def test_a_level_four_hint_reports_worked_example(self, client):
+        # Four escalating asks walk 1 -> 2 -> 3 -> 4.
+        for _ in range(4):
+            res = client.post("/hint", json=VALID_HINT_PAYLOAD)
+        assert res.json()["hint_level"] == 4
+        assert res.json()["mode"] == "worked-example"
+
+    def test_a_non_hint_mode_reports_itself(self, client):
+        payload = {**VALID_HINT_PAYLOAD, "mode": "reflect"}
+        assert client.post("/hint", json=payload).json()["mode"] == "reflect"
+
+    def test_the_stream_meta_event_carries_the_mode(self, client, monkeypatch):
+        import main as app_main
+        app_main._profile_cache.clear()
+
+        def fake_stream(*args, **kwargs):
+            yield {"type": "done", "hint": "h", "concept_tags": []}
+
+        monkeypatch.setattr(app_main.engine, "stream_hint", fake_stream)
+        res = client.post("/hint/stream", json=VALID_HINT_PAYLOAD)
+        assert '"mode": "hint"' in res.text

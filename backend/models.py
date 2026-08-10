@@ -150,6 +150,10 @@ class HintResponse(BaseModel):
     hint: str
     hint_level: int
     concept_tags: List[str]
+    # The mode the backend actually ran, which is not always `req.mode`: a
+    # level-4 hint runs the worked example. The panel labels each card from
+    # this, so without it a worked example arrives titled "hint 4".
+    mode: str = "hint"
 
 
 class HealthResponse(BaseModel):
