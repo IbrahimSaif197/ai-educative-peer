@@ -122,7 +122,26 @@ class FirestoreSessionStore:
         self._idle_seconds = idle_seconds
 
     def _doc_id(self, user_id: str, fingerprint: str) -> str:
-        return f"{user_id}__{fingerprint}"
+        """A Firestore-safe document ID for one (user, problem) pair.
+
+        Hashed rather than interpolated, because `fingerprint` is whatever the
+        client sent as `problem_key` — and that is a document URI,
+        `file:///c%3A/.../demo.py#average`. Firestore reads "/" as a path
+        separator, so the raw ID produced a resource name with an odd number
+        of segments and the server rejected every read and write with
+        "lacks a collection id". Both call sites below swallow their
+        exceptions, so nothing surfaced: `peek_hint_level` fell through to its
+        hardcoded `return 1` and `commit_hint_level` stored nothing. The
+        ladder answered every ask at level 1 forever, so the student was asked
+        a fresh guiding question each time and never reached level 2 — the
+        rung that names the line and explains the concept.
+
+        Nothing needs this ID to be legible: `commit_hint_level` writes the
+        readable key as the `fingerprint` field and `reset` queries on
+        `user_id`. The NUL separator keeps the two halves from bleeding into
+        each other, so ("u1__x", "y") and ("u1", "x__y") stay distinct.
+        """
+        return hashlib.sha1(f"{user_id}\x00{fingerprint}".encode("utf-8")).hexdigest()
 
     def peek_hint_level(self, user_id: str, fingerprint: str, escalate: bool = True) -> int:
         """What the next ask should answer at, WITHOUT spending the level.

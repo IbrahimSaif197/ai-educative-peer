@@ -1,3 +1,5 @@
+import re
+
 from session_store import code_fingerprint, InMemorySessionStore, FirestoreSessionStore, build_session_store
 
 
@@ -116,11 +118,36 @@ class _FakeQuery:
         return list(self._refs)
 
 
+def _assert_valid_document_id(doc_id):
+    """Reject what the real Firestore server rejects.
+
+    The fake used to be a plain dict keyed on whatever string it was handed,
+    so a document ID built from a `file:///...` URI stored and retrieved
+    happily here while the live backend answered every call with 400
+    "lacks a collection id". Every ladder test passed against a store that
+    could not persist a single level in production. The fake is only useful
+    if it is at least as strict as the thing it stands in for.
+    """
+    if not isinstance(doc_id, str) or not doc_id:
+        raise ValueError(f"invalid document id: {doc_id!r}")
+    if "/" in doc_id:
+        # The server reads "/" as a path separator, so the resource name ends
+        # up with an odd number of segments.
+        raise ValueError(f'Document name ".../{doc_id}" lacks a collection id')
+    if doc_id in (".", ".."):
+        raise ValueError(f"invalid document id: {doc_id!r}")
+    if re.fullmatch(r"__.*__", doc_id):
+        raise ValueError(f"document id matches the reserved __.*__ pattern: {doc_id!r}")
+    if len(doc_id.encode("utf-8")) > 1500:
+        raise ValueError("document id exceeds 1500 bytes")
+
+
 class _FakeCollection:
     def __init__(self):
         self._docs = {}  # doc_id -> data dict
 
     def document(self, doc_id):
+        _assert_valid_document_id(doc_id)
         return _FakeDocRef(self, doc_id)
 
     def where(self, field, op, value):
@@ -211,6 +238,72 @@ class TestFirestoreSessionStore:
         store.next_hint_level("u2", "fp1")
         store.reset("u1")
         assert store.next_hint_level("u2", "fp1") == 2
+
+
+class TestFirestoreDocumentIds:
+    """The ladder key is a document URI, and Firestore IDs cannot hold "/".
+
+    `_ladder_key` in main.py returns the client's `problem_key`, which
+    `sidebarProvider.ts` sets to `doc.uri.toString()` (plus `#<symbol>` when
+    the cursor is inside one). Interpolating that into a document ID made
+    Firestore reject every read and write; both call sites swallow their
+    errors, so `peek_hint_level` fell through to its hardcoded `return 1` and
+    `commit_hint_level` stored nothing. The student was answered at level 1 on
+    every single ask and never reached level 2, the rung that explains.
+    """
+
+    # Exactly the shape the extension sends.
+    URI_KEY = "file:///c%3A/Users/s/proj/demos/demo.py#average"
+
+    def _store(self):
+        return FirestoreSessionStore(FakeFirestore())
+
+    def test_a_uri_key_yields_an_id_firestore_will_accept(self):
+        _assert_valid_document_id(self._store()._doc_id("u1", self.URI_KEY))
+
+    def test_the_ladder_advances_for_a_uri_key(self):
+        store = self._store()
+        assert store.next_hint_level("u1", self.URI_KEY) == 1
+        assert store.next_hint_level("u1", self.URI_KEY) == 2
+        assert store.next_hint_level("u1", self.URI_KEY) == 3
+
+    def test_a_held_level_persists_for_a_uri_key(self):
+        store = self._store()
+        store.commit_hint_level("u1", self.URI_KEY, 2)
+        assert store.peek_hint_level("u1", self.URI_KEY, escalate=False) == 2
+
+    def test_two_symbols_in_one_file_are_independent(self):
+        store = self._store()
+        other = "file:///c%3A/Users/s/proj/demos/demo.py#total"
+        store.next_hint_level("u1", self.URI_KEY)
+        store.next_hint_level("u1", self.URI_KEY)
+        assert store.next_hint_level("u1", other) == 1
+
+    def test_reset_still_clears_a_uri_keyed_ladder(self):
+        # The document ID is opaque, so `reset` has to find the document by
+        # its `user_id` field. It does — but only while `commit_hint_level`
+        # keeps writing that field.
+        store = self._store()
+        store.next_hint_level("u1", self.URI_KEY)
+        store.next_hint_level("u1", self.URI_KEY)
+        store.reset("u1")
+        assert store.next_hint_level("u1", self.URI_KEY) == 1
+
+    def test_a_slash_in_the_user_id_is_contained_too(self):
+        _assert_valid_document_id(self._store()._doc_id("a/b", "fp1"))
+
+    def test_the_user_and_problem_halves_cannot_bleed_into_each_other(self):
+        # "u1__x" + "y" and "u1" + "x__y" must not land on one document, or
+        # two students would share a ladder.
+        store = self._store()
+        assert store._doc_id("u1__x", "y") != store._doc_id("u1", "x__y")
+
+    def test_the_readable_key_is_still_stored_as_a_field(self):
+        store = FirestoreSessionStore(FakeFirestore())
+        store.commit_hint_level("u1", self.URI_KEY, 2)
+        stored = list(store._client.collection("sessions")._docs.values())[0]
+        assert stored["fingerprint"] == self.URI_KEY
+        assert stored["user_id"] == "u1"
 
 
 class TestBuildSessionStore:
