@@ -12,9 +12,9 @@
   know" still doesn't.
 - The "explain it in your own words" prompt appears once per file instead of
   returning every time you change a line.
-- Each function gets its own conversation, and conversations no longer
-  outlive the window. The chat you are reading and the hint level beside it
-  finally describe the same thing.
+- Each function gets its own conversation — code that sits outside one shares
+  the file's — and conversations no longer outlive the window. The chat you
+  are reading and the hint level beside it finally describe the same thing.
 - Enter sends your message; Shift+Enter starts a new line.
 - "How sure are you?" is gone, and with it the calibration score on the
   progress dashboard.

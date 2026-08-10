@@ -215,7 +215,7 @@ export function buildProgressHtml(progress: ProgressReport): string {
 </head>
 <body>
   <h1>Your progress</h1>
-  <p class="lede">What you've practised, where you needed the most help, and how well you can predict that.</p>
+  <p class="lede">What you've practised, where you needed the most help, and how that's trending over time.</p>
 
   <div class="tiles">
     ${statTile("questions asked", progress.total_interactions)}
