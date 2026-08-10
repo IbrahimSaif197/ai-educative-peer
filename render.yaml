@@ -24,6 +24,13 @@ services:
       # which does not always have wheels there. Pin to a version with wheels.
       - key: PYTHON_VERSION
         value: "3.12.6"
+      # The tutor runs on Anthropic (claude-haiku-4-5). Set this and the Groq
+      # key below stops being read - see `build_engine` in hinting_engine.py,
+      # which prefers this one and falls back to Groq only while it is absent,
+      # so the service keeps answering during the changeover.
+      - key: ANTHROPIC_API_KEY
+        sync: false
+      # Fallback only. Safe to delete once ANTHROPIC_API_KEY is set here.
       - key: GROQ_API_KEY
         sync: false
       - key: FIREBASE_PROJECT_ID

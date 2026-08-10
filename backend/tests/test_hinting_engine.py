@@ -4,16 +4,51 @@ import pytest
 from unittest.mock import MagicMock, patch
 
 
+class RecordingBackend:
+    """Stands in for AnthropicBackend / GroqBackend in tests.
+
+    Records what the engine asked for and ALSO replays the call into a
+    MagicMock shaped like the old Groq client, so assertions written against
+    `client.chat.completions.create.call_args` keep working unchanged. Those
+    assertions are about prompt *content* - which system prompt, which turns,
+    in what order - and none of that changed when the provider did. Only the
+    transport did, and the transport is what this class stands in for.
+
+    `last_system` / `last_messages` are the direct way to read the same thing
+    in new tests; prefer them over reaching through `.chat`.
+    """
+
+    def __init__(self, text: str = "", chunks=None):
+        self.text = text
+        self.chunks = chunks
+        self.chat = MagicMock()
+        self.last_system = ""
+        self.last_messages = []
+        self.last_max_tokens = 0
+
+    def _record(self, system, messages, max_tokens):
+        self.last_system = system
+        self.last_messages = list(messages)
+        self.last_max_tokens = max_tokens
+        # Replayed in the pre-Anthropic shape: system first, then the turns.
+        self.chat.completions.create(
+            model="test-model",
+            max_tokens=max_tokens,
+            messages=[{"role": "system", "content": system}, *messages],
+        )
+
+    def complete(self, system, messages, max_tokens):
+        self._record(system, messages, max_tokens)
+        return self.text
+
+    def stream(self, system, messages, max_tokens):
+        self._record(system, messages, max_tokens)
+        for chunk in (self.chunks if self.chunks is not None else [self.text]):
+            yield chunk
+
+
 def _make_mock_client(text: str):
-    message = MagicMock()
-    message.content = text
-    choice = MagicMock()
-    choice.message = message
-    resp = MagicMock()
-    resp.choices = [choice]
-    client = MagicMock()
-    client.chat.completions.create.return_value = resp
-    return client
+    return RecordingBackend(text)
 
 
 class TestHintingEngine:
@@ -78,7 +113,7 @@ class TestHintingEngine:
         from hinting_engine import HintingEngine
         engine = HintingEngine(api_key="test-key")
         engine.client = MagicMock()
-        engine.client.chat.completions.create.side_effect = RuntimeError("API down")
+        engine.client.complete.side_effect = RuntimeError("API down")
         with pytest.raises(RuntimeError, match="API down"):
             engine.generate_hint("x=1", "help", 1)
 
@@ -305,25 +340,10 @@ class TestTutorModes:
         assert "[concepts" not in hint
 
 
-def _make_stream_chunk(text):
-    delta = MagicMock()
-    delta.content = text
-    choice = MagicMock()
-    choice.delta = delta
-    chunk = MagicMock()
-    chunk.choices = [choice]
-    return chunk
-
-
 class TestStreamHint:
     def _engine(self, chunks):
         from hinting_engine import HintingEngine
-        engine = HintingEngine(api_key="test-key")
-        client = MagicMock()
-        client.chat.completions.create.return_value = iter(
-            [_make_stream_chunk(c) for c in chunks]
-        )
-        engine.client = client
+        engine = HintingEngine(client=RecordingBackend(chunks=list(chunks)))
         return engine
 
     def test_deltas_then_done(self):
@@ -338,9 +358,15 @@ class TestStreamHint:
         assert deltas.startswith("Look at your loop")
 
     def test_stream_requests_streaming(self):
-        engine = self._engine(["ok"])
-        list(engine.stream_hint("x=1", "q", 1))
-        assert engine.client.chat.completions.create.call_args.kwargs["stream"] is True
+        # Streaming is its own backend method now rather than a `stream=True`
+        # kwarg, so the thing to assert is that text actually arrived as
+        # deltas. It has to exceed STREAM_HOLDBACK_CHARS to do so: the last 40
+        # characters are withheld until the end so the "[concepts: ...]"
+        # footer never flashes in the panel.
+        engine = self._engine(["Look at the loop bounds on line 11. ", "What runs first?"])
+        events = list(engine.stream_hint("x=1", "q", 1))
+        assert [e["text"] for e in events if e["type"] == "delta"] != []
+        assert engine.client.last_messages[-1]["role"] == "user"
 
     def test_done_hint_matches_generate_hint_contract(self):
         text = "Consider the index."
@@ -348,8 +374,7 @@ class TestStreamHint:
         streamed = list(stream_engine.stream_hint("x[5]", "help", 2))[-1]["hint"]
 
         from hinting_engine import HintingEngine
-        one_shot = HintingEngine(api_key="test-key")
-        one_shot.client = _make_mock_client(text)
+        one_shot = HintingEngine(client=_make_mock_client(text))
         generated, _ = one_shot.generate_hint("x[5]", "help", 2)
 
         assert streamed == generated == text
@@ -971,3 +996,139 @@ class TestThePromptsAnswerTheQuestionAsked:
         )
         for template in (ANSWER_TEMPLATE, SYSTEM_PROMPT_TEMPLATE, WORKED_EXAMPLE_TEMPLATE):
             assert template.format(language="Python")
+
+
+class TestTheProviderSeam:
+    """The provider is now behind two methods; these cover that seam.
+
+    Everything else in this file tests prompt assembly through a fake, so
+    without this the only untested code on the branch would be the part that
+    actually talks to Anthropic.
+    """
+
+    def test_split_system_peels_the_system_message_off(self):
+        from hinting_engine import split_system
+        system, turns = split_system([
+            {"role": "system", "content": "S"},
+            {"role": "user", "content": "U"},
+            {"role": "assistant", "content": "A"},
+        ])
+        assert system == "S"
+        assert turns == [
+            {"role": "user", "content": "U"},
+            {"role": "assistant", "content": "A"},
+        ]
+
+    def test_split_system_joins_multiple_system_messages(self):
+        from hinting_engine import split_system
+        system, turns = split_system([
+            {"role": "system", "content": "one"},
+            {"role": "system", "content": "two"},
+            {"role": "user", "content": "U"},
+        ])
+        assert system == "one\n\ntwo"
+        assert turns == [{"role": "user", "content": "U"}]
+
+    def test_split_system_survives_no_system_message(self):
+        from hinting_engine import split_system
+        assert split_system([{"role": "user", "content": "U"}]) == (
+            "", [{"role": "user", "content": "U"}]
+        )
+
+    def test_anthropic_backend_joins_text_blocks_and_ignores_others(self):
+        # `content` is a list of blocks. Reading [0].text blindly breaks the
+        # day anything but text leads, so the backend filters by type.
+        from hinting_engine import AnthropicBackend
+
+        backend = AnthropicBackend.__new__(AnthropicBackend)
+        backend.model = "claude-haiku-4-5"
+        text_a, text_b, other = MagicMock(), MagicMock(), MagicMock()
+        text_a.type, text_a.text = "text", "Hello "
+        text_b.type, text_b.text = "text", "world"
+        other.type = "thinking"
+        response = MagicMock()
+        response.content = [other, text_a, text_b]
+        backend._client = MagicMock()
+        backend._client.messages.create.return_value = response
+
+        assert backend.complete("S", [{"role": "user", "content": "U"}], 400) == "Hello world"
+
+    def test_anthropic_backend_sends_system_as_its_own_argument(self):
+        from hinting_engine import AnthropicBackend
+
+        backend = AnthropicBackend.__new__(AnthropicBackend)
+        backend.model = "claude-haiku-4-5"
+        backend._client = MagicMock()
+        response = MagicMock()
+        response.content = []
+        backend._client.messages.create.return_value = response
+
+        backend.complete("SYSTEM", [{"role": "user", "content": "U"}], 400)
+        kwargs = backend._client.messages.create.call_args.kwargs
+        assert kwargs["system"] == "SYSTEM"
+        assert kwargs["messages"] == [{"role": "user", "content": "U"}]
+        assert kwargs["max_tokens"] == 400
+        # A system message left in `messages` is a 400 from the API.
+        assert all(m["role"] != "system" for m in kwargs["messages"])
+
+    def test_anthropic_backend_streams_only_text_deltas(self):
+        from hinting_engine import AnthropicBackend
+
+        def event(kind, delta_kind=None, text=""):
+            e = MagicMock()
+            e.type = kind
+            if delta_kind is None:
+                e.delta = None
+            else:
+                e.delta = MagicMock()
+                e.delta.type = delta_kind
+                e.delta.text = text
+            return e
+
+        backend = AnthropicBackend.__new__(AnthropicBackend)
+        backend.model = "claude-haiku-4-5"
+        backend._client = MagicMock()
+        backend._client.messages.create.return_value = [
+            event("message_start"),
+            event("content_block_delta", "text_delta", "Hel"),
+            event("content_block_delta", "input_json_delta", "{ignored}"),
+            event("content_block_delta", "text_delta", "lo"),
+            event("message_stop"),
+        ]
+
+        assert list(backend.stream("S", [], 400)) == ["Hel", "lo"]
+
+
+class TestBuildEnginePicksAProvider:
+    def test_anthropic_when_its_key_is_set(self, monkeypatch):
+        import hinting_engine
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-test")
+        monkeypatch.setenv("GROQ_API_KEY", "gsk-test")
+        built = {}
+        monkeypatch.setattr(
+            hinting_engine, "AnthropicBackend",
+            lambda key: built.setdefault("anthropic", key) or MagicMock(),
+        )
+        hinting_engine.build_engine()
+        assert built == {"anthropic": "sk-ant-test"}
+
+    def test_groq_while_the_anthropic_key_is_still_missing(self, monkeypatch):
+        # The rollover case: the deploy has GROQ_API_KEY and not yet the other,
+        # and the tutor must keep answering rather than 500 on every request.
+        import hinting_engine
+        monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+        monkeypatch.setenv("GROQ_API_KEY", "gsk-test")
+        built = {}
+        monkeypatch.setattr(
+            hinting_engine, "GroqBackend",
+            lambda key: built.setdefault("groq", key) or MagicMock(),
+        )
+        hinting_engine.build_engine()
+        assert built == {"groq": "gsk-test"}
+
+    def test_raises_when_neither_key_is_set(self, monkeypatch):
+        import hinting_engine
+        monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+        monkeypatch.delenv("GROQ_API_KEY", raising=False)
+        with pytest.raises(RuntimeError, match="ANTHROPIC_API_KEY"):
+            hinting_engine.build_engine()

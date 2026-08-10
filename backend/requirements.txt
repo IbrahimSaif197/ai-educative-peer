@@ -1,5 +1,8 @@
 fastapi==0.115.0
 uvicorn[standard]==0.30.6
+anthropic==0.121.0
+# Kept only for the provider rollover in build_engine; drop with the
+# GroqBackend branch once ANTHROPIC_API_KEY is set everywhere.
 groq==0.11.0
 # groq 0.11.0 passes `proxies` to httpx.Client, which httpx removed in 0.28.
 # Unpinned, a clean install resolves 0.28+ and the app dies at import.

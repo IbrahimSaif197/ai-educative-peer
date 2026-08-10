@@ -7,7 +7,7 @@ A VS Code extension that acts as a Socratic AI tutor for novice programmers. Edu
 The system consists of:
 
 - **VS Code extension** (TypeScript, sidebar webview) that reads the active file and shows a chat UI.
-- **FastAPI backend** that calls Groq `llama-3.3-70b-versatile` and persists interactions/badges to Firestore.
+- **FastAPI backend** that calls Anthropic `claude-haiku-4-5` and persists interactions/badges to Firestore.
 - **Firebase Firestore** for interaction logs and user badges.
 
 ## Architecture
@@ -15,7 +15,7 @@ The system consists of:
 ```
 edupeer/
 ├── extension/    VS Code extension (TypeScript)
-└── backend/      FastAPI + Groq + Firestore
+└── backend/      FastAPI + Anthropic + Firestore
 ```
 
 ## Setup
@@ -46,7 +46,9 @@ cp .env.example .env
 
 Then edit `.env` and fill in:
 
-- `GROQ_API_KEY` — your Groq API key
+- `ANTHROPIC_API_KEY` — your Anthropic API key (the tutor runs on `claude-haiku-4-5`)
+- `GROQ_API_KEY` — optional; used only when `ANTHROPIC_API_KEY` is absent, so the
+  service keeps answering while the key is being rolled out
 - `FIREBASE_PROJECT_ID` — your Firebase project id
 - `FIREBASE_PRIVATE_KEY` — the `private_key` field from your Firebase service-account JSON (keep the quotes and `\n` escaping)
 - `FIREBASE_CLIENT_EMAIL` — the `client_email` from the same service-account JSON
@@ -340,7 +342,9 @@ returning `429` with `Retry-After`. Every endpoint that can reach the LLM has
 a bucket. The extension treats a 429 as a
 soft failure: inline features go quiet until the budget refills and the
 sidebar says so rather than showing an error. All of this exists to keep the
-project inside the Groq free tier.
+running cost of a student project small — it was written against the Groq
+free tier's daily cap and still applies on Anthropic, where the limit is a
+bill rather than a wall.
 
 ## Packaging a VSIX
 

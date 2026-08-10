@@ -310,7 +310,7 @@ process-level caches and rate limiters.
 
 | Name | Line | Contents | Effect of loss |
 | --- | --- | --- | --- |
-| `engine` | 56 | The single `HintingEngine` instance | Rebuilt on start; requires `GROQ_API_KEY`. |
+| `engine` | 56 | The single `HintingEngine` instance | Rebuilt on start; requires `ANTHROPIC_API_KEY` (or `GROQ_API_KEY` as the rollover fallback). |
 | `firebase` | 57 | The single `FirebaseService` | Reconnects on start. |
 | `store` | 58 | Session store (Firestore-backed or in-memory) | If in-memory, all hint levels reset to 1. |
 | `_profile_cache` | 62 | `{uid: (monotonic_time, user_doc)}`, TTL 60 s, cleared wholesale above 5000 entries (`main.py:117-118`) | Next `/hint` re-reads Firestore. No data loss. |
@@ -379,12 +379,14 @@ which fences it in `<tag-NONCE>` blocks (fresh 16-hex nonce per request, and
 the nonce is stripped out of the body) instead of the markdown fences they used
 before.
 
-**Module function:** `build_engine() -> HintingEngine` (618) reads
-`GROQ_API_KEY` and raises `RuntimeError` if unset.
+**Module function:** `build_engine() -> HintingEngine` reads `ANTHROPIC_API_KEY`
+and builds an `AnthropicBackend`; absent that it falls back to `GroqBackend` on
+`GROQ_API_KEY`, and raises `RuntimeError` only when neither is set. The fallback
+exists so the deploy keeps answering while the Anthropic key is being added.
 
-**Depends on:** `groq`, `languages`.
+**Depends on:** `anthropic`, `groq` (fallback only), `languages`.
 
-**In-process state:** none beyond the `Groq` client. Nothing to lose on restart.
+**In-process state:** none beyond the provider client. Nothing to lose on restart.
 
 ### `backend/firebase_service.py`
 

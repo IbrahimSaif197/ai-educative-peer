@@ -30,15 +30,11 @@ os.environ.setdefault("FIREBASE_CLIENT_EMAIL", "test@test.iam.gserviceaccount.co
 
 
 def _make_groq_mock(hint_text: str):
-    message = MagicMock()
-    message.content = hint_text
-    choice = MagicMock()
-    choice.message = message
-    resp = MagicMock()
-    resp.choices = [choice]
-    client = MagicMock()
-    client.chat.completions.create.return_value = resp
-    return client
+    """The engine's provider backend, faked. Named for the provider it used to
+    stand in for; it now fakes whichever backend `build_engine` picked."""
+    from tests.test_hinting_engine import RecordingBackend
+
+    return RecordingBackend(hint_text)
 
 
 @pytest.fixture(autouse=True)
@@ -48,7 +44,10 @@ def _patch_groq_client(monkeypatch):
     mock_client = _make_groq_mock(hint_text)
 
     import hinting_engine
-    monkeypatch.setattr(hinting_engine, "Groq", lambda **_: mock_client)
+    monkeypatch.setattr(
+        hinting_engine, "AnthropicBackend", lambda *_a, **_k: mock_client
+    )
+    monkeypatch.setattr(hinting_engine, "GroqBackend", lambda *_a, **_k: mock_client)
 
     # Also patch the already-created engine inside main
     import main as app_main

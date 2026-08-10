@@ -2,7 +2,8 @@ import os
 import json
 import re
 import secrets
-from typing import List, Optional, Tuple
+from typing import Iterator, List, Optional, Tuple
+import anthropic
 from groq import Groq
 
 from languages import concepts_for, get_language
@@ -297,10 +298,97 @@ MIN_TRACE_STEPS = 3
 MAX_TRACE_STEPS = 8
 
 
-MODEL_NAME = "llama-3.3-70b-versatile"
+MODEL_NAME = "claude-haiku-4-5"
+
+# The model EduPeer ran on before Anthropic. Still reachable so the service
+# keeps answering while ANTHROPIC_API_KEY is being added to the deploy - see
+# `build_engine`. Nothing else in the file knows which provider is in use.
+GROQ_MODEL_NAME = "llama-3.3-70b-versatile"
 
 # How many prior conversation turns are replayed to the model.
 MAX_HISTORY_TURNS = 6
+
+
+def split_system(messages: List[dict]) -> Tuple[str, List[dict]]:
+    """Separate the leading system message from the conversation.
+
+    The engine assembles one list in the OpenAI/Groq shape - a `system` entry
+    followed by the turns - because that is what every prompt-building path
+    here has always produced. Anthropic takes the system prompt as its own
+    argument instead, so it is peeled off at the boundary rather than
+    rewriting `_prepare_hint_messages` and the hundred tests that read it.
+    """
+    system_parts = [m["content"] for m in messages if m.get("role") == "system"]
+    rest = [m for m in messages if m.get("role") != "system"]
+    return "\n\n".join(system_parts), rest
+
+
+class AnthropicBackend:
+    """The two calls the tutor makes, on Anthropic's Messages API."""
+
+    def __init__(self, api_key: str, model: str = MODEL_NAME):
+        self._client = anthropic.Anthropic(api_key=api_key)
+        self.model = model
+
+    def complete(self, system: str, messages: List[dict], max_tokens: int) -> str:
+        response = self._client.messages.create(
+            model=self.model,
+            max_tokens=max_tokens,
+            system=system,
+            messages=messages,
+        )
+        # `content` is a list of blocks; a plain text reply is one text block,
+        # but reading [0] blindly breaks the day anything else leads.
+        return "".join(b.text for b in response.content if b.type == "text")
+
+    def stream(self, system: str, messages: List[dict], max_tokens: int):
+        """Yield text deltas. Raw events rather than the `.stream()` helper:
+        the caller wants deltas one at a time, and a plain iterator is far
+        easier to stand a fake in front of than a context manager."""
+        events = self._client.messages.create(
+            model=self.model,
+            max_tokens=max_tokens,
+            system=system,
+            messages=messages,
+            stream=True,
+        )
+        for event in events:
+            if getattr(event, "type", None) != "content_block_delta":
+                continue
+            delta = getattr(event, "delta", None)
+            if getattr(delta, "type", None) == "text_delta":
+                yield delta.text
+
+
+class GroqBackend:
+    """The same two calls on Groq, kept for the key rollover."""
+
+    def __init__(self, api_key: str, model: str = GROQ_MODEL_NAME):
+        self._client = Groq(api_key=api_key)
+        self.model = model
+
+    def complete(self, system: str, messages: List[dict], max_tokens: int) -> str:
+        response = self._client.chat.completions.create(
+            model=self.model,
+            max_tokens=max_tokens,
+            messages=[{"role": "system", "content": system}, *messages],
+        )
+        return response.choices[0].message.content or ""
+
+    def stream(self, system: str, messages: List[dict], max_tokens: int):
+        chunks = self._client.chat.completions.create(
+            model=self.model,
+            max_tokens=max_tokens,
+            messages=[{"role": "system", "content": system}, *messages],
+            stream=True,
+        )
+        for chunk in chunks:
+            try:
+                text = chunk.choices[0].delta.content or ""
+            except (AttributeError, IndexError):
+                continue
+            if text:
+                yield text
 
 
 def number_lines(code: str) -> str:
@@ -351,16 +439,15 @@ def focus_instruction(focus: Optional[dict]) -> str:
 
 
 class HintingEngine:
-    def __init__(self, api_key: str):
-        self.client = Groq(api_key=api_key)
+    def __init__(self, api_key: str = "", client=None):
+        # `client` is the provider backend. Injected in tests; built from the
+        # key otherwise. Every call below goes through its two methods, so
+        # swapping provider is this one line and nothing else.
+        self.client = client or AnthropicBackend(api_key)
 
     def _chat_messages(self, messages: List[dict], max_tokens: int) -> str:
-        response = self.client.chat.completions.create(
-            model=MODEL_NAME,
-            max_tokens=max_tokens,
-            messages=messages,
-        )
-        return response.choices[0].message.content or ""
+        system, turns = split_system(messages)
+        return self.client.complete(system, turns, max_tokens)
 
     def _chat(self, system: str, user: str, max_tokens: int) -> str:
         return self._chat_messages(
@@ -776,19 +863,10 @@ class HintingEngine:
         messages, mode = self._prepare_hint_messages(
             code, question, hint_level, language, history, mode, pacing, edit_summary, focus
         )
-        stream = self.client.chat.completions.create(
-            model=MODEL_NAME,
-            max_tokens=400,
-            messages=messages,
-            stream=True,
-        )
+        system, turns = split_system(messages)
         full = ""
         emitted = 0
-        for chunk in stream:
-            try:
-                delta = chunk.choices[0].delta.content or ""
-            except (AttributeError, IndexError):
-                continue
+        for delta in self.client.stream(system, turns, 400):
             full += delta
             safe_len = max(0, len(full) - self.STREAM_HOLDBACK_CHARS)
             if safe_len > emitted:
@@ -799,7 +877,18 @@ class HintingEngine:
 
 
 def build_engine() -> HintingEngine:
-    key = os.environ.get("GROQ_API_KEY")
-    if not key:
-        raise RuntimeError("GROQ_API_KEY is not set")
-    return HintingEngine(api_key=key)
+    """Anthropic when its key is present, else Groq.
+
+    Not a permanent dual-provider design - it is the rollover. The deploy
+    already has GROQ_API_KEY set, so a hard swap would take the tutor down
+    between this shipping and ANTHROPIC_API_KEY being added to Render. Once
+    the key is in place the Groq branch is dead and can go.
+    """
+    key = os.environ.get("ANTHROPIC_API_KEY")
+    if key:
+        return HintingEngine(client=AnthropicBackend(key))
+    fallback = os.environ.get("GROQ_API_KEY")
+    if fallback:
+        print("[llm] ANTHROPIC_API_KEY is not set - falling back to Groq")
+        return HintingEngine(client=GroqBackend(fallback))
+    raise RuntimeError("neither ANTHROPIC_API_KEY nor GROQ_API_KEY is set")
