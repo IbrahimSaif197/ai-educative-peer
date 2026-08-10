@@ -109,7 +109,7 @@ export class EduPeerSidebarProvider implements vscode.WebviewViewProvider {
    */
   private explainedFiles = new Set<string>();
   /** The ask that is paused behind the explain-first gate. */
-  private pendingAsk?: { question: string; code: string; confidence: number };
+  private pendingAsk?: { question: string; code: string };
   /** The snippet awaiting the student's output prediction. */
   private pendingPredict?: { snippet: string; code: string };
   /** The desk-check exercise awaiting the student's filled-in grid. */
@@ -218,12 +218,7 @@ export class EduPeerSidebarProvider implements vscode.WebviewViewProvider {
           await this.startReview();
           return;
         case "askHint":
-          await this.handleAskFromWebview(
-            msg.question as string,
-            msg.code as string,
-            (msg.mode as TutorMode) ?? "hint",
-            Number(msg.confidence ?? 0)
-          );
+          await this.handleAskFromWebview(msg.question as string, msg.code as string, (msg.mode as TutorMode) ?? "hint");
           return;
         case "explainAnswer":
           await this.handleExplainAnswer(msg.explanation as string);
@@ -448,12 +443,7 @@ export class EduPeerSidebarProvider implements vscode.WebviewViewProvider {
     );
   }
 
-  private async handleAskFromWebview(
-    question: string,
-    code: string,
-    mode: TutorMode,
-    confidence: number
-  ) {
+  private async handleAskFromWebview(question: string, code: string, mode: TutorMode) {
     // A pasted stack trace or compiler error is a lesson in reading errors,
     // not a level-1 hint.
     if (mode === "hint" && looksLikeErrorText(question)) {
@@ -464,13 +454,13 @@ export class EduPeerSidebarProvider implements vscode.WebviewViewProvider {
       const fileKey = this.lastFileKey;
       if (!this.explainedFiles.has(fileKey)) {
         this.explainedFiles.add(fileKey);
-        this.pendingAsk = { question: filled, code: code ?? "", confidence };
+        this.pendingAsk = { question: filled, code: code ?? "" };
         this.post({ type: "userMessage", text: filled });
         this.post({ type: "explainFirst", prompt: EXPLAIN_FIRST_PROMPT });
         return;
       }
     }
-    await this.handleAsk(filled, code, mode, { confidence });
+    await this.handleAsk(filled, code, mode);
   }
 
   private async handleExplainAnswer(explanation: string) {
@@ -480,16 +470,12 @@ export class EduPeerSidebarProvider implements vscode.WebviewViewProvider {
     const text = (explanation || "").trim();
     if (text) {
       this.post({ type: "userMessage", text });
-      await this.handleAsk(
-        frameExplainedQuestion(text, pending.question),
-        pending.code,
-        "hint",
-        { echoUser: false, confidence: pending.confidence }
-      );
+      await this.handleAsk(frameExplainedQuestion(text, pending.question), pending.code, "hint", {
+        echoUser: false,
+      });
     } else {
       await this.handleAsk(pending.question, pending.code, "hint", {
         echoUser: false,
-        confidence: pending.confidence,
       });
     }
   }
@@ -500,7 +486,6 @@ export class EduPeerSidebarProvider implements vscode.WebviewViewProvider {
     if (!pending) return;
     await this.handleAsk(pending.question, pending.code, "hint", {
       echoUser: false,
-      confidence: pending.confidence,
     });
   }
 
@@ -510,7 +495,6 @@ export class EduPeerSidebarProvider implements vscode.WebviewViewProvider {
     mode: TutorMode = "hint",
     opts: {
       echoUser?: boolean;
-      confidence?: number;
       /**
        * When false, `code` is sent verbatim and no focus is attached: the
        * caller has already chosen the subject. A review exercise is about a
@@ -599,7 +583,6 @@ export class EduPeerSidebarProvider implements vscode.WebviewViewProvider {
         history: thread.history.slice(-MAX_HISTORY_TURNS),
         escalate: attempt ? attempt.escalate : true,
         edit_summary: attempt?.editSummary ?? "",
-        confidence: Math.max(0, Math.min(3, Math.trunc(opts.confidence ?? 0))),
         ...(aboutOpenFile && this.lastFocus
           ? {
               focus: {
@@ -902,18 +885,11 @@ export class EduPeerSidebarProvider implements vscode.WebviewViewProvider {
   </div>
 
   <footer class="composer">
-    <fieldset class="confidence" id="confidence">
-      <legend class="confidence__legend">How sure are you?</legend>
-      <button type="button" class="conf" data-value="1" aria-pressed="false">No idea</button>
-      <button type="button" class="conf" data-value="2" aria-pressed="false">Some idea</button>
-      <button type="button" class="conf" data-value="3" aria-pressed="false">Pretty sure</button>
-    </fieldset>
-
     <label class="visually-hidden" for="input">Your question</label>
     <textarea id="input" rows="3" placeholder="Describe your error or ask a question…"></textarea>
     <div class="composer__actions">
-      <button id="send" class="btn btn--primary">Ask<span class="btn__hint">Ctrl↵</span></button>
-      <button id="quiz" class="btn btn--ghost" title="Get a reflection question about your fix">I fixed it</button>
+      <button id="send" class="btn btn--primary">Ask<span class="btn__hint">↵</span></button>
+      <button id="quiz" class="btn btn--ghost" title="Answer one question about why your fix works">Quiz me</button>
       <button id="reset" class="btn btn--ghost" title="Clear the conversation and start at hint 1">Reset</button>
     </div>
   </footer>

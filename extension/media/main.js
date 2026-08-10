@@ -23,7 +23,6 @@
   const reviewBtn = el("reviewBtn");
   const offlineBannerEl = el("offlineBanner");
   const authBannerEl = el("authBanner");
-  const confidenceEl = el("confidence");
 
   const DEFAULT_PLACEHOLDER = "Describe your error or ask a question…";
   const MAX_PREVIEW_LINES = 200;
@@ -55,7 +54,6 @@
   // Set when the student starts a review, so an unsolicited review-exercise
   // bubble (e.g. restored from history) does not hijack the composer.
   let expectReviewAnswer = false;
-  let confidence = 0;
   let streamingTurn = null;
   // True while an ask is in flight. Only the send button was disabled before,
   // so Ctrl+Enter and the mode buttons could start a second stream whose
@@ -239,22 +237,6 @@
     chatEl.appendChild(row);
     scrollToEnd();
   }
-
-  // ------------------------------------------------------------ confidence
-
-  function setConfidence(value) {
-    confidence = value;
-    confidenceEl.querySelectorAll(".conf").forEach((btn) => {
-      btn.setAttribute("aria-pressed", String(Number(btn.dataset.value) === value));
-    });
-  }
-
-  confidenceEl.querySelectorAll(".conf").forEach((btn) => {
-    btn.addEventListener("click", () => {
-      const value = Number(btn.dataset.value);
-      setConfidence(confidence === value ? 0 : value);
-    });
-  });
 
   // ---------------------------------------------------------------- badges
 
@@ -454,16 +436,16 @@
       question: text,
       code: currentCode,
       mode,
-      confidence: mode === "hint" ? confidence : 0,
     });
     inputEl.value = "";
-    setConfidence(0);
   }
 
   sendBtn.addEventListener("click", send);
 
   inputEl.addEventListener("keydown", (event) => {
-    if (event.key === "Enter" && (event.ctrlKey || event.metaKey)) {
+    // Enter sends; Shift+Enter is how you get a newline. Ctrl/Cmd+Enter still
+    // works for anyone who learned it that way.
+    if (event.key === "Enter" && !event.shiftKey) {
       event.preventDefault();
       send();
     }
@@ -763,7 +745,6 @@
         turns = [];
         clearChat();
         setComposerMode("hint");
-        setConfidence(0);
         expectReflectAnswer = false;
         if (msg.summary) {
           addTurn({ role: "tutor", text: msg.summary, eyebrow: "What you learned" });

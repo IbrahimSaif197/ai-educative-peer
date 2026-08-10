@@ -418,42 +418,6 @@ describe("the attempt gate", () => {
   });
 });
 
-describe("confidence", () => {
-  beforeEach(() => mock.__reset());
-
-  it("forwards the rating", async () => {
-    const h = await build();
-    await h.send({ type: "askHint", question: "help", code: CODE, mode: "hint", confidence: 3 });
-    await h.send({ type: "explainSkip" });
-    expect(hintRequest(h.api).confidence).toBe(3);
-  });
-
-  it("survives the explain-first gate", async () => {
-    const h = await build();
-    await h.send({ type: "askHint", question: "help", code: CODE, mode: "hint", confidence: 2 });
-    await h.send({ type: "explainAnswer", explanation: "an average" });
-    expect(hintRequest(h.api).confidence).toBe(2);
-  });
-
-  it("defaults to zero when not given", async () => {
-    const h = await build();
-    await askPastTheGate(h);
-    expect(hintRequest(h.api).confidence).toBe(0);
-  });
-
-  it("clamps a value the webview should never send", async () => {
-    const h = await build();
-    await askPastTheGate(h, "help", { confidence: 99 });
-    expect(hintRequest(h.api).confidence).toBe(3);
-  });
-
-  it("clamps a negative value", async () => {
-    const h = await build();
-    await askPastTheGate(h, "help", { confidence: -5 });
-    expect(hintRequest(h.api).confidence).toBe(0);
-  });
-});
-
 describe("mode routing", () => {
   beforeEach(() => mock.__reset());
 
@@ -1580,4 +1544,11 @@ describe("the sticky thread key", () => {
     expect(provider["threadKey"]).toBe(key);
     expect(posted.find((m: any) => m.type === "restoreChat")).toBeUndefined();
   });
+});
+
+it("offers a quiz, not a claim that you fixed it", async () => {
+  const h = await build();
+  expect(h.html).toContain(">Quiz me<");
+  expect(h.html).not.toContain("I fixed it");
+  expect(h.html).not.toContain("How sure are you?");
 });

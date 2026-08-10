@@ -105,27 +105,6 @@ function activityStrip(days: ActivityDay[] | undefined): string {
   )} · active on ${active} of ${strip.length} days</p>`;
 }
 
-/** Confidence-versus-outcome readout. */
-function calibration(report: ProgressReport): string {
-  const data = report.calibration;
-  if (!data || !data.enough_data) {
-    const have = data?.samples ?? 0;
-    return `<p class="empty">Rate how sure you are before a few more hints (${escapeHtml(
-      have
-    )} so far) and EduPeer will show how well your confidence matches reality.</p>`;
-  }
-  const pct = Math.round(data.score * 100);
-  return `<div class="calibration">
-    <div class="calibration__score">${pct}<span>%</span></div>
-    <div>
-      <p class="calibration__lead">of your ${escapeHtml(data.samples)} rated questions matched how much help you actually needed.</p>
-      <p class="row__meta">Sure but needed pseudocode: ${escapeHtml(
-        data.overconfident
-      )} · Unsure but solved it first ask: ${escapeHtml(data.underconfident)}</p>
-    </div>
-  </div>`;
-}
-
 export function buildProgressHtml(progress: ProgressReport): string {
   const badges = progress.badges.length
     ? progress.badges.map((b) => `<span class="badge">${escapeHtml(b)}</span>`).join(" ")
@@ -224,10 +203,6 @@ export function buildProgressHtml(progress: ProgressReport): string {
   .strip { display: block; width: 100%; height: 44px; }
   .day { fill: var(--accent); }
   .day--idle { fill: var(--raised); }
-  .calibration { display: flex; align-items: center; gap: 18px; }
-  .calibration__score { font-family: var(--mono); font-size: 2.6em; font-weight: 600; line-height: 1; }
-  .calibration__score span { font-size: 0.42em; color: var(--dim); margin-left: 2px; }
-  .calibration__lead { margin: 0 0 2px; }
   .goal { margin: 0; }
   .note pre { white-space: pre-wrap; font-family: inherit; margin: 2px 0 14px; }
   .empty { color: var(--dim); margin: 4px 0; }
@@ -259,9 +234,6 @@ export function buildProgressHtml(progress: ProgressReport): string {
 
   <h2>Last 14 days</h2>
   ${activityStrip(progress.activity)}
-
-  <h2>Confidence vs. reality</h2>
-  ${calibration(progress)}
 
   <h2>Concepts to revisit</h2>
   ${conceptBars(progress.concept_struggles)}

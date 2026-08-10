@@ -409,10 +409,23 @@ describe("the composer", () => {
     expect(lastSent("askHint")).toBeDefined();
   });
 
-  it("does not send on a bare enter", () => {
+  it("sends on a bare enter", () => {
     (el("input") as HTMLTextAreaElement).value = "q";
     el("input").dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+    expect(lastSent("askHint")).toBeDefined();
+  });
+
+  it("does not send on shift+enter, so the newline lands", () => {
+    (el("input") as HTMLTextAreaElement).value = "q";
+    el("input").dispatchEvent(
+      new KeyboardEvent("keydown", { key: "Enter", shiftKey: true, bubbles: true })
+    );
     expect(lastSent("askHint")).toBeUndefined();
+  });
+
+  it("has no confidence control", () => {
+    expect(document.getElementById("confidence")).toBeNull();
+    expect($$(".conf")).toHaveLength(0);
   });
 
   it("asks for a reflection quiz", () => {
@@ -423,45 +436,6 @@ describe("the composer", () => {
   it("requests a reset", () => {
     (el("reset") as HTMLButtonElement).click();
     expect(lastSent("reset")).toBeDefined();
-  });
-});
-
-describe("confidence", () => {
-  const chips = () => $$(".conf") as HTMLButtonElement[];
-
-  it("marks the selected chip", () => {
-    chips()[1].click();
-    expect(chips()[1].getAttribute("aria-pressed")).toBe("true");
-    expect(chips()[0].getAttribute("aria-pressed")).toBe("false");
-  });
-
-  it("deselects when the same chip is clicked again", () => {
-    chips()[1].click();
-    chips()[1].click();
-    expect(chips()[1].getAttribute("aria-pressed")).toBe("false");
-  });
-
-  it("rides along with the question", () => {
-    chips()[2].click();
-    (el("input") as HTMLTextAreaElement).value = "q";
-    (el("send") as HTMLButtonElement).click();
-    expect(lastSent("askHint").confidence).toBe(3);
-  });
-
-  it("resets after sending", () => {
-    chips()[2].click();
-    (el("input") as HTMLTextAreaElement).value = "q";
-    (el("send") as HTMLButtonElement).click();
-    expect(chips()[2].getAttribute("aria-pressed")).toBe("false");
-  });
-
-  it("is not sent for a non-hint mode", () => {
-    chips()[2].click();
-    post({ type: "hint", hint: "h", hint_level: 3, concept_tags: [], mode: "hint" });
-    ($$(".actions button")[0] as HTMLButtonElement).click(); // switch to translate
-    (el("input") as HTMLTextAreaElement).value = "my code";
-    (el("send") as HTMLButtonElement).click();
-    expect(lastSent("askHint").confidence).toBe(0);
   });
 });
 
@@ -618,12 +592,10 @@ describe("errors and reset", () => {
     expect(texts[1]).toContain("back at hint 1");
   });
 
-  it("resets the ladder and the confidence chips", () => {
+  it("resets the ladder", () => {
     post({ type: "hint", hint: "h", hint_level: 3, concept_tags: [], mode: "hint" });
-    ($$(".conf")[1] as HTMLButtonElement).click();
     post({ type: "resetDone", summary: "" });
     expect($(".ladder")).toBeNull();
-    expect($$(".conf")[1].getAttribute("aria-pressed")).toBe("false");
   });
 });
 
