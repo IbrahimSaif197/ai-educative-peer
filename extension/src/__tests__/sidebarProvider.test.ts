@@ -746,7 +746,7 @@ describe("session reset", () => {
 
   it("clears the transcript for the block in focus", async () => {
     const h = await build();
-    const key = h.provider["lastDocumentKey"];
+    const key = h.provider["threadKey"];
     h.provider["threads"].set(key, {
       history: [],
       bubbles: [{ role: "tutor", text: "old" }],
@@ -1377,5 +1377,207 @@ describe("one chat thread per function", () => {
     await askPastTheGate(h);
 
     expect(h.state.get("edupeer.chatHistory")).toBeUndefined();
+  });
+});
+
+/**
+ * Round-1 review, Critical 1: `this.thread` used to be re-read from live
+ * focus both before the request went out and after the response came back,
+ * so a cursor move mid-stream filed the answer into whichever thread was on
+ * screen when it landed, not the one that asked. It also posted `restoreChat`
+ * the moment the cursor moved, wiping the panel out from under a student
+ * watching a streaming answer arrive. Both are fixed: `handleAsk` captures
+ * its thread once, before the first await, and `sendFocus` defers the swap
+ * until the ask settles.
+ */
+describe("thread safety while an ask is in flight", () => {
+  beforeEach(() => mock.__reset());
+
+  const TWO_FUNCS = [
+    "def first():",
+    "    return 1",
+    "",
+    "",
+    "def second():",
+    "    return 2",
+  ].join("\n");
+
+  it("files the answer into the thread that asked, and does not wipe the panel mid-stream", async () => {
+    let resolveStream: (value: any) => void = () => {};
+    const streamHint = jest.fn(
+      () => new Promise((resolve) => { resolveStream = resolve; })
+    );
+    const { provider, posted, doc, api } = await setupProvider(
+      TWO_FUNCS,
+      1,
+      "/tmp/threads/race.py"
+    );
+    api.streamHint = streamHint;
+
+    await provider["sendFocus"]();
+    const firstKey = provider["threadKey"];
+
+    // Not awaited: `handleAsk` runs synchronously up to its first await
+    // (inside `api.streamHint`), so `askInFlight` and the thread it captured
+    // are already set by the time this call returns control here.
+    const askPromise = provider["handleAsk"]("why does this return 1?", "code", "hint");
+    expect(provider["askInFlight"]).toBe(true);
+
+    // The cursor moves to the other function while the ask is still in flight.
+    mock.window.activeTextEditor = mock.__makeEditor(doc, 5);
+    posted.length = 0;
+    await provider["sendFocus"]();
+    const secondKey = provider["threadKey"];
+    expect(secondKey).not.toBe(firstKey);
+
+    // The panel must not be wiped while the answer is still streaming in.
+    expect(posted.find((m: any) => m.type === "restoreChat")).toBeUndefined();
+
+    resolveStream({ hint: "because it returns 1", hint_level: 1, concept_tags: [] });
+    await askPromise;
+
+    // The question and answer landed in the thread that asked...
+    expect(provider["threads"].get(firstKey)!.history).toEqual([
+      { role: "student", content: "why does this return 1?" },
+      { role: "tutor", content: "because it returns 1" },
+    ]);
+    // ...not the one that happened to be on screen when the response arrived.
+    expect(provider["threads"].get(secondKey)?.history ?? []).toEqual([]);
+
+    // The deferred swap fires once the ask settles.
+    expect(latest(posted, "restoreChat").messages).toEqual([]);
+  });
+});
+
+/**
+ * Round-1 review, Important 2: the no-active-editor path used to reset the
+ * document key to "", and since that ran before the key-change comparison,
+ * no `restoreChat` followed — the panel kept showing the old transcript
+ * while the store had silently moved to a phantom "" bucket.
+ */
+describe("the thread key survives losing the active editor", () => {
+  beforeEach(() => mock.__reset());
+
+  it("does not swap to a phantom thread when there is no active editor", async () => {
+    const { provider, posted } = await setupProvider(CODE, 0, "/tmp/threads/no-editor.py");
+    await provider["sendFocus"]();
+    const key = provider["threadKey"];
+    expect(key).not.toBe("");
+
+    posted.length = 0;
+    mock.window.activeTextEditor = undefined;
+    await provider["sendFocus"]();
+
+    expect(provider["threadKey"]).toBe(key);
+    expect(posted.find((m: any) => m.type === "restoreChat")).toBeUndefined();
+  });
+});
+
+/**
+ * Round-1 review, Important 3: the commit message claims reset clears the
+ * thread you are in, not all of them, but nothing would have failed if
+ * `threads.delete(key)` had been `threads.clear()`.
+ */
+describe("reset clears only the current thread", () => {
+  beforeEach(() => mock.__reset());
+
+  const TWO_FUNCS = [
+    "def first():",
+    "    return 1",
+    "",
+    "",
+    "def second():",
+    "    return 2",
+  ].join("\n");
+
+  it("leaves another function's thread untouched", async () => {
+    const { provider, doc } = await setupProvider(
+      TWO_FUNCS,
+      1,
+      "/tmp/threads/reset-isolation.py"
+    );
+    await provider["sendFocus"]();
+    const firstKey = provider["threadKey"];
+    provider["threads"].set(firstKey, {
+      history: [{ role: "student", content: "q1" }],
+      bubbles: [{ role: "tutor", text: "about first" }],
+    });
+
+    mock.window.activeTextEditor = mock.__makeEditor(doc, 5);
+    await provider["sendFocus"]();
+    const secondKey = provider["threadKey"];
+    provider["threads"].set(secondKey, {
+      history: [{ role: "student", content: "q2" }],
+      bubbles: [{ role: "tutor", text: "about second" }],
+    });
+
+    await provider.resetSession();
+
+    expect(provider["threads"].has(secondKey)).toBe(false);
+    expect(provider["threads"].get(firstKey)?.bubbles).toEqual([
+      { role: "tutor", text: "about first" },
+    ]);
+  });
+});
+
+/**
+ * Round-1 review, Important 4 (a ruling from the human partner, overriding
+ * the brief's "keyed exactly as the hint ladder is" wording): a selection or
+ * a click on a blank line resolves to a file-level focus, and swapping the
+ * thread on that blanked the panel mid-conversation for an ordinary cursor
+ * gesture. The thread now follows named blocks only.
+ */
+describe("the sticky thread key", () => {
+  beforeEach(() => mock.__reset());
+
+  const TWO_FUNCS = [
+    "def first():",
+    "    return 1",
+    "",
+    "",
+    "def second():",
+    "    return 2",
+  ].join("\n");
+
+  it("keeps the enclosing function's thread when the focus is a selection, not a named block", async () => {
+    const { provider, posted, doc } = await setupProvider(TWO_FUNCS, 1, "/tmp/threads/sticky.py");
+    await provider["sendFocus"]();
+    const key = provider["threadKey"];
+    expect(key).toContain("#first");
+
+    // A non-empty selection inside `first`'s body: `resolveFocus` ranks a
+    // selection above the heuristic block, so `focus.kind` becomes
+    // "selection" even though the student never left the function.
+    mock.window.activeTextEditor = {
+      document: doc,
+      selection: new mock.Selection(new mock.Position(1, 4), new mock.Position(1, 12)),
+      setDecorations: jest.fn(),
+      revealRange: jest.fn(),
+    };
+    posted.length = 0;
+    await provider["sendFocus"]();
+
+    expect(provider["threadKey"]).toBe(key);
+    expect(posted.find((m: any) => m.type === "restoreChat")).toBeUndefined();
+  });
+
+  it("keeps the previous function's thread when the cursor lands on a blank line between functions", async () => {
+    const { provider, posted, doc } = await setupProvider(
+      TWO_FUNCS,
+      1,
+      "/tmp/threads/sticky-blank.py"
+    );
+    await provider["sendFocus"]();
+    const key = provider["threadKey"];
+
+    // Line 2 (0-based) is one of the blank lines between the two functions:
+    // outside `first`'s indented body, so the heuristic finds no enclosing
+    // block and `resolveFocus` falls through to a file-level "window" focus.
+    mock.window.activeTextEditor = mock.__makeEditor(doc, 2);
+    posted.length = 0;
+    await provider["sendFocus"]();
+
+    expect(provider["threadKey"]).toBe(key);
+    expect(posted.find((m: any) => m.type === "restoreChat")).toBeUndefined();
   });
 });

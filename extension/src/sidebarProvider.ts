@@ -27,28 +27,61 @@ const MAX_HISTORY_TURNS = 6;
 /** Cap on one thread's rendered bubbles, so a long session cannot grow forever. */
 const MAX_PERSISTED_BUBBLES = 50;
 
+/** One conversation: the model-facing turns and the rendered bubbles. */
+type Thread = { history: ChatTurn[]; bubbles: unknown[] };
+
 export class EduPeerSidebarProvider implements vscode.WebviewViewProvider {
   public static readonly viewType = "edupeer.sidebar";
 
   private view?: vscode.WebviewView;
   /**
-   * One conversation per problem, keyed exactly as the hint ladder is.
+   * One conversation per function, keyed by `threadKey`.
    *
-   * The ladder was already per function while the transcript was one global
-   * list, so the transcript on screen and the level beside it described
-   * different things. In memory rather than `globalState` because a
-   * conversation belongs to the session that had it.
+   * The hint ladder was already per function while the transcript was one
+   * global list, so the transcript on screen and the level beside it
+   * described different things. In memory rather than `globalState` because
+   * a conversation belongs to the session that had it.
    */
-  private threads = new Map<string, { history: ChatTurn[]; bubbles: unknown[] }>();
-  /** The thread for the block the cursor is in, created on first use. */
-  private get thread(): { history: ChatTurn[]; bubbles: unknown[] } {
-    let thread = this.threads.get(this.lastDocumentKey);
+  private threads = new Map<string, Thread>();
+  /** The thread for `key`, created on first use. */
+  private threadFor(key: string): Thread {
+    let thread = this.threads.get(key);
     if (!thread) {
       thread = { history: [], bubbles: [] };
-      this.threads.set(this.lastDocumentKey, thread);
+      this.threads.set(key, thread);
     }
     return thread;
   }
+  /** The thread for the block the cursor is in, created on first use. */
+  private get thread(): Thread {
+    return this.threadFor(this.threadKey);
+  }
+  /**
+   * The conversation on screen, which follows named blocks only.
+   *
+   * A selection or a click on a blank line resolves to a file-level focus, and
+   * keying off that blanked the panel mid-conversation for an ordinary cursor
+   * gesture. The thread stays where it is until the student is genuinely in a
+   * different function.
+   */
+  private threadKey = "";
+  /**
+   * The thread the webview is currently rendering.
+   *
+   * `persistChat` carries no key and crosses an async boundary, so resolving
+   * its destination from the live focus writes one function's transcript over
+   * another's. The webview only ever renders what `restoreChat` gave it, so
+   * that is the key its bubbles belong to.
+   */
+  private renderedKey = "";
+  /**
+   * Set when the thread the cursor is in changes while an ask is still
+   * streaming. `sendFocus` defers the swap here instead of posting it
+   * immediately, and `handleAsk`'s `finally` block posts it once the ask
+   * settles — a student watching an answer arrive must not have the panel
+   * wiped out from under them.
+   */
+  private pendingThreadSwap = false;
   private lastLanguageId = "python";
   /** Identifies the document the attempt tracker is following. */
   private lastDocumentKey = "";
@@ -166,7 +199,7 @@ export class EduPeerSidebarProvider implements vscode.WebviewViewProvider {
       switch (msg.type) {
         case "ready":
           this.postAuthState();
-          this.post({ type: "restoreChat", messages: this.thread.bubbles });
+          this.postThread(this.threadKey);
           await this.sendFocus();
           await this.sendBadges();
           this.postOffline(!this.api.isAvailable);
@@ -175,7 +208,10 @@ export class EduPeerSidebarProvider implements vscode.WebviewViewProvider {
           void this.checkReviewDue();
           return;
         case "persistChat":
-          this.thread.bubbles =
+          // Keyed on what the webview is actually showing (`renderedKey`),
+          // not on the live focus: this crosses an async boundary, and the
+          // cursor can have moved to another function by the time it drains.
+          this.threadFor(this.renderedKey).bubbles =
             (msg.messages as unknown[] | undefined)?.slice(-MAX_PERSISTED_BUBBLES) ?? [];
           return;
         case "startReview":
@@ -281,7 +317,7 @@ export class EduPeerSidebarProvider implements vscode.WebviewViewProvider {
   public async resetSession() {
     // Anything already in flight now belongs to a cleared conversation.
     this.sessionGeneration++;
-    this.threads.delete(this.lastDocumentKey);
+    this.threads.delete(this.threadKey);
     this.explainedFiles.clear();
     this.pendingAsk = undefined;
     this.pendingPredict = undefined;
@@ -540,6 +576,12 @@ export class EduPeerSidebarProvider implements vscode.WebviewViewProvider {
       });
     }
 
+    // Captured before the first await: the cursor can move to another block
+    // while the stream is in flight, and the answer belongs to the
+    // conversation that asked for it, not to whichever one is on screen when
+    // it lands.
+    const thread = this.thread;
+
     const seq = ++this.askSeq;
     const generation = this.sessionGeneration;
     this.askInFlight = true;
@@ -554,7 +596,7 @@ export class EduPeerSidebarProvider implements vscode.WebviewViewProvider {
         problem_key: this.lastDocumentKey,
         language: this.lastLanguageId,
         mode,
-        history: this.thread.history.slice(-MAX_HISTORY_TURNS),
+        history: thread.history.slice(-MAX_HISTORY_TURNS),
         escalate: attempt ? attempt.escalate : true,
         edit_summary: attempt?.editSummary ?? "",
         confidence: Math.max(0, Math.min(3, Math.trunc(opts.confidence ?? 0))),
@@ -591,8 +633,8 @@ export class EduPeerSidebarProvider implements vscode.WebviewViewProvider {
         this.attempts.record(this.lastDocumentKey, attemptCode);
         this.levelEmitter.fire(res.hint_level);
       }
-      this.thread.history.push({ role: "student", content: question });
-      this.thread.history.push({ role: "tutor", content: res.hint });
+      thread.history.push({ role: "student", content: question });
+      thread.history.push({ role: "tutor", content: res.hint });
       this.post({
         type: "hint",
         seq,
@@ -609,6 +651,13 @@ export class EduPeerSidebarProvider implements vscode.WebviewViewProvider {
     } finally {
       this.askInFlight = false;
       this.post({ type: "loading", value: false });
+      if (this.pendingThreadSwap) {
+        // The cursor moved to another function while this ask was streaming;
+        // the swap was withheld so the panel wasn't wiped out from under a
+        // student watching the answer arrive. Show it now that it's settled.
+        this.pendingThreadSwap = false;
+        this.postThread(this.threadKey);
+      }
     }
   }
 
@@ -662,6 +711,11 @@ export class EduPeerSidebarProvider implements vscode.WebviewViewProvider {
       this.lastFocusSignature = "";
       this.lastCursorLine = 0;
       this.lastDocumentKey = "";
+      // `threadKey` is left exactly as it was. Losing the active editor is
+      // not changing function — swapping it here would move the store to a
+      // phantom "" bucket while the panel keeps showing the transcript it
+      // already has, and anything typed while the file is gone would land in
+      // a thread nothing ever shows again.
       this.post({ type: "focus", focusCode: "", fileName: "", language: "", totalLines: 0 });
       return;
     }
@@ -702,16 +756,36 @@ export class EduPeerSidebarProvider implements vscode.WebviewViewProvider {
     // A positional label changes every time the cursor moves, which would make
     // every ask a brand-new problem and pin the ladder at hint 1. Only a named
     // block is stable enough to key on.
-    const previousKey = this.lastDocumentKey;
     this.lastDocumentKey =
       focus.kind === "symbol" || focus.kind === "heuristic"
         ? `${doc.uri.toString()}#${focus.label}`
         : doc.uri.toString();
-    // A different block is a different conversation. Swap the transcript so
-    // the student is never reading one function's thread beside another
-    // function's hint level.
-    if (this.lastDocumentKey !== previousKey) {
-      this.post({ type: "restoreChat", messages: this.thread.bubbles });
+
+    // The conversation follows named blocks only — see the doc comment on
+    // `threadKey`. A selection or a click on a blank line does not move it.
+    const previousThreadKey = this.threadKey;
+    const fileKey = doc.uri.toString();
+    if (focus.kind === "symbol" || focus.kind === "heuristic") {
+      this.threadKey = this.lastDocumentKey;
+    } else if (this.threadKey !== fileKey && !this.threadKey.startsWith(`${fileKey}#`)) {
+      // `threadKey` has never been set for this document (a fresh provider,
+      // or the student just switched files): fall back to the file-level key
+      // so there is always a valid thread, rather than keep whatever
+      // function's key was left over from a different document.
+      this.threadKey = fileKey;
+    }
+    // A different function is a different conversation. Swap the transcript
+    // so the student is never reading one function's thread beside another
+    // function's hint level — unless an answer is still streaming in, in
+    // which case the swap is deferred to `handleAsk`'s `finally` block, once
+    // the ask settles, so the panel is never wiped out from under a student
+    // watching it arrive.
+    if (this.threadKey !== previousThreadKey) {
+      if (this.askInFlight) {
+        this.pendingThreadSwap = true;
+      } else {
+        this.postThread(this.threadKey);
+      }
     }
 
     this.post({
@@ -748,6 +822,12 @@ export class EduPeerSidebarProvider implements vscode.WebviewViewProvider {
       signedIn,
       label: signedIn ? (s!.displayName || s!.email || s!.uid) : "Not signed in",
     });
+  }
+
+  /** Post the thread for `key` and remember it as what the webview is showing. */
+  private postThread(key: string): void {
+    this.renderedKey = key;
+    this.post({ type: "restoreChat", messages: this.threadFor(key).bubbles });
   }
 
   private post(msg: any) {
