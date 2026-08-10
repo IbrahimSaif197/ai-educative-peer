@@ -304,3 +304,50 @@ export function isAttempt(message: string): boolean {
   if (clauses.length === 0) return (message ?? "").trim().length > 0;
   return !clauses.every(isSurrender);
 }
+
+/**
+ * Phrases that mean "stop guiding me and give me the fix".
+ *
+ * Entries are written in their padding-stripped form, because that is what
+ * they are matched against — exactly like `GIVE_UP` above. "just" is padding,
+ * so "just fix it" arrives here as "fix it" and the entry reads that way;
+ * writing "just fix it" in this set would never match anything.
+ *
+ * Deliberately excludes the bare "tell me", which `GIVE_UP` does contain:
+ * there it is safe because it only holds the ladder, but here it would route
+ * "tell me more about ranges" straight past the Socratic tutor to the answer.
+ */
+const ANSWER_REQUEST = new Set([
+  "tell me the answer",
+  "give me the answer",
+  "show me the answer",
+  "what is the answer",
+  "whats the answer",
+  "show me the solution",
+  "give me the solution",
+  "whats the fix",
+  "fix it",
+  "show me the code",
+]);
+
+/**
+ * Is the student asking outright for the answer?
+ *
+ * True for any clause in the message, so a student who describes what they
+ * tried and *then* asks for the answer still gets it — the request is the
+ * signal, and burying it behind a sentence of context does not make it less
+ * of one.
+ *
+ * Routed before the attempt gate in `handleAskFromWebview`, so these phrases
+ * never reach `isAttempt`. That is why `GIVE_UP` still contains three of them
+ * unchanged: they no longer get that far.
+ */
+export function isAnswerRequest(message: string): boolean {
+  return clausesOf(message).some((clause) => {
+    const core = clause
+      .split(" ")
+      .filter((word) => !GIVE_UP_PADDING.has(word))
+      .join(" ");
+    return ANSWER_REQUEST.has(core);
+  });
+}
