@@ -600,22 +600,54 @@ class CodeView:
         return "\n".join(parts)
 
 
+def focus_span(
+    focus: Optional[dict], ceiling: Optional[int] = None
+) -> Optional[Tuple[int, int, str]]:
+    """The client's focus block as `(start, end, label)`, or None if unusable.
+
+    One reading of `focus` for the three places that need one. They used to
+    parse it separately, and drifted: two accepted any `start >= 1, end >=
+    start`, the third also required the span to fit inside what the digest
+    actually carried. That is not a style complaint - it is where this
+    feature's recurring defect lived. The missing ceiling was fixed once in
+    `generate_line_hint`, and the identical hole then turned up again in
+    `scan_code`'s clamp. A caller that wants a ceiling now says so.
+
+    None, rather than an exception, for every unusable shape: a missing focus,
+    a non-numeric bound, an inverted or zero-based span, a span reaching past
+    `ceiling` - and a `focus` that is not a mapping at all, which used to
+    raise `AttributeError` straight out of the prompt builder. An optional
+    enrichment field must never cost the student their hint; `models.FocusRange`
+    deliberately accepts a nonsensical span and leaves the judgement here.
+
+    `ceiling` is inclusive, and only bounds `end`: a `start` past the ceiling
+    is already rejected by whatever `end >= start` implies.
+    """
+    if not focus:
+        return None
+    try:
+        start = int(focus.get("start_line", 0))
+        end = int(focus.get("end_line", 0))
+    except (TypeError, ValueError, AttributeError):
+        return None
+    if start < 1 or end < start:
+        return None
+    if ceiling is not None and end > ceiling:
+        return None
+    label = " ".join(str(focus.get("label", "")).split())[:MAX_FOCUS_LABEL_CHARS]
+    return start, end, label
+
+
 def focus_instruction(focus: Optional[dict]) -> str:
     """Tell the model which lines to answer about.
 
     Returns "" for a missing or nonsensical focus, so an older extension — or
     a file where the block could not be resolved — behaves exactly as before.
     """
-    if not focus:
+    span = focus_span(focus)
+    if span is None:
         return ""
-    try:
-        start = int(focus.get("start_line", 0))
-        end = int(focus.get("end_line", 0))
-    except (TypeError, ValueError):
-        return ""
-    if start < 1 or end < start:
-        return ""
-    label = " ".join(str(focus.get("label", "")).split())[:MAX_FOCUS_LABEL_CHARS]
+    start, end, label = span
     where = f"lines {start}-{end}" if end > start else f"line {start}"
     named = f" ({label})" if label else ""
     return (
@@ -626,18 +658,14 @@ def focus_instruction(focus: Optional[dict]) -> str:
 
 
 def scan_target(focus: Optional[dict]) -> Optional[Tuple[int, int, str]]:
-    """The block a scan is scoped to, or None to review the whole file."""
-    if not focus:
-        return None
-    try:
-        start = int(focus.get("start_line", 0))
-        end = int(focus.get("end_line", 0))
-    except (TypeError, ValueError):
-        return None
-    if start < 1 or end < start:
-        return None
-    label = " ".join(str(focus.get("label", "")).split())[:MAX_FOCUS_LABEL_CHARS]
-    return start, end, label
+    """The block a scan is scoped to, or None to review the whole file.
+
+    No ceiling: `scan_code` bounds its flags by `min(target[1],
+    view.max_line)` at the point it uses them, which also keeps the prompt's
+    "Review lines X-Y" naming the block the student asked about rather than
+    the part of it that happened to fit in the digest.
+    """
+    return focus_span(focus)
 
 
 class HintingEngine:
@@ -857,20 +885,17 @@ class HintingEngine:
         # A resolved focus block is a better window than a fixed ±3, but it is
         # capped so a 200-line function does not become the whole prompt.
         start, end = line_number - 3, line_number + 3
-        if focus:
-            try:
-                f_start = int(focus.get("start_line", 0))
-                f_end = int(focus.get("end_line", 0))
-            except (TypeError, ValueError):
-                f_start, f_end = 0, 0
-            # f_end must be within what the view can actually vouch for - a
-            # focus reaching past the file (or the digest) is exactly as
-            # unusable as one with start > end, and must fall back to the
-            # tight default rather than silently widening into lines nobody
-            # sent.
-            if 0 < f_start <= line_number <= f_end <= view.max_line:
-                start = max(f_start, line_number - 30)
-                end = min(f_end, line_number + 30)
+        # The ceiling is what the view can actually vouch for: a focus reaching
+        # past the file (or the digest) is exactly as unusable as one with
+        # start > end, and must fall back to the tight default rather than
+        # silently widening into lines nobody sent.
+        span = focus_span(focus, ceiling=view.max_line)
+        # And the block has to be the one the cursor is in. A focus naming some
+        # other block says nothing about this line.
+        if span is not None and span[0] <= line_number <= span[1]:
+            f_start, f_end, _ = span
+            start = max(f_start, line_number - 30)
+            end = min(f_end, line_number + 30)
         # Absolute numbers throughout, and lines the view does not hold are
         # skipped rather than counted - the window may span a band boundary.
         window = "\n".join(

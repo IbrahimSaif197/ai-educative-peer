@@ -876,6 +876,64 @@ def test_focus_instruction_ignores_a_nonsense_span():
     assert focus_instruction({"start_line": 9, "end_line": 2}) == ""
 
 
+class TestFocusSpanIsTheOneReadingOfAFocus:
+    """`focus_instruction`, `scan_target` and `generate_line_hint` used to parse
+    `focus` separately, and disagreed about what a usable span was. That is
+    where this feature's recurring defect lived: the missing ceiling was fixed
+    once in `generate_line_hint`, then turned up again in `scan_code`'s clamp.
+    """
+
+    def test_it_returns_the_span_and_a_cleaned_label(self):
+        from hinting_engine import focus_span
+        assert focus_span({"start_line": 12, "end_line": 19, "label": "  a   b "}) == (
+            12,
+            19,
+            "a b",
+        )
+
+    def test_it_truncates_the_label_the_way_both_callers_did(self):
+        from hinting_engine import focus_span
+        from models import MAX_FOCUS_LABEL_CHARS
+        _, _, label = focus_span(
+            {"start_line": 1, "end_line": 2, "label": "z" * 500}
+        )
+        assert label == "z" * MAX_FOCUS_LABEL_CHARS
+
+    def test_it_rejects_the_spans_both_callers_rejected(self):
+        from hinting_engine import focus_span
+        assert focus_span(None) is None
+        assert focus_span({}) is None
+        assert focus_span({"start_line": 0, "end_line": 4}) is None
+        assert focus_span({"start_line": 9, "end_line": 2}) is None
+        assert focus_span({"start_line": "abc", "end_line": "def"}) is None
+        assert focus_span({"start_line": None, "end_line": None}) is None
+
+    def test_a_ceiling_rejects_a_span_reaching_past_it(self):
+        from hinting_engine import focus_span
+        assert focus_span({"start_line": 5, "end_line": 11}, ceiling=10) is None
+        assert focus_span({"start_line": 5, "end_line": 10}, ceiling=10) == (5, 10, "")
+
+    def test_no_ceiling_accepts_a_span_a_ceiling_would_reject(self):
+        # `focus_instruction` and `scan_target` pass none, deliberately: the
+        # scan clamps its flags where it uses them, and the instruction names
+        # the block the student asked about rather than the part that fit.
+        from hinting_engine import focus_span, scan_target
+        assert focus_span({"start_line": 5, "end_line": 900}) == (5, 900, "")
+        assert scan_target({"start_line": 5, "end_line": 900}) == (5, 900, "")
+
+    def test_a_focus_that_is_not_a_mapping_degrades_instead_of_raising(self):
+        # This used to raise AttributeError straight out of the prompt
+        # builder. An optional enrichment field must never cost the student
+        # their hint - `models.FocusRange` accepts a nonsensical span on
+        # exactly that reasoning and leaves the judgement here.
+        from hinting_engine import focus_span
+        for bad in ([1, 2], 42, "focus", (1, 2)):
+            assert focus_span(bad) is None
+        assert focus_instruction([1, 2]) == ""
+        from hinting_engine import scan_target
+        assert scan_target(42) is None
+
+
 class TestGenerateLineHintFocusWindow:
     """Which lines `generate_line_hint` actually shows the model, focus vs. default."""
 
