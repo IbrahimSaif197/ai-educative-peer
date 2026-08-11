@@ -4,6 +4,8 @@
  * The suites next to this one are organised by module; this one is organised
  * by defect, so each block states the wrong behaviour it pins shut.
  */
+import * as fs from "fs";
+import * as path from "path";
 import * as vscode from "vscode";
 import { AttemptTracker, normalizeCode } from "../attemptTracker";
 import { EduPeerSidebarProvider } from "../sidebarProvider";
@@ -462,5 +464,44 @@ describe("a spaced-review exercise can be answered", () => {
     await h.send({ type: "startReview" });
     await h.send({ type: "reviewAnswer", answer: "my answer" });
     expect(h.api.streamHint.mock.calls[0][0].mode).toBe("review-exercise");
+  });
+});
+
+// ------------------------------------------------- the file stays on the machine
+
+describe("no source file hands raw document text to the network", () => {
+  const SRC = path.join(__dirname, "..");
+  const SENDERS = ["sidebarProvider.ts", "inlineTutor.ts", "extension.ts"];
+
+  it("reaches apiClient only through buildDigest", () => {
+    // The whole point of codeDigest is that the student's file does not leave
+    // their machine. That is a property of the call sites, not of the module,
+    // so it is asserted here rather than trusted.
+    for (const name of SENDERS) {
+      const source = fs.readFileSync(path.join(SRC, name), "utf8");
+      const offenders = source
+        .split("\n")
+        .map((line, i) => [i + 1, line] as const)
+        .filter(([, line]) => /getText\(\)/.test(line))
+        .filter(([, line]) => !/buildDigest|panelFullCode|split\("\\n"\)|findBugMarkers/.test(line));
+      expect({ name, offenders }).toEqual({ name, offenders: [] });
+    }
+  });
+
+  it("keeps the panel's whole-file copy out of every request", () => {
+    // `panelFullCode` legitimately reaches the webview through `this.post` —
+    // that is the "Whole file" toggle, and the webview runs inside the
+    // editor, so nothing posted to it has left the machine. The property
+    // that matters is narrower than "the string never appears": it must
+    // never be handed to `this.api.*`, the only door to the network. (A
+    // literal `code:\s*this\.panelFullCode` search also matches that
+    // legitimate `post` call one-for-one and fails unconditionally — it is
+    // not what is checked here.)
+    const source = fs.readFileSync(path.join(SRC, "sidebarProvider.ts"), "utf8");
+    const reachesApi = source
+      .split("\n")
+      .filter((line) => line.includes("panelFullCode") && line.includes("this.api."));
+    expect(reachesApi).toEqual([]);
+    expect(source).toContain("digestFields(");
   });
 });

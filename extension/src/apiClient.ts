@@ -283,11 +283,16 @@ function timeoutSignal(ms: number): AbortSignal {
 }
 
 /**
- * The three fields every code-carrying request shares.
+ * The three fields `scanCode` and `getLineHint` build their payload from.
  *
- * One function so there is one place the digest becomes a payload — the
+ * One function so there is one place a digest becomes those fields — but it
+ * is not the only door to the network. `getTrace` takes `code` as a plain
+ * string and never runs it through here, and `getHint`/`streamHint` just
+ * forward whatever `code` the caller already put on the request. So the
  * property that makes "the file never leaves the machine" checkable rather
- * than merely intended. `auditRegressions` asserts nothing else does it.
+ * than merely intended lives in the callers, not in this function —
+ * `auditRegressions` reads `sidebarProvider.ts`, `inlineTutor.ts` and
+ * `extension.ts` directly rather than trusting that they used this.
  */
 export function digestFields(digest: CodeDigest): {
   code: string;
