@@ -178,6 +178,10 @@ export class InlineTutor {
       vscode.window.onDidChangeTextEditorSelection((e) => {
         if (!this.isSupported(e.textEditor.document)) return;
         this.scheduleLineHint(e.textEditor);
+        // Resting the cursor in a block is working on it. The fingerprint in
+        // `runScan` is per block, so a student scrolling through a file pays
+        // once per block rather than once per pause.
+        this.scheduleScan(e.textEditor.document);
         this.renderActiveLineDecoration(e.textEditor);
       })
     );
@@ -200,7 +204,6 @@ export class InlineTutor {
     this.disposables.push(
       vscode.window.onDidChangeActiveTextEditor((editor) => {
         if (editor && this.isSupported(editor.document)) {
-          this.scheduleScan(editor.document);
           this.renderActiveLineDecoration(editor);
         }
       })
@@ -286,8 +289,8 @@ export class InlineTutor {
       vscode.workspace.onDidCloseTextDocument((doc) => {
         const prefix = doc.uri.toString();
         this.stores.delete(prefix);
-        // The other three are keyed per block now (`${uri}#${label}`), so a
-        // bare-URI delete would leave every block's entry behind.
+        // The other three are keyed per block now (`${uri}#${focus.breadcrumb}`),
+        // so a bare-URI delete would leave every block's entry behind.
         for (const map of [
           this.scanFingerprints,
           this.inFlightFingerprints,
@@ -301,9 +304,11 @@ export class InlineTutor {
       })
     );
 
+    // Opening a file is not working on it. Nothing runs until the student
+    // lands somewhere — see the trigger table in the 2026-08-11 spec.
     const editor = vscode.window.activeTextEditor;
     if (editor && this.isSupported(editor.document)) {
-      this.scheduleScan(editor.document);
+      this.renderActiveLineDecoration(editor);
     }
   }
 

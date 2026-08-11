@@ -77,10 +77,25 @@ const hoverProvider = () => mock.__state.hoverProviders[0].provider;
 const actionProvider = () => mock.__state.codeActionProviders[0].provider;
 const diagnostics = () => mock.__state.diagnosticCollections[0];
 
-/** Let the 3500 ms scan timer fire and its promise settle. */
-async function runScheduledScan() {
-  jest.advanceTimersByTime(4000);
+/**
+ * Let the 3500 ms scan timer fire and its promise settle. `ms` defaults to
+ * a window comfortably past that debounce; pass a larger one to prove
+ * nothing fires even much later (e.g. "opening a file costs nothing").
+ */
+async function runScheduledScan(ms = 4000) {
+  jest.advanceTimersByTime(ms);
   for (let i = 0; i < 12; i++) await Promise.resolve();
+}
+
+/**
+ * Simulate the cursor coming to rest on `editor`'s current selection — the
+ * trigger a block scan now goes through (opening a file and switching tabs
+ * no longer schedule one). Tests below that need a scan in place before
+ * asserting on its results fire this first, the same way they already fire
+ * `edupeer.scanFile` when they need a *forced* one.
+ */
+function restCursor(editor: any) {
+  mock.__state.listeners.selection.forEach((fn: any) => fn({ textEditor: editor }));
 }
 
 describe("activation", () => {
@@ -157,7 +172,8 @@ describe("provideCodeLenses", () => {
   it("shows a scan flag as its own lens", async () => {
     jest.useFakeTimers();
     const api = makeApi({ scanCode: jest.fn(async () => ({ flags: [flag()] })) });
-    const { doc } = activate(api);
+    const { doc, editor } = activate(api);
+    restCursor(editor);
     await runScheduledScan();
     const lenses = lensProvider().provideCodeLenses(doc);
     const titles = lenses.map((l: any) => l.command.title);
@@ -170,7 +186,8 @@ describe("provideCodeLenses", () => {
     const api = makeApi({
       scanCode: jest.fn(async () => ({ flags: [flag({ kind: "style", severity: "info" })] })),
     });
-    const { doc } = activate(api);
+    const { doc, editor } = activate(api);
+    restCursor(editor);
     await runScheduledScan();
     const titles = lensProvider().provideCodeLenses(doc).map((l: any) => l.command.title);
     expect(titles.some((t: string) => t.startsWith("🎨"))).toBe(true);
@@ -183,7 +200,8 @@ describe("provideCodeLenses", () => {
       // Line 1 is the `def`, which would also match the definition regex.
       scanCode: jest.fn(async () => ({ flags: [flag({ line: 1, end_line: 1 })] })),
     });
-    const { doc } = activate(api);
+    const { doc, editor } = activate(api);
+    restCursor(editor);
     await runScheduledScan();
     const lines = lensProvider().provideCodeLenses(doc).map((l: any) => l.range.start.line);
     expect(new Set(lines).size).toBe(lines.length);
@@ -195,7 +213,8 @@ describe("provideCodeLenses", () => {
     const api = makeApi({
       scanCode: jest.fn(async () => ({ flags: [flag({ line: 999, end_line: 999 })] })),
     });
-    const { doc } = activate(api);
+    const { doc, editor } = activate(api);
+    restCursor(editor);
     await runScheduledScan();
     const lines = lensProvider().provideCodeLenses(doc).map((l: any) => l.range.start.line);
     expect(Math.max(...lines)).toBeLessThan(doc.lineCount);
@@ -217,7 +236,8 @@ describe("provideCodeActions", () => {
   it("offers a third action on a flagged line", async () => {
     jest.useFakeTimers();
     const api = makeApi({ scanCode: jest.fn(async () => ({ flags: [flag()] })) });
-    const { doc } = activate(api);
+    const { doc, editor } = activate(api);
+    restCursor(editor);
     await runScheduledScan();
     const actions = actionProvider().provideCodeActions(doc, new vscode.Range(2, 0, 2, 0));
     expect(actions).toHaveLength(3);
@@ -228,7 +248,8 @@ describe("provideCodeActions", () => {
   it("passes the flag range and question to discussLines", async () => {
     jest.useFakeTimers();
     const api = makeApi({ scanCode: jest.fn(async () => ({ flags: [flag()] })) });
-    const { doc } = activate(api);
+    const { doc, editor } = activate(api);
+    restCursor(editor);
     await runScheduledScan();
     const actions = actionProvider().provideCodeActions(doc, new vscode.Range(2, 0, 2, 0));
     const args = actions[2].command.arguments;
@@ -264,7 +285,8 @@ describe("provideHover", () => {
   it("shows the flag question and its concept", async () => {
     jest.useFakeTimers();
     const api = makeApi({ scanCode: jest.fn(async () => ({ flags: [flag()] })) });
-    const { doc } = activate(api);
+    const { doc, editor } = activate(api);
+    restCursor(editor);
     await runScheduledScan();
     const hover = hoverProvider().provideHover(doc, new vscode.Position(2, 0));
     expect(hover.contents.value).toContain("What is the last index this reaches?");
@@ -275,7 +297,8 @@ describe("provideHover", () => {
   it("allow-lists only EduPeer's own two commands", async () => {
     jest.useFakeTimers();
     const api = makeApi({ scanCode: jest.fn(async () => ({ flags: [flag()] })) });
-    const { doc } = activate(api);
+    const { doc, editor } = activate(api);
+    restCursor(editor);
     await runScheduledScan();
     const hover = hoverProvider().provideHover(doc, new vscode.Position(2, 0));
     expect(hover.contents.isTrusted).toEqual({
@@ -287,7 +310,8 @@ describe("provideHover", () => {
   it("never blanket-trusts the markdown", async () => {
     jest.useFakeTimers();
     const api = makeApi({ scanCode: jest.fn(async () => ({ flags: [flag()] })) });
-    const { doc } = activate(api);
+    const { doc, editor } = activate(api);
+    restCursor(editor);
     await runScheduledScan();
     const hover = hoverProvider().provideHover(doc, new vscode.Position(2, 0));
     expect(hover.contents.isTrusted).not.toBe(true);
@@ -309,7 +333,8 @@ describe("scanning and diagnostics", () => {
 
   it("publishes one diagnostic per flag", async () => {
     const api = makeApi({ scanCode: jest.fn(async () => ({ flags: [flag(), flag({ line: 4 })] })) });
-    const { doc } = activate(api);
+    const { doc, editor } = activate(api);
+    restCursor(editor);
     await runScheduledScan();
     expect(diagnostics().get(doc.uri)).toHaveLength(2);
   });
@@ -320,7 +345,8 @@ describe("scanning and diagnostics", () => {
         flags: [flag({ severity: "warning" }), flag({ line: 4, severity: "info" })],
       })),
     });
-    const { doc } = activate(api);
+    const { doc, editor } = activate(api);
+    restCursor(editor);
     await runScheduledScan();
     const diags = diagnostics().get(doc.uri);
     expect(diags[0].severity).toBe(vscode.DiagnosticSeverity.Warning);
@@ -329,7 +355,8 @@ describe("scanning and diagnostics", () => {
 
   it("labels the diagnostic source and carries the concept as its code", async () => {
     const api = makeApi({ scanCode: jest.fn(async () => ({ flags: [flag()] })) });
-    const { doc } = activate(api);
+    const { doc, editor } = activate(api);
+    restCursor(editor);
     await runScheduledScan();
     const diag = diagnostics().get(doc.uri)[0];
     expect(diag.source).toBe("EduPeer");
@@ -338,7 +365,10 @@ describe("scanning and diagnostics", () => {
 
   it("does not rescan unchanged code", async () => {
     const api = makeApi({ scanCode: jest.fn(async () => ({ flags: [] })) });
-    const { tutor, doc } = activate(api);
+    const { doc, editor } = activate(api);
+    // A real first scan has to land (and cache its fingerprint) before the
+    // no-op edit below can prove anything about *not* repeating it.
+    restCursor(editor);
     await runScheduledScan();
     mock.__state.listeners.textDocument.forEach((fn: any) =>
       fn({ document: doc, contentChanges: [] })
@@ -349,7 +379,8 @@ describe("scanning and diagnostics", () => {
 
   it("rescans when the command forces it", async () => {
     const api = makeApi({ scanCode: jest.fn(async () => ({ flags: [] })) });
-    activate(api);
+    const { editor } = activate(api);
+    restCursor(editor);
     await runScheduledScan();
     await mock.__runCommand("edupeer.scanFile");
     expect(api.scanCode).toHaveBeenCalledTimes(2);
@@ -358,22 +389,31 @@ describe("scanning and diagnostics", () => {
   it("skips the automatic scan when autoScan is off", async () => {
     mock.__state.configuration.autoScan = false;
     const api = makeApi();
-    activate(api);
+    const { editor } = activate(api);
+    // Without a trigger that would otherwise schedule a scan, "nothing
+    // happened" would be true whether or not this setting works at all.
+    restCursor(editor);
     await runScheduledScan();
     expect(api.scanCode).not.toHaveBeenCalled();
   });
 
   it("survives a scan failure without throwing", async () => {
     const api = makeApi({ scanCode: jest.fn(async () => { throw new Error("boom"); }) });
-    activate(api);
+    const { editor } = activate(api);
+    restCursor(editor);
     await expect(runScheduledScan()).resolves.toBeUndefined();
+    // The rejection this test guards against would otherwise show up as an
+    // unhandled promise rejection, not a failed assertion — so pin that the
+    // scan this failure came from actually ran.
+    expect(api.scanCode).toHaveBeenCalled();
   });
 
   it("goes quiet for the Retry-After window after a 429", async () => {
     const api = makeApi({
       scanCode: jest.fn(async () => { throw new RateLimitError(60); }),
     });
-    const { doc } = activate(api);
+    const { doc, editor } = activate(api);
+    restCursor(editor);
     await runScheduledScan();
     expect(api.scanCode).toHaveBeenCalledTimes(1);
     // A further edit inside the window must not schedule another scan.
@@ -387,11 +427,12 @@ describe("scanning and diagnostics", () => {
   it("tells the student when a flagged file becomes clean", async () => {
     let flags = [flag()];
     const api = makeApi({ scanCode: jest.fn(async () => ({ flags })) });
-    activate(api);
+    const { editor } = activate(api);
+    restCursor(editor);
     await runScheduledScan();
     flags = [];
     // The fingerprint is unchanged in this fixture, so force the rescan the
-    // way `EduPeer: Scan File for Issues` does.
+    // way `EduPeer: Scan This Block` does.
     await mock.__runCommand("edupeer.scanFile");
     expect(vscode.window.showInformationMessage).toHaveBeenCalledWith(
       expect.stringContaining("scans clean now"),
@@ -402,7 +443,8 @@ describe("scanning and diagnostics", () => {
 
   it("does not offer a quiz for a file that was never flagged", async () => {
     const api = makeApi({ scanCode: jest.fn(async () => ({ flags: [] })) });
-    activate(api);
+    const { editor } = activate(api);
+    restCursor(editor);
     await runScheduledScan();
     expect(vscode.window.showInformationMessage).not.toHaveBeenCalled();
   });
@@ -1271,13 +1313,13 @@ describe("the inline surface works on one block", () => {
 
   /**
    * Trigger the same (unforced) scan path a resting cursor does, and let it
-   * settle. Re-fires the active-editor hook rather than `edupeer.scanFile`,
-   * which always forces — forcing would bypass the very fingerprint de-dupe
-   * these tests are checking.
+   * settle. Re-fires the selection hook — the trigger a resting cursor now
+   * goes through — rather than `edupeer.scanFile`, which always forces and
+   * would bypass the very fingerprint de-dupe these tests are checking.
    */
   async function runScanNow() {
     const editor = mock.window.activeTextEditor;
-    mock.__state.listeners.activeEditor.forEach((fn: any) => fn(editor));
+    mock.__state.listeners.selection.forEach((fn: any) => fn({ textEditor: editor }));
     await runScheduledScan();
   }
 
@@ -1410,5 +1452,121 @@ describe("the inline surface works on one block", () => {
     // reference and treated the new editor as "some other visible editor").
     expect(originalEditor.setDecorations.mock.calls.length).toBe(originalCallsBeforeSwitch);
     expect(otherEditor.setDecorations).not.toHaveBeenCalled();
+  });
+});
+
+describe("the tutor waits until the student is working on something", () => {
+  let api: any;
+
+  beforeEach(() => {
+    mock.__reset();
+    jest.useFakeTimers();
+    api = makeApi();
+  });
+
+  afterEach(() => {
+    jest.useRealTimers();
+  });
+
+  /** Open a document as the active editor and stand up an activated tutor for it. */
+  function openDocument(text: string, languageId = "python") {
+    const doc = mock.__makeDocument(text, languageId);
+    const editor = mock.__makeEditor(doc, 0, 0);
+    mock.window.activeTextEditor = editor;
+    mock.window.visibleTextEditors = [editor];
+    const newTutor = new InlineTutor({ subscriptions: [] } as any, api);
+    newTutor.activate();
+    live.push(newTutor);
+    return doc;
+  }
+
+  /** Move the active editor's cursor to `line` (0-based), an empty selection. */
+  function placeCursorOn(doc: any, line: number) {
+    const editor = mock.window.activeTextEditor;
+    const pos = new vscode.Position(line, 0);
+    editor.selection = new vscode.Selection(pos, pos);
+  }
+
+  it("scans nothing when the extension activates", async () => {
+    openDocument(LONG_PYTHON_FILE, "python");
+    await runScheduledScan();
+    expect(api.scanCode).not.toHaveBeenCalled();
+  });
+
+  it("scans nothing when the student switches tabs", async () => {
+    const doc = openDocument(LONG_PYTHON_FILE, "python");
+    // Let anything activation itself scheduled settle first, so the
+    // assertion below is about the tab-switch listener in isolation.
+    await runScheduledScan();
+    api.scanCode.mockClear();
+
+    // Move to a block that has never been scanned. Re-checking the same,
+    // already-cached block would pass regardless of whether the tab-switch
+    // listener schedules anything, because `runScan`'s fingerprint guard
+    // would suppress the redundant request either way — this has to be a
+    // block whose absence of a request is actually informative.
+    placeCursorOn(doc, 199);
+    const editor = mock.window.activeTextEditor;
+    mock.__state.listeners.activeEditor.forEach((fn: any) => fn(editor));
+    await runScheduledScan();
+
+    expect(api.scanCode).not.toHaveBeenCalled();
+  });
+
+  it("scans the block the cursor comes to rest in", async () => {
+    const doc = openDocument(LONG_PYTHON_FILE, "python");
+    await runScheduledScan();
+    api.scanCode.mockClear();
+
+    placeCursorOn(doc, 199);
+    const editor = mock.window.activeTextEditor;
+    mock.__state.listeners.selection.forEach((fn: any) => fn({ textEditor: editor }));
+    await runScheduledScan();
+
+    expect(api.scanCode).toHaveBeenCalledTimes(1);
+  });
+
+  it("scans the block an edit lands in", async () => {
+    const doc = openDocument(LONG_PYTHON_FILE, "python");
+    await runScheduledScan();
+    api.scanCode.mockClear();
+
+    placeCursorOn(doc, 199);
+    mock.__state.listeners.textDocument.forEach((fn: any) =>
+      fn({ document: doc, contentChanges: [] })
+    );
+    await runScheduledScan();
+
+    expect(api.scanCode).toHaveBeenCalledTimes(1);
+  });
+
+  it("opening a file and reading it costs nothing", async () => {
+    openDocument(LONG_PYTHON_FILE, "python");
+    await runScheduledScan(10000);
+    expect(api.scanCode).not.toHaveBeenCalled();
+    expect(api.getLineHint).not.toHaveBeenCalled();
+  });
+
+  it("collapses a fast scroll through many blocks into one scan, not one per stop", async () => {
+    // A student scrolling fast rests the cursor briefly on several blocks in
+    // a row, each stop well inside the 3500 ms scan debounce. `scheduleScan`
+    // holds one timer per tutor instance and cancels-and-reschedules on every
+    // call, so each rest replaces the previous stop's pending scan rather
+    // than queuing one alongside it.
+    const doc = openDocument(LONG_PYTHON_FILE, "python");
+    await runScheduledScan();
+    api.scanCode.mockClear();
+
+    const editor = mock.window.activeTextEditor;
+    for (const line of [20, 60, 100, 140, 199]) {
+      placeCursorOn(doc, line);
+      mock.__state.listeners.selection.forEach((fn: any) => fn({ textEditor: editor }));
+      // Advanced by less than the 3500 ms debounce, so nothing fires yet —
+      // the same rapid-fire shape a held-down arrow key produces too.
+      jest.advanceTimersByTime(500);
+    }
+    await runScheduledScan();
+
+    expect(api.scanCode).toHaveBeenCalledTimes(1);
   });
 });

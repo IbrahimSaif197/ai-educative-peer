@@ -75,7 +75,7 @@
       },
       {
         "command": "edupeer.scanFile",
-        "title": "EduPeer: Scan File for Issues"
+        "title": "EduPeer: Scan This Block"
       },
       {
         "command": "edupeer.reflectQuiz",
