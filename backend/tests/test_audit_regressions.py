@@ -255,7 +255,7 @@ class TestLineNumberCachesUseAnExactHash:
         calls = []
         monkeypatch.setattr(
             app_main.engine, "scan_code",
-            lambda code, language: calls.append(code) or [
+            lambda code, language, focus=None, view=None: calls.append(code) or [
                 {"line": 1, "end_line": 1, "question": "q", "concept": "general",
                  "severity": "info", "kind": "bug"}
             ],
@@ -268,7 +268,8 @@ class TestLineNumberCachesUseAnExactHash:
         import main as app_main
         calls = []
         monkeypatch.setattr(
-            app_main.engine, "scan_code", lambda code, language: calls.append(code) or []
+            app_main.engine, "scan_code",
+            lambda code, language, focus=None, view=None: calls.append(code) or [],
         )
         client.post("/scan", json={"code": "x = 1", "language": "python"})
         client.post("/scan", json={"code": "x = 1", "language": "python"})
@@ -279,7 +280,7 @@ class TestLineNumberCachesUseAnExactHash:
         calls = []
         monkeypatch.setattr(
             app_main.engine, "generate_line_hint",
-            lambda code, line, language, focus=None: calls.append(code) or ("h", "general"),
+            lambda code, line, language, focus=None, view=None: calls.append(code) or ("h", "general"),
         )
         client.post("/line-hint", json={"code": "x = 1", "line": 1, "language": "python"})
         client.post("/line-hint", json={"code": "\nx = 1", "line": 1, "language": "python"})

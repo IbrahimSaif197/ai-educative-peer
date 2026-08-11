@@ -234,7 +234,8 @@ class TestHintStream:
         app_main._profile_cache.clear()
 
         def fake_stream(
-            code, question, level, language, history, mode, pacing, edit_summary="", focus=None,
+            code, question, level, language, history, mode, pacing, edit_summary="",
+            focus=None, view=None,
         ):
             yield {"type": "delta", "text": "Look at "}
             yield {"type": "delta", "text": "your loop."}
@@ -838,7 +839,7 @@ class TestResponseCaching:
         import main as app_main
         calls = []
 
-        def fake_scan(code, language):
+        def fake_scan(code, language, focus=None, view=None):
             calls.append(code)
             return [{"line": 1, "end_line": 1, "question": "Why?", "concept": "loops",
                      "severity": "info", "kind": "bug"}]
@@ -854,7 +855,8 @@ class TestResponseCaching:
         import main as app_main
         calls = []
         monkeypatch.setattr(
-            app_main.engine, "scan_code", lambda code, language: calls.append(code) or []
+            app_main.engine, "scan_code",
+            lambda code, language, focus=None, view=None: calls.append(code) or [],
         )
         client.post("/scan", json={"code": "x = 1\n", "language": "python"})
         client.post("/scan", json={"code": "x = 2\n", "language": "python"})
@@ -864,7 +866,8 @@ class TestResponseCaching:
         import main as app_main
         calls = []
         monkeypatch.setattr(
-            app_main.engine, "scan_code", lambda code, language: calls.append(language) or []
+            app_main.engine, "scan_code",
+            lambda code, language, focus=None, view=None: calls.append(language) or [],
         )
         client.post("/scan", json={"code": "x = 1\n", "language": "python"})
         client.post("/scan", json={"code": "x = 1\n", "language": "javascript"})
@@ -874,7 +877,7 @@ class TestResponseCaching:
         import main as app_main
         calls = []
 
-        def fake_line_hint(code, line, language, focus=None):
+        def fake_line_hint(code, line, language, focus=None, view=None):
             calls.append(line)
             return "Check the index", "indexing"
 
@@ -890,7 +893,8 @@ class TestResponseCaching:
         import auth
         calls = []
         monkeypatch.setattr(
-            app_main.engine, "scan_code", lambda code, language: calls.append(code) or []
+            app_main.engine, "scan_code",
+            lambda code, language, focus=None, view=None: calls.append(code) or [],
         )
         body = {"code": "x = 1\n", "language": "python"}
         client.post("/scan", json=body)
@@ -921,7 +925,10 @@ class TestRateLimiting:
     def test_inline_budget_is_separate_from_hint_budget(self, client, monkeypatch):
         import main as app_main
         app_main.limiters.clear()
-        monkeypatch.setattr(app_main.engine, "scan_code", lambda code, language: [])
+        monkeypatch.setattr(
+            app_main.engine, "scan_code",
+            lambda code, language, focus=None, view=None: [],
+        )
         for _ in range(30):
             client.post("/hint", json=VALID_HINT_PAYLOAD)
         # /hint is now exhausted; /scan must still work.
@@ -989,3 +996,118 @@ class TestAnswerModeEndpoint:
         client.post("/hint", json=VALID_HINT_PAYLOAD)  # level 1
         client.post("/hint", json={**VALID_HINT_PAYLOAD, "mode": "answer"})
         assert client.post("/hint", json=VALID_HINT_PAYLOAD).json()["hint_level"] == 2
+
+
+# ---------------------------------------------------------------------------
+# bands and view: the endpoints build the CodeView and hand it to the engine
+# ---------------------------------------------------------------------------
+
+class TestTheEndpointsHandDownTheDigest:
+    """Bands are parsed once, at the boundary, and everything below asks it."""
+
+    DIGEST = {
+        "code": "import math\ndef deep(n):\n    return n - 1",
+        "bands": [{"start": 1, "end": 1}, {"start": 173, "end": 174}],
+        "total_lines": 241,
+    }
+
+    def test_scan_passes_the_focus_and_the_view_to_the_engine(self, client, monkeypatch):
+        seen = {}
+
+        def fake_scan(code, language="python", focus=None, view=None):
+            seen["focus"] = focus
+            seen["numbered"] = view.numbered() if view else None
+            return []
+
+        monkeypatch.setattr("main.engine.scan_code", fake_scan)
+        res = client.post(
+            "/scan",
+            json={**self.DIGEST, "focus": {"start_line": 173, "end_line": 174, "label": "deep"}},
+        )
+        assert res.status_code == 200
+        assert seen["focus"]["label"] == "deep"
+        assert "173: def deep(n):" in seen["numbered"]
+
+    def test_line_hint_passes_the_view(self, client, monkeypatch):
+        seen = {}
+
+        def fake_hint(code, line_number, language="python", focus=None, view=None):
+            seen["line"] = line_number
+            seen["holds"] = view.contains(line_number) if view else None
+            return "ok", "loops"
+
+        monkeypatch.setattr("main.engine.generate_line_hint", fake_hint)
+        res = client.post("/line-hint", json={**self.DIGEST, "line": 174})
+        assert res.status_code == 200
+        assert seen["line"] == 174 and seen["holds"] is True
+
+    def test_two_band_sets_over_identical_text_do_not_share_a_cache_entry(
+        self, client, monkeypatch
+    ):
+        # Same digest text, different lines. Serving one against the other
+        # puts a flag on the wrong function.
+        calls = []
+
+        def fake_scan(code, language="python", focus=None, view=None):
+            calls.append(view.max_line if view else 0)
+            return []
+
+        monkeypatch.setattr("main.engine.scan_code", fake_scan)
+        body = {"code": "a = 1\nb = 2", "total_lines": 90}
+        client.post("/scan", json={**body, "bands": [{"start": 1, "end": 2}]})
+        client.post("/scan", json={**body, "bands": [{"start": 40, "end": 41}]})
+        assert calls == [2, 41]
+
+    def test_a_request_with_no_bands_still_works(self, client, monkeypatch):
+        seen = {}
+
+        def fake_scan(code, language="python", focus=None, view=None):
+            seen["view"] = view
+            return []
+
+        monkeypatch.setattr("main.engine.scan_code", fake_scan)
+        assert client.post("/scan", json={"code": "x = 1"}).status_code == 200
+        assert seen["view"] is None
+
+    def test_hint_uses_the_view_for_numbering_and_the_focus_for_the_instruction(
+        self, client, _patch_groq_client
+    ):
+        """`focus_instruction` runs independently of `view`: a request that
+        carries both must number the code from the digest's absolute bands
+        AND still tell the model which lines the student is working on -
+        nothing exercised that combination before this task wired `view`
+        into /hint."""
+        payload = {
+            **self.DIGEST,
+            "question": "Why is deep wrong?",
+            "focus": {"start_line": 173, "end_line": 174, "label": "deep"},
+        }
+        res = client.post("/hint", json=payload)
+        assert res.status_code == 200
+        sent = _patch_groq_client.last_messages[-1]["content"]
+        assert "173: def deep(n):" in sent
+        assert "The student is working on lines 173-174 (deep)" in sent
+
+    def test_stream_passes_the_view_and_the_focus_to_the_engine(self, client, monkeypatch):
+        """The wiring from /stream to `stream_hint` is its own call site,
+        separate from /hint - confirm `view` actually arrives there too."""
+        import main as app_main
+        app_main._profile_cache.clear()
+        seen = {}
+
+        def fake_stream(code, question, level, language, history, mode, pacing,
+                         edit_summary="", focus=None, view=None):
+            seen["focus"] = focus
+            seen["numbered"] = view.numbered() if view else None
+            yield {"type": "done", "hint": "h", "concept_tags": []}
+
+        monkeypatch.setattr(app_main.engine, "stream_hint", fake_stream)
+        payload = {
+            **self.DIGEST,
+            "question": "Why is deep wrong?",
+            "focus": {"start_line": 173, "end_line": 174, "label": "deep"},
+        }
+        res = client.post("/hint/stream", json=payload)
+        assert res.status_code == 200
+        assert seen["focus"]["label"] == "deep"
+        assert "173: def deep(n):" in seen["numbered"]
