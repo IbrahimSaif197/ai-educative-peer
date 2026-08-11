@@ -130,3 +130,61 @@ def test_hint_request_focus_defaults_to_none():
 def test_line_hint_request_carries_a_focus():
     req = LineHintRequest(code="x = 1", line=1, focus=FocusRange(start_line=1, end_line=1))
     assert req.focus.start_line == 1
+
+
+class TestCodeBandsRideAlongsideTheDigest:
+    """`code` stopped being the whole file, so it needs its coordinates.
+
+    The extension sends a handful of line ranges lifted out of the student's
+    file. `bands` says which absolute lines they were, because the tutor
+    cites real editor line numbers and a digest numbered from 1 would send
+    the student to code that has nothing to do with the hint.
+    """
+
+    def test_a_band_is_one_based(self):
+        from models import CodeBand
+        import pytest
+        from pydantic import ValidationError
+        with pytest.raises(ValidationError):
+            CodeBand(start=0, end=4)
+
+    def test_the_three_numbering_requests_accept_bands(self):
+        from models import HintRequest, LineHintRequest, ScanRequest
+        payload = {"bands": [{"start": 1, "end": 2}, {"start": 40, "end": 55}],
+                   "total_lines": 241}
+        assert HintRequest(question="help", **payload).bands[1].end == 55
+        assert LineHintRequest(line=41, **payload).total_lines == 241
+        assert ScanRequest(**payload).bands[0].start == 1
+
+    def test_bands_default_to_none_so_an_old_client_is_unchanged(self):
+        from models import HintRequest, LineHintRequest, ScanRequest
+        assert HintRequest(question="help").bands is None
+        assert LineHintRequest(line=1).bands is None
+        assert ScanRequest().bands is None
+        assert ScanRequest().total_lines is None
+
+    def test_a_scan_can_name_the_block_it_is_reviewing(self):
+        from models import ScanRequest
+        req = ScanRequest(focus={"start_line": 40, "end_line": 55, "label": "parse"})
+        assert req.focus.label == "parse"
+
+    def test_a_scan_without_a_focus_is_still_valid(self):
+        from models import ScanRequest
+        assert ScanRequest(code="x = 1").focus is None
+
+    def test_the_band_list_is_bounded(self):
+        # An unbounded list is a free multiplier on request size; every other
+        # free-form field in this module is capped for the same reason.
+        import pytest
+        from pydantic import ValidationError
+        from models import MAX_CODE_BANDS, ScanRequest
+        too_many = [{"start": i, "end": i} for i in range(1, MAX_CODE_BANDS + 2)]
+        with pytest.raises(ValidationError):
+            ScanRequest(bands=too_many)
+
+    def test_total_lines_cannot_be_negative(self):
+        import pytest
+        from pydantic import ValidationError
+        from models import ScanRequest
+        with pytest.raises(ValidationError):
+            ScanRequest(total_lines=-1)
