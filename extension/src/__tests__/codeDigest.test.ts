@@ -254,3 +254,70 @@ describe("buildDigest keeps the header across the languages the fix round touche
     expect(digest.code).toContain("const MaxRetries = 3");
   });
 });
+
+import { SCOPE_BAND_MAX_LINES, SIGNATURE_BAND_MAX_LINES } from "../codeDigest";
+
+const CLASSY = [
+  "import math",                        // 1
+  "",                                   // 2
+  "class Stats:",                       // 3
+  "    def __init__(self, xs):",        // 4
+  "        self.xs = xs",               // 5
+  "",                                   // 6
+  "    def mean(self):",                // 7
+  "        return sum(self.xs)",        // 8
+  "",                                   // 9
+  "def validate(payload):",             // 10
+  "    return bool(payload)",           // 11
+  "",                                   // 12
+  "",                                   // 13
+  "",                                   // 14
+  "def report(xs):",                    // 15
+  "    return Stats(xs).mean()",        // 16
+];
+
+describe("buildDigest names what the block can call", () => {
+  it("sends one line per definition without their bodies", () => {
+    // report sits three blank lines below validate - past FOCUS_MARGIN_LINES
+    // (3), so validate's signature can only reach the digest via the
+    // signature band, not via margin bleed off the focus block. That is the
+    // point of this test: without it, validate's whole body would ride in
+    // for free and the "without their bodies" assertion would pass for the
+    // wrong reason.
+    const digest = buildDigest(CLASSY, "python", { start: 14, end: 15 });
+    expect(digest.code).toContain("def validate(payload):");
+    expect(digest.code).not.toContain("    return bool(payload)");
+  });
+
+  it("sends the class header a method sits under", () => {
+    // focus is `def mean`, lines 7-8 (0-based 6-7).
+    const digest = buildDigest(CLASSY, "python", { start: 6, end: 7 });
+    expect(digest.code).toContain("class Stats:");
+  });
+
+  it("caps the scope chain at three headers", () => {
+    expect(SCOPE_BAND_MAX_LINES).toBe(3);
+  });
+
+  it("caps signatures at twenty, keeping the ones nearest the block", () => {
+    const many = [
+      ...Array.from({ length: 60 }, (_, i) => [`def f_${i}():`, `    return ${i}`]).flat(),
+      // lines 121-122
+      "def target():",
+      "    return 0",
+    ];
+    const digest = buildDigest(many, "python", { start: 120, end: 121 });
+    const signatures = digest.code
+      .split("\n")
+      .filter((l) => l.startsWith("def f_"));
+    expect(signatures).toHaveLength(SIGNATURE_BAND_MAX_LINES);
+    // Nearest first: f_59 is adjacent to the block, f_0 is 120 lines away.
+    expect(digest.code).toContain("def f_59():");
+    expect(digest.code).not.toContain("def f_0():");
+  });
+
+  it("still holds the band invariant with every band in play", () => {
+    const digest = buildDigest(CLASSY, "python", { start: 6, end: 7 });
+    expect(digest.code.split("\n")).toHaveLength(bandLineCount(digest.bands));
+  });
+});

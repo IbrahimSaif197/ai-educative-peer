@@ -27,6 +27,12 @@ export const FOCUS_MARGIN_LINES = 3;
 /** Header lines kept, at most. Past this it is not a header, it is the file. */
 export const HEADER_BAND_MAX_LINES = 30;
 
+/** Definition lines kept, at most, nearest the block first. */
+export const SIGNATURE_BAND_MAX_LINES = 20;
+
+/** Enclosing headers kept: the class, its class, and one more. */
+export const SCOPE_BAND_MAX_LINES = 3;
+
 /** 1-based, absolute, inclusive — the coordinates the backend numbers in. */
 export interface CodeBand {
   start: number;
@@ -130,6 +136,68 @@ function headerEnd(lines: string[], languageId: string): number {
   return last;
 }
 
+/** Leading whitespace width, tabs counted as four columns. Mirrors blockHeuristics. */
+function indentOf(line: string): number {
+  const expanded = line.replace(/\t/g, "    ");
+  return expanded.length - expanded.trimStart().length;
+}
+
+/**
+ * The headers of the blocks the focus sits inside, outermost last.
+ *
+ * Walked by decreasing indentation rather than by parsing: a line above the
+ * block, matching the language's definition pattern, and indented less than
+ * anything already collected, is enclosing it. Good enough for a `class` in
+ * Python and an outer `class`/`impl` in the brace languages, which is what
+ * this band is for.
+ */
+function scopeHeaderLines(
+  lines: string[],
+  languageId: string,
+  focusStart: number
+): number[] {
+  const language = SUPPORTED_LANGUAGES[languageId];
+  if (!language) return [];
+  const found: number[] = [];
+  let minIndent = indentOf(lines[focusStart] ?? "");
+  for (let i = focusStart - 1; i >= 0 && found.length < SCOPE_BAND_MAX_LINES; i--) {
+    const text = lines[i];
+    if (!text.trim()) continue;
+    const indent = indentOf(text);
+    if (indent >= minIndent) continue;
+    minIndent = indent;
+    if (language.lensRegex.test(text)) found.push(i + 1); // 1-based
+    if (indent === 0) break;
+  }
+  return found;
+}
+
+/**
+ * Definition lines, nearest the block first.
+ *
+ * Indentation is not filtered on: a Java or C# method lives inside its class
+ * and would be missed by a top-level-only rule, and those are exactly the
+ * signatures worth having. The focus block's own header is skipped: its full
+ * body already ships in the focus band, so counting it here would spend one
+ * of the twenty slots on a line the digest sends anyway.
+ */
+function signatureLines(
+  lines: string[],
+  languageId: string,
+  focusStart: number
+): number[] {
+  const language = SUPPORTED_LANGUAGES[languageId];
+  if (!language) return [];
+  const all: number[] = [];
+  for (let i = 0; i < lines.length; i++) {
+    if (i === focusStart) continue;
+    if (language.lensRegex.test(lines[i])) all.push(i + 1);
+  }
+  return all
+    .sort((a, b) => Math.abs(a - focusStart - 1) - Math.abs(b - focusStart - 1))
+    .slice(0, SIGNATURE_BAND_MAX_LINES);
+}
+
 export function buildDigest(
   lines: string[],
   languageId: string,
@@ -139,7 +207,6 @@ export function buildDigest(
   if (totalLines === 0) return { code: "", bands: [], totalLines: 0 };
 
   const chosen = new Set<number>();
-  take(chosen, 1, headerEnd(lines, languageId), totalLines, MAX_DIGEST_LINES);
   // 0-based focus in, 1-based out.
   take(
     chosen,
@@ -148,6 +215,13 @@ export function buildDigest(
     totalLines,
     MAX_DIGEST_LINES
   );
+  take(chosen, 1, headerEnd(lines, languageId), totalLines, MAX_DIGEST_LINES);
+  for (const n of scopeHeaderLines(lines, languageId, focus.start)) {
+    take(chosen, n, n, totalLines, MAX_DIGEST_LINES);
+  }
+  for (const n of signatureLines(lines, languageId, focus.start)) {
+    take(chosen, n, n, totalLines, MAX_DIGEST_LINES);
+  }
 
   const bands = toBands(chosen);
   const code = bands
