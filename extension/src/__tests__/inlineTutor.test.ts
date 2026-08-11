@@ -556,6 +556,66 @@ describe("line hints", () => {
       expect.stringContaining("open a supported file first")
     );
   });
+
+  /**
+   * A single block longer than the 120-line digest budget: one `def` and 199
+   * body lines, which is also `MAX_FOCUS_LINES`, so the heuristic resolves the
+   * whole thing as one focus block. The digest fills its budget from the head
+   * of that block downward, so the tail is where a cursor gets lost.
+   */
+  const HUGE_BLOCK =
+    [
+      "def big(n):",
+      ...Array.from({ length: 199 }, (_, i) => `    body_${i + 1} = ${i + 1}`),
+    ].join("\n") + "\n";
+
+  it("sends the cursor's own line even when the block is longer than the digest", async () => {
+    // Without the anchor the digest stops at file line 119 and the backend has
+    // no line 191 to answer about: it returns an empty hint, and the lens
+    // renders that as "✓ Nothing to flag on this line" — the tutor reassuring
+    // the student about code it was never shown.
+    const api = makeApi({
+      getLineHint: jest.fn(async () => ({ hint: "h", concept: "general" })),
+    });
+    mock.__reset();
+    const doc = mock.__makeDocument(HUGE_BLOCK, "python", "/tmp/huge-block/demo.py");
+    const editor = mock.__makeEditor(doc, 190, 0);
+    mock.window.activeTextEditor = editor;
+    mock.window.visibleTextEditors = [editor];
+    const tutor = new InlineTutor({ subscriptions: [] } as any, api);
+    tutor.activate();
+    live.push(tutor);
+
+    await mock.__runCommand("edupeer.nudgeLine", doc.uri, 190);
+
+    const [digest, line, , focus] = api.getLineHint.mock.calls[0];
+    expect(line).toBe(191);
+    expect(focus).toEqual({ start_line: 1, end_line: 200, label: "big" });
+    expect(digest.code).toContain("body_190 = 190");
+    // Still one line per band, and still inside the budget.
+    expect(digest.bands[digest.bands.length - 1]).toEqual({ start: 191, end: 191 });
+  });
+
+  it("sends the cursor's own line to the scan too", async () => {
+    // A scan whose digest stops short still reports the block clean, which
+    // clears its flags and — on the flagged-to-clean edge — deletes the `bug:`
+    // markers inside it, all without having seen where the student is.
+    const api = makeApi();
+    mock.__reset();
+    mock.__state.configuration = { inlineHints: true, lensMode: "all", autoScan: false };
+    const doc = mock.__makeDocument(HUGE_BLOCK, "python", "/tmp/huge-block-scan/demo.py");
+    const editor = mock.__makeEditor(doc, 190, 0);
+    mock.window.activeTextEditor = editor;
+    mock.window.visibleTextEditors = [editor];
+    const tutor = new InlineTutor({ subscriptions: [] } as any, api);
+    tutor.activate();
+    live.push(tutor);
+
+    await mock.__runCommand("edupeer.scanFile");
+
+    const [digest] = api.scanCode.mock.calls[0];
+    expect(digest.code).toContain("body_190 = 190");
+  });
 });
 
 describe("lensTitle", () => {

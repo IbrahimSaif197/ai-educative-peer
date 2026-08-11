@@ -420,10 +420,18 @@ export class InlineTutor {
           : new vscode.Selection(at, at);
       const focus = await resolveFocus(doc, selection);
       const lines = stripBugMarkers(doc.getText(), doc.languageId).split("\n");
-      const digest = buildDigest(lines, doc.languageId, {
-        start: focus.startLine,
-        end: focus.endLine,
-      });
+      // `line` is the anchor: the digest is built around the *block*, but the
+      // question asked of it is about the *cursor*, and nothing else
+      // guarantees the two overlap. A block longer than the digest budget
+      // keeps its head, so a cursor in its tail would be asked about out of
+      // code that was never sent — and the empty answer that comes back is
+      // rendered as "✓ Nothing to flag on this line".
+      const digest = buildDigest(
+        lines,
+        doc.languageId,
+        { start: focus.startLine, end: focus.endLine },
+        line
+      );
       const res = await this.api.getLineHint(digest, line + 1, doc.languageId, {
         start_line: focus.startLine + 1,
         end_line: focus.endLine + 1,
@@ -544,10 +552,20 @@ export class InlineTutor {
     if (!editor || editor.document !== doc) return;
     const focus = await resolveFocus(doc, editor.selection);
     const lines = stripBugMarkers(doc.getText(), doc.languageId).split("\n");
-    const digest = buildDigest(lines, doc.languageId, {
-      start: focus.startLine,
-      end: focus.endLine,
-    });
+    // Anchored on the cursor for the same reason `fetchLineHint` is: in a
+    // block longer than the digest budget the tail is dropped, and a scan
+    // that never saw the line the student is on still reports the block
+    // clean — which clears its flags and, on the flagged-to-clean edge,
+    // deletes the `bug:` markers inside it. The cost is that in such a block
+    // the digest changes as the cursor moves, so `fp` changes and the scan
+    // re-runs; that is the honest reading, because a different part of the
+    // block is genuinely under review.
+    const digest = buildDigest(
+      lines,
+      doc.languageId,
+      { start: focus.startLine, end: focus.endLine },
+      editor.selection.active.line
+    );
     if (!digest.code.trim()) return;
 
     // Keyed by block, not by document: a file is not one thing to scan any

@@ -489,4 +489,42 @@ describe("buildDigest stays inside its budget", () => {
     expect(digest.code).toContain("line_216 = 216");
   });
 
+  it("drops the cursor's line when nothing anchors it", () => {
+    // The failure the anchor exists to stop, stated as behaviour: the focus
+    // band runs ascending from the head of the block, so a cursor in the tail
+    // of a block longer than the budget is simply not sent. The backend then
+    // has no line to answer about, returns an empty hint, and the lens says
+    // "✓ Nothing to flag on this line" about code the model never saw.
+    const digest = buildDigest(huge, "python", { start: 100, end: 399 });
+    expect(digest.code).not.toContain("line_300 = 300");
+  });
+
+  it("always carries the cursor's line, whatever the budget drops", () => {
+    // File line 301 ("line_300 = 300") is 84 lines past where the focus band
+    // runs out. 0-based cursor 300, the same convention `focus` uses.
+    const digest = buildDigest(huge, "python", { start: 100, end: 399 }, 300);
+    expect(digest.code).toContain("line_300 = 300");
+    // And it is a band of its own, not a silent widening of the focus band.
+    expect(digest.bands).toEqual([
+      { start: 98, end: 216 },
+      { start: 301, end: 301 },
+    ]);
+    // The anchor is paid for out of the budget, not added on top of it.
+    expect(bandLineCount(digest.bands)).toBe(MAX_DIGEST_LINES);
+  });
+
+  it("costs nothing when the cursor is already inside the focus band", () => {
+    const anchored = buildDigest(huge, "python", { start: 100, end: 399 }, 120);
+    const plain = buildDigest(huge, "python", { start: 100, end: 399 });
+    expect(anchored).toEqual(plain);
+  });
+
+  it("ignores a cursor outside the file", () => {
+    expect(buildDigest(PY, "python", { start: 2, end: 3 }, 900)).toEqual(
+      buildDigest(PY, "python", { start: 2, end: 3 })
+    );
+    expect(buildDigest(PY, "python", { start: 2, end: 3 }, -1)).toEqual(
+      buildDigest(PY, "python", { start: 2, end: 3 })
+    );
+  });
 });

@@ -222,16 +222,33 @@ function signatureLines(
     .slice(0, SIGNATURE_BAND_MAX_LINES);
 }
 
+/**
+ * @param cursorLine 0-based, like `focus` — the line the answer is *about*.
+ *   Optional, because not every digest has a cursor behind it (the panel's
+ *   conversation is about the block, not a line).
+ */
 export function buildDigest(
   lines: string[],
   languageId: string,
-  focus: LineSpan
+  focus: LineSpan,
+  cursorLine?: number
 ): CodeDigest {
   const totalLines = lines.length;
   if (totalLines === 0) return { code: "", bands: [], totalLines: 0 };
 
   const chosen = new Set<number>();
-  // Focus first, so a tight budget spends itself on the block rather than on
+  // The cursor's own line before anything else, including the block it sits
+  // in. The focus band below runs *ascending* and stops at the budget, so a
+  // block longer than the budget keeps its head and drops its tail — and the
+  // cursor can be in the tail. `generate_line_hint` then finds no line to
+  // answer about, returns an empty hint, and the lens renders that as
+  // "✓ Nothing to flag on this line": the tutor reassuring the student about
+  // a line it was never shown. One line of budget buys the guarantee that
+  // whatever else the digest drops, the line being asked about is in it.
+  if (cursorLine !== undefined) {
+    take(chosen, cursorLine + 1, cursorLine + 1, totalLines, MAX_DIGEST_LINES);
+  }
+  // Focus next, so a tight budget spends itself on the block rather than on
   // context for it. A block bigger than the whole budget keeps its head: the
   // signature and the first lines of a body are what make a function legible,
   // which is the rule `_window` already applies server-side.
