@@ -64,12 +64,21 @@ describe("buildDigest emits the block the student is on", () => {
     expect(buildDigest(long, "python", { start: 20, end: 21 }).totalLines).toBe(50);
   });
 
-  it("holds the invariant the backend validates: one digest line per band line", () => {
+  it("holds the invariant the backend validates: the bands name the lines sent", () => {
     // The backend rejects a `bands` list whose total length disagrees with the
     // code it arrived with, and falls back to treating the digest as a whole
     // file — which renumbers every line and sends the student to the wrong one.
+    //
+    // Asserted against the fixture, not against `bandLineCount(digest.bands)`:
+    // `code` is built by joining exactly the lines the bands name, so counting
+    // them proves only that `join` and `length` agree. This flips on any
+    // off-by-one in `lines.slice(b.start - 1, b.end)` — the arithmetic that
+    // turns 1-based absolute coordinates into 0-based array offsets, and the
+    // most load-bearing sum in the module.
     const digest = buildDigest(PY, "python", { start: 5, end: 6 });
-    expect(digest.code.split("\n")).toHaveLength(bandLineCount(digest.bands));
+    expect(digest.code.split("\n")).toEqual(
+      digest.bands.flatMap((b) => PY.slice(b.start - 1, b.end))
+    );
   });
 
   it("returns an empty digest for an empty file", () => {
@@ -343,8 +352,14 @@ describe("buildDigest names what the block can call", () => {
   });
 
   it("still holds the band invariant with every band in play", () => {
+    // Four bands here — header, scope header, focus, signatures — so the
+    // slice arithmetic is exercised at a band that does not start at line 1,
+    // which the single-band case above cannot reach.
     const digest = buildDigest(CLASSY, "python", { start: 6, end: 7 });
-    expect(digest.code.split("\n")).toHaveLength(bandLineCount(digest.bands));
+    expect(digest.bands.length).toBeGreaterThan(1);
+    expect(digest.code.split("\n")).toEqual(
+      digest.bands.flatMap((b) => CLASSY.slice(b.start - 1, b.end))
+    );
   });
 });
 
@@ -473,4 +488,5 @@ describe("buildDigest stays inside its budget", () => {
     // Line 217 is the last line focus kept before budget was exhausted
     expect(digest.code).toContain("line_216 = 216");
   });
+
 });
