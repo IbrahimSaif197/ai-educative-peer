@@ -1370,3 +1370,47 @@ class TestACodeViewRebuildsAbsoluteLineNumbers:
         from hinting_engine import CodeView
         view = CodeView.of(self.DIGEST, self.BANDS, total_lines="lots")
         assert "175" not in view.numbered()
+
+
+class TestTheConversationReadsTheDigest:
+    """The panel sends a digest; the prompt has to number it correctly."""
+
+    def _engine(self):
+        from hinting_engine import HintingEngine
+        engine = HintingEngine(api_key="test-key")
+        engine.client = _make_mock_client("ok")
+        return engine
+
+    def _user_message(self, engine):
+        messages = engine.client.chat.completions.create.call_args.kwargs["messages"]
+        return messages[-1]["content"]
+
+    def test_a_request_with_no_view_is_unchanged(self):
+        # The published 1.5.1 extension sends whole files and must keep
+        # producing the prompt it produces today, byte for byte.
+        from hinting_engine import number_lines
+        engine = self._engine()
+        code = "a = 1\nb = 2"
+        engine.generate_hint(code, "help", 1)
+        assert number_lines(code) in self._user_message(engine)
+
+    def test_a_view_puts_the_imports_and_the_block_in_the_prompt(self):
+        from hinting_engine import CodeView
+        engine = self._engine()
+        view = CodeView.of(
+            "import math\ndef deep(x):\n    return math.sqrt(x)",
+            [{"start": 1, "end": 1}, {"start": 173, "end": 174}],
+            total_lines=241,
+        )
+        engine.generate_hint("ignored", "help", 1, view=view)
+        sent = self._user_message(engine)
+        assert "1: import math" in sent
+        assert "173: def deep(x):" in sent
+        assert "[lines 2-172 of this file are not shown]" in sent
+
+    def test_the_streaming_path_reads_the_view_too(self):
+        from hinting_engine import CodeView
+        engine = self._engine()
+        view = CodeView.of("def deep(x):\n    return x", [{"start": 40, "end": 41}], 60)
+        list(engine.stream_hint("ignored", "help", 1, view=view))
+        assert "40: def deep(x):" in self._user_message(engine)

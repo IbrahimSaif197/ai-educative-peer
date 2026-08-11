@@ -661,13 +661,15 @@ class HintingEngine:
     def _build_user_message(
         self, code: str, question: str, hint_level: int, language: str,
         mode: str = "hint", edit_summary: str = "", focus: Optional[dict] = None,
+        view: Optional[CodeView] = None,
     ) -> str:
         lang = get_language(language)
         nonce = secrets.token_hex(8)
         # `focus` decides which window survives when the file is too big to
         # send whole, so it has to reach the numbering rather than only the
-        # instruction below it.
-        code_block = number_lines(code, focus)
+        # instruction below it. A `view` means the client already made that
+        # choice and sent a digest; its bands carry the real line numbers.
+        code_block = view.numbered() if view is not None else number_lines(code, focus)
         code_part = self._wrap_untrusted(
             "student_code", nonce, f"language: {lang['display_name']}\n{code_block}"
         )
@@ -970,6 +972,7 @@ class HintingEngine:
         pacing: str,
         edit_summary: str = "",
         focus: Optional[dict] = None,
+        view: Optional[CodeView] = None,
     ) -> Tuple[List[dict], str]:
         level = clamp_hint_level(hint_level)
         mode = effective_mode(mode, level)
@@ -998,7 +1001,7 @@ class HintingEngine:
             {
                 "role": "user",
                 "content": self._build_user_message(
-                    code, question, level, language, mode, edit_summary, focus
+                    code, question, level, language, mode, edit_summary, focus, view
                 ),
             }
         )
@@ -1025,9 +1028,10 @@ class HintingEngine:
         pacing: str = "",
         edit_summary: str = "",
         focus: Optional[dict] = None,
+        view: Optional[CodeView] = None,
     ) -> Tuple[str, List[str]]:
         messages, mode = self._prepare_hint_messages(
-            code, question, hint_level, language, history, mode, pacing, edit_summary, focus
+            code, question, hint_level, language, history, mode, pacing, edit_summary, focus, view
         )
         raw_text = self._chat_messages(messages, 400)
         return self._finalize_hint(raw_text, code, question, language, mode)
@@ -1047,11 +1051,12 @@ class HintingEngine:
         pacing: str = "",
         edit_summary: str = "",
         focus: Optional[dict] = None,
+        view: Optional[CodeView] = None,
     ):
         """Yield {"type": "delta", "text"} events followed by one
         {"type": "done", "hint", "concept_tags"} event."""
         messages, mode = self._prepare_hint_messages(
-            code, question, hint_level, language, history, mode, pacing, edit_summary, focus
+            code, question, hint_level, language, history, mode, pacing, edit_summary, focus, view
         )
         system, turns = split_system(messages)
         full = ""
