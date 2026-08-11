@@ -413,3 +413,38 @@ describe("scopeHeaderLines reaches past a lone brace to the real header", () => 
     expect(digest.code).toContain("impl Foo");
   });
 });
+
+import { MAX_DIGEST_LINES } from "../codeDigest";
+
+describe("buildDigest stays inside its budget", () => {
+  const huge = [
+    "import math",
+    ...Array.from({ length: 400 }, (_, i) => `line_${i + 1} = ${i + 1}`),
+  ];
+
+  it("never sends more lines than the budget", () => {
+    const digest = buildDigest(huge, "python", { start: 200, end: 260 });
+    expect(bandLineCount(digest.bands)).toBeLessThanOrEqual(MAX_DIGEST_LINES);
+    expect(MAX_DIGEST_LINES).toBe(120);
+  });
+
+  it("keeps the head of a block too big to fit", () => {
+    // The signature and the first lines of a body are what make a function
+    // readable; the tail is what you drop.
+    const digest = buildDigest(huge, "python", { start: 100, end: 399 });
+    expect(digest.code).toContain("line_98 = 98");
+    expect(digest.code).not.toContain("line_399 = 399");
+  });
+
+  it("spends the budget on the block before the signatures", () => {
+    const digest = buildDigest(huge, "python", { start: 200, end: 260 });
+    for (let n = 201; n <= 261; n++) {
+      expect(digest.code).toContain(`line_${n} = ${n}`);
+    }
+  });
+
+  it("holds the band invariant at the budget", () => {
+    const digest = buildDigest(huge, "python", { start: 200, end: 260 });
+    expect(digest.code.split("\n")).toHaveLength(bandLineCount(digest.bands));
+  });
+});

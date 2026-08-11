@@ -231,6 +231,10 @@ export function buildDigest(
   if (totalLines === 0) return { code: "", bands: [], totalLines: 0 };
 
   const chosen = new Set<number>();
+  // Focus first, so a tight budget spends itself on the block rather than on
+  // context for it. A block bigger than the whole budget keeps its head: the
+  // signature and the first lines of a body are what make a function legible,
+  // which is the rule `_window` already applies server-side.
   // 0-based focus in, 1-based out.
   take(
     chosen,
