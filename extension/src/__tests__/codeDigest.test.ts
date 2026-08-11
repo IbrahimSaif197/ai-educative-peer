@@ -422,10 +422,25 @@ describe("buildDigest stays inside its budget", () => {
     ...Array.from({ length: 400 }, (_, i) => `line_${i + 1} = ${i + 1}`),
   ];
 
-  it("never sends more lines than the budget", () => {
-    const digest = buildDigest(huge, "python", { start: 200, end: 260 });
-    expect(bandLineCount(digest.bands)).toBeLessThanOrEqual(MAX_DIGEST_LINES);
-    expect(MAX_DIGEST_LINES).toBe(120);
+  const withDefinitions = [
+    "import math",
+    "",
+    ...Array.from({ length: 30 }, (_, i) => [
+      `def f_${i}():`,
+      `    return ${i}`,
+    ]).flat(),
+    "",
+    "def target():",
+    ...Array.from({ length: 100 }, (_, i) => `    body_line_${i} = ${i}`),
+  ];
+
+  it("saturates the budget when focus alone exceeds it", () => {
+    // Focus {100, 399} (0-based) = file lines 101-400 (1-based), 300 lines.
+    // With 3-line margin: 98-403 clamped to 98-401 = 304 lines.
+    // Header adds 1 line. No signatures (huge has no defs).
+    // Without a budget guard, this would send 305 lines; the guard cuts to 120.
+    const digest = buildDigest(huge, "python", { start: 100, end: 399 });
+    expect(bandLineCount(digest.bands)).toBe(MAX_DIGEST_LINES);
   });
 
   it("keeps the head of a block too big to fit", () => {
@@ -437,14 +452,22 @@ describe("buildDigest stays inside its budget", () => {
   });
 
   it("spends the budget on the block before the signatures", () => {
-    const digest = buildDigest(huge, "python", { start: 200, end: 260 });
-    for (let n = 201; n <= 261; n++) {
-      expect(digest.code).toContain(`line_${n} = ${n}`);
-    }
+    // Header: 1 line (import). Focus on target function (index 63-163): 101 lines.
+    // With 3-line margin: 104 lines total. Budget left: ~15 lines for 30 signatures.
+    // The nearest ~7-8 definitions fit; the distant ones do not.
+    const digest = buildDigest(withDefinitions, "python", { start: 63, end: 163 });
+    // target's last body line should be present (focus got all its lines)
+    expect(digest.code).toContain("body_line_99 = 99");
+    // A near definition should be present (f_29 is adjacent to target)
+    expect(digest.code).toContain("def f_29():");
+    // A far definition should not be present (f_0 is 63 lines away from target)
+    expect(digest.code).not.toContain("def f_0():");
   });
 
-  it("holds the band invariant at the budget", () => {
-    const digest = buildDigest(huge, "python", { start: 200, end: 260 });
+  it("holds the band invariant at saturation", () => {
+    // Same saturating focus as test 1: ensure the invariant holds
+    // even when the budget truncates the digest.
+    const digest = buildDigest(huge, "python", { start: 100, end: 399 });
     expect(digest.code.split("\n")).toHaveLength(bandLineCount(digest.bands));
   });
 });
