@@ -26,6 +26,14 @@ const DEFAULT_BACKEND_URL = "https://edupeer-backend.onrender.com";
  * `resolveFocus` ranks a selection above the enclosing symbol, which is right
  * when the selection *is* the question. Here it is the answer's subject and
  * the block around it is the context, so the selection must not win.
+ *
+ * Deliberately not `digestFor`, and not to be "unified" with it. This is the
+ * block's own verbatim text, for `/trace` and `/predict`: the spec authorises
+ * sending the block there, `getTrace` never numbers it, and a digest's elided
+ * bands would give the model a desk-check exercise with holes in it. The
+ * seeded `bug:` markers are left in for the same reason — a trace of code the
+ * student can see must be a trace of the code they can see. Everything that
+ * asks for a *hint* about a file goes through `digestFor`; this does not.
  */
 async function blockAround(
   doc: vscode.TextDocument,

@@ -5,6 +5,7 @@ import { AttemptTracker, isAnswerRequest, isAttempt, nudgeForUnchangedCode } fro
 import { AuthManager } from "./authManager";
 import { stripBugMarkers } from "./bugMarkers";
 import { buildDigest, type CodeDigest } from "./codeDigest";
+import { digestFor } from "./documentDigest";
 import { FirebaseClient } from "./firebaseClient";
 import { FocusScope, focusText, resolveFocus } from "./focusScope";
 import { isSupportedLanguage, languageLabel } from "./languages";
@@ -638,10 +639,11 @@ export class EduPeerSidebarProvider implements vscode.WebviewViewProvider {
     // what it can call — without the four hundred lines between them.
     //
     // `lastDigest` was already stripped of any seeded `bug:` marker when
-    // `sendFocus` built it. The fallback branch below was not: its code is a
-    // review exercise, a prediction or a trace answer — none of which ever
-    // passes through `sendFocus` — so, the same as every request used to, it
-    // strips here, at request time.
+    // `sendFocus` built it through `digestFor`. The fallback branch below is
+    // the one place a digest is built from something that is not a
+    // `TextDocument` at all — a review exercise, a prediction, a trace
+    // answer, none of which ever passes through `sendFocus` — so it goes to
+    // `buildDigest` directly and does its own stripping, at request time.
     const digest =
       aboutOpenFile && this.lastDigest
         ? this.lastDigest
@@ -878,11 +880,8 @@ export class EduPeerSidebarProvider implements vscode.WebviewViewProvider {
     // webview is in the editor. It must never become a request payload —
     // `auditRegressions` asserts that it does not.
     this.panelFullCode = doc.getText();
-    this.lastDigest = buildDigest(
-      stripBugMarkers(doc.getText(), this.lastLanguageId).split("\n"),
-      this.lastLanguageId,
-      { start: focus.startLine, end: focus.endLine }
-    );
+    // No cursor line: the conversation is about the block, not about a line.
+    this.lastDigest = digestFor(doc, focus, undefined, this.lastLanguageId);
     // The ladder is per problem, and a different function is a different
     // problem — being stuck on `main` should not start at hint 3 because you
     // were stuck on `parse` a minute ago.

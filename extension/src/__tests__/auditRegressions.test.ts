@@ -518,25 +518,92 @@ describe("no source file hands raw document text to the network", () => {
       .split("\n");
   }
 
-  it("flags a bare getText() not routed through a digest/marker call on the same line", () => {
-    // This is a line-level textual guard against the obvious regression —
-    // a `getText()` sitting in one of these files with no digest/marker/
-    // display helper visibly on the same line — not a data-flow proof, and
-    // a regex over source text cannot honestly be more than that. It has no
-    // way to see a value carried across lines or variables: `const lines =
-    // doc.getText().split("\n")` legitimately clears itself here, and
-    // nothing here would stop a later, unrelated `lines.join("\n")` from
-    // reaching `this.api.*` whole. Catching that shape is what the
+  /**
+   * The one module that turns a `TextDocument` into the lines a digest is
+   * built from. Named once here so the assertions below are about a symbol
+   * rather than about the shape of an incantation.
+   */
+  const CHOKEPOINT = "documentDigest.ts";
+
+  /**
+   * The argument text of every `buildDigest(...)` call in `source`, taken by
+   * matching parentheses rather than by line. The call this exists to catch
+   * spans four lines, so a line-level scan would miss it — and a line-level
+   * scan is what the incantation-shaped guard this replaces was.
+   */
+  function buildDigestArguments(source: string): string[] {
+    const calls: string[] = [];
+    const pattern = /\bbuildDigest\s*\(/g;
+    let match: RegExpExecArray | null;
+    while ((match = pattern.exec(source))) {
+      let depth = 1;
+      let i = match.index + match[0].length;
+      for (; i < source.length && depth > 0; i++) {
+        if (source[i] === "(") depth++;
+        else if (source[i] === ")") depth--;
+      }
+      calls.push(source.slice(match.index + match[0].length, i - 1));
+    }
+    return calls;
+  }
+
+  it("keeps every document-to-digest conversion inside the one chokepoint", () => {
+    // What this guarantees: no file that can reach the network builds a
+    // digest out of a document itself. `digestFor` is the only door, so the
+    // strip-split-budget decision is made in one place and can be read in
+    // one place — which is what `digestFields` (where a digest becomes a
+    // payload) explicitly is not, since by then the choice of what to send
+    // has already been made.
+    //
+    // `buildDigest` on its own is not forbidden: `sidebarProvider`'s
+    // fallback branch builds a digest out of a review exercise or a trace
+    // answer, which is a string and was never a document. What is forbidden
+    // is a sender feeding a document's own text into one.
+    for (const name of SENDERS) {
+      const source = readLines(name).map(stripLineComment).join("\n");
+      const fromADocument = buildDigestArguments(source).filter((args) =>
+        /getText\s*\(/.test(args)
+      );
+      expect({ name, fromADocument }).toEqual({ name, fromADocument: [] });
+    }
+    // ...and the chokepoint really is one: it is where the pair lives.
+    const chokepoint = fs.readFileSync(path.join(SRC, CHOKEPOINT), "utf8");
+    expect(chokepoint).toContain("getText()");
+    expect(chokepoint).toContain("buildDigest(");
+    expect(chokepoint).toContain("stripBugMarkers(");
+  });
+
+  it("keeps the digest rules themselves free of the editor", () => {
+    // The chokepoint exists so that `codeDigest` can stay a pure module —
+    // raw lines in, a digest out, every test a fixture array. An import of
+    // `vscode` there would make the budget arithmetic testable only through
+    // a mocked editor.
+    const pure = fs.readFileSync(path.join(SRC, "codeDigest.ts"), "utf8");
+    expect(pure).not.toMatch(/from ["']vscode["']/);
+  });
+
+  it("flags a bare getText() not routed through the chokepoint or a marker call", () => {
+    // A line-level textual guard against the obvious regression — a
+    // `getText()` sitting in one of these files with nothing on the same line
+    // that accounts for it — not a data-flow proof, and a regex over source
+    // text cannot honestly be more than that. It has no way to see a value
+    // carried across lines or variables. Catching that shape is what the
     // behavioural tests next to each call site are for (e.g.
     // sidebarProvider.test.ts's "the conversation carries a digest, not the
     // file"), not this scan.
-    for (const name of SENDERS) {
+    //
+    // The allow-list is the three things a raw `getText()` may legitimately
+    // be: the panel's display copy, a marker search over the live buffer, and
+    // — inside the chokepoint only — the digest's own input.
+    for (const name of [...SENDERS, CHOKEPOINT]) {
+      const allowed =
+        name === CHOKEPOINT
+          ? /stripBugMarkers\(/
+          : /panelFullCode|findBugMarkers\(/;
       const offenders = readLines(name)
         .map((line, i) => [i + 1, stripLineComment(line)] as const)
         .filter(([, line]) => /getText\(\)/.test(line))
-        .filter(
-          ([, line]) => !/buildDigest\(|panelFullCode|split\("\\n"\)|findBugMarkers\(/.test(line)
-        );
+        .filter(([, line]) => !allowed.test(line));
       expect({ name, offenders }).toEqual({ name, offenders: [] });
     }
   });
