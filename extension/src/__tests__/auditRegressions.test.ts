@@ -471,19 +471,72 @@ describe("a spaced-review exercise can be answered", () => {
 
 describe("no source file hands raw document text to the network", () => {
   const SRC = path.join(__dirname, "..");
-  const SENDERS = ["sidebarProvider.ts", "inlineTutor.ts", "extension.ts"];
-
-  it("reaches apiClient only through buildDigest", () => {
-    // The whole point of codeDigest is that the student's file does not leave
-    // their machine. That is a property of the call sites, not of the module,
-    // so it is asserted here rather than trusted.
-    for (const name of SENDERS) {
+  /**
+   * Every top-level module that talks to the backend, discovered rather than
+   * hand-listed. A fixed array stops covering a new sender the moment
+   * someone adds one and forgets to update it here — this found
+   * `firebaseClient.ts` on the first run, which the hand-maintained list of
+   * three had never named. `apiClient.ts` itself is excluded: it is what
+   * the other files reference, not a sender, and the bare word `ApiClient`
+   * appears throughout its own class declaration.
+   */
+  const SENDERS = fs
+    .readdirSync(SRC)
+    .filter((name) => name.endsWith(".ts") && fs.statSync(path.join(SRC, name)).isFile())
+    .filter((name) => name !== "apiClient.ts")
+    .filter((name) => {
       const source = fs.readFileSync(path.join(SRC, name), "utf8");
-      const offenders = source
-        .split("\n")
-        .map((line, i) => [i + 1, line] as const)
+      return /\bApiClient\b/.test(source) || /this\.api\./.test(source);
+    })
+    .sort();
+
+  /**
+   * A trailing `//` comment, stripped before it can matter. Left in, a
+   * comment can exempt a real offender (`doc.getText(); // eventually goes
+   * through buildDigest`) as easily as it can trip a false one — the first
+   * draft of this suite's own `askWithActiveFile` comment did exactly that
+   * by quoting `getText()`. Not preceded by `:`, so a `"https://..."`
+   * literal survives; that is the one `//` this codebase's source carries
+   * outside an actual comment (verified against every sender file).
+   */
+  function stripLineComment(line: string): string {
+    return line.replace(/(?<!:)\/\/.*/, "");
+  }
+
+  /**
+   * A file's lines, `\r\n` normalised to `\n` first. This repo checks out
+   * with CRLF endings, and a trailing `\r` survives `.split("\n")` on every
+   * line — which silently defeats a `$`-anchored strip like the one above
+   * (`.*` does not consume a line terminator, `\r` included, so the pattern
+   * can never reach `$`). Normalising once here means neither this file's
+   * own regexes nor a future one has to remember that.
+   */
+  function readLines(name: string): string[] {
+    return fs
+      .readFileSync(path.join(SRC, name), "utf8")
+      .replace(/\r\n/g, "\n")
+      .split("\n");
+  }
+
+  it("flags a bare getText() not routed through a digest/marker call on the same line", () => {
+    // This is a line-level textual guard against the obvious regression —
+    // a `getText()` sitting in one of these files with no digest/marker/
+    // display helper visibly on the same line — not a data-flow proof, and
+    // a regex over source text cannot honestly be more than that. It has no
+    // way to see a value carried across lines or variables: `const lines =
+    // doc.getText().split("\n")` legitimately clears itself here, and
+    // nothing here would stop a later, unrelated `lines.join("\n")` from
+    // reaching `this.api.*` whole. Catching that shape is what the
+    // behavioural tests next to each call site are for (e.g.
+    // sidebarProvider.test.ts's "the conversation carries a digest, not the
+    // file"), not this scan.
+    for (const name of SENDERS) {
+      const offenders = readLines(name)
+        .map((line, i) => [i + 1, stripLineComment(line)] as const)
         .filter(([, line]) => /getText\(\)/.test(line))
-        .filter(([, line]) => !/buildDigest|panelFullCode|split\("\\n"\)|findBugMarkers/.test(line));
+        .filter(
+          ([, line]) => !/buildDigest\(|panelFullCode|split\("\\n"\)|findBugMarkers\(/.test(line)
+        );
       expect({ name, offenders }).toEqual({ name, offenders: [] });
     }
   });
@@ -497,11 +550,21 @@ describe("no source file hands raw document text to the network", () => {
     // literal `code:\s*this\.panelFullCode` search also matches that
     // legitimate `post` call one-for-one and fails unconditionally — it is
     // not what is checked here.)
-    const source = fs.readFileSync(path.join(SRC, "sidebarProvider.ts"), "utf8");
-    const reachesApi = source
-      .split("\n")
+    //
+    // Same-line only, like the scan above: `handleAsk`'s request object
+    // (sidebarProvider.ts, built for `streamHint`/`getHint`) spans several
+    // lines before the `this.api.` call that sends it, so a `panelFullCode`
+    // reference planted inside that object, rather than in the
+    // `this.post(...)` call it belongs to today, would slip past this
+    // one-line check. `sidebarProvider.test.ts`'s "the conversation carries
+    // a digest, not the file" tests already exercise that request body
+    // behaviourally and would catch it there.
+    const reachesApi = readLines("sidebarProvider.ts")
+      .map(stripLineComment)
       .filter((line) => line.includes("panelFullCode") && line.includes("this.api."));
     expect(reachesApi).toEqual([]);
-    expect(source).toContain("digestFields(");
+    expect(fs.readFileSync(path.join(SRC, "sidebarProvider.ts"), "utf8")).toContain(
+      "digestFields("
+    );
   });
 });

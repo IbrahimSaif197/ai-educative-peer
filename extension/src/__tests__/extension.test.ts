@@ -566,11 +566,19 @@ describe("the commands that reach for the file send a block instead", () => {
 
   it("traceCode with no selection traces the block, not the file", async () => {
     const doc = openDocument(LONG_PYTHON_FILE, "python");
-    placeCursorOn(doc, 199);
+    // A body line, not the `def` line. The mock's `getText(range)` slices by
+    // whole line regardless of column, so a collapsed selection anywhere
+    // returns that line's own text for `snippet` (arg 1) — on the `def`
+    // line that already reads "def deep(n):", which would satisfy this
+    // test's assertions even with `blockAround` broken. `code` (arg 2) is
+    // where the no-selection fallback is actually exercised: it comes from
+    // `blockAround`'s heuristic resolution over the whole file, not from
+    // the mock's per-line `getText`, so it is what is checked below.
+    placeCursorOn(doc, 200);
     await mock.__runCommand("edupeer.traceCode");
-    const [snippet] = provider.startTrace.mock.calls[0];
-    expect(snippet).not.toContain("line_10 = 10");
-    expect(snippet).toContain("def deep(n):");
+    const [snippet, code] = provider.startTrace.mock.calls[0];
+    expect(code).not.toContain("line_10 = 10");
+    expect(code).toContain("def deep(n):");
   });
 
   it("discussLines sends the block, not the file", async () => {

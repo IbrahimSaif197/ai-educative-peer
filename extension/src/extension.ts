@@ -172,8 +172,10 @@ export async function activate(context: vscode.ExtensionContext) {
     // The block around the cursor, not the file: `askExternal` calls
     // `sendFocus` before asking anything, which re-resolves its own digest
     // from the live focus regardless of what `code` carries here — this only
-    // ever backs the offline fallback and the panel's pre-focus display, but
-    // it has no business holding the whole document either.
+    // ever backs the local offline-tutor fallback (the webview's
+    // `externalAsk` handler in media/main.js ignores `code` outright, so
+    // there is no display use to preserve either), but it has no business
+    // holding the whole document on the way there.
     const code = editor ? await blockAround(editor.document, editor.selection.active) : "";
     await vscode.commands.executeCommand("workbench.view.extension.edupeer-sidebar");
     await provider.askExternal(question, code, mode);
