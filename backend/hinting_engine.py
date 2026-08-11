@@ -815,27 +815,29 @@ class HintingEngine:
 
     def generate_line_hint(
         self, code: str, line_number: int, language: str = "python",
-        focus: Optional[dict] = None,
+        focus: Optional[dict] = None, view: Optional[CodeView] = None,
     ) -> Tuple[str, str]:
-        lines = code.splitlines()
-        if not lines or line_number < 1 or line_number > len(lines):
+        view = view if view is not None else CodeView.of(code)
+        if view.line_at(line_number) is None:
             return "", "general"
         lang = get_language(language)
-        idx = line_number - 1
         # A resolved focus block is a better window than a fixed ±3, but it is
         # capped so a 200-line function does not become the whole prompt.
-        start, end = max(0, idx - 3), min(len(lines), idx + 4)
+        start, end = line_number - 3, line_number + 3
         if focus:
             try:
-                f_start = int(focus.get("start_line", 0)) - 1
+                f_start = int(focus.get("start_line", 0))
                 f_end = int(focus.get("end_line", 0))
             except (TypeError, ValueError):
-                f_start, f_end = -1, -1
-            if 0 <= f_start < f_end <= len(lines) and f_start <= idx < f_end:
-                start = max(f_start, idx - 30)
-                end = min(f_end, idx + 31)
+                f_start, f_end = 0, 0
+            if 0 < f_start <= line_number <= f_end:
+                start = max(f_start, line_number - 30)
+                end = min(f_end, line_number + 30)
+        # Absolute numbers throughout, and lines the view does not hold are
+        # skipped rather than counted - the window may span a band boundary.
         window = "\n".join(
-            f"{i+1}{'>' if i == idx else ':'} {lines[i]}" for i in range(start, end)
+            f"{n}{'>' if n == line_number else ':'} {text}"
+            for n, text in view.slice(start, end)
         )
         # Same treatment as `_build_user_message` and `scan_code`: a bare ```
         # fence is closed by the student typing ```, and this window is now up

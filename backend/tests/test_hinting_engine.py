@@ -1414,3 +1414,68 @@ class TestTheConversationReadsTheDigest:
         view = CodeView.of("def deep(x):\n    return x", [{"start": 40, "end": 41}], 60)
         list(engine.stream_hint("ignored", "help", 1, view=view))
         assert "40: def deep(x):" in self._user_message(engine)
+
+
+class TestTheLineHintReadsAbsoluteLineNumbers:
+    """The cursor's line number is absolute; the code it arrives with is not.
+
+    `generate_line_hint` indexed `code.splitlines()[line_number - 1]`. Against
+    a digest, line 200 of a 42-line digest is out of range and the function
+    returns an empty hint - the whole inline surface going quiet on exactly
+    the long files the digest exists for.
+    """
+
+    def _engine(self):
+        from hinting_engine import HintingEngine
+        engine = HintingEngine(api_key="test-key")
+        engine.client = _make_mock_client('{"hint": "check the bound", "concept": "loops"}')
+        return engine
+
+    def _user_message(self, engine):
+        messages = engine.client.chat.completions.create.call_args.kwargs["messages"]
+        return messages[-1]["content"]
+
+    def _view(self):
+        from hinting_engine import CodeView
+        return CodeView.of(
+            "import math\ndef deep(n):\n    for i in range(1, n):\n        print(i)",
+            [{"start": 1, "end": 1}, {"start": 198, "end": 200}],
+            total_lines=241,
+        )
+
+    def test_it_answers_about_a_line_in_the_second_band(self):
+        engine = self._engine()
+        hint, concept = engine.generate_line_hint("ignored", 199, "python", view=self._view())
+        assert hint == "check the bound"
+        assert concept == "loops"
+
+    def test_it_marks_the_cursor_line_at_its_real_number(self):
+        engine = self._engine()
+        engine.generate_line_hint("ignored", 199, "python", view=self._view())
+        sent = self._user_message(engine)
+        assert "The student's cursor is on line 199" in sent
+        assert "199>     for i in range(1, n):" in sent
+        assert "198: def deep(n):" in sent
+
+    def test_it_skips_the_numbers_the_view_does_not_hold(self):
+        engine = self._engine()
+        engine.generate_line_hint("ignored", 199, "python", view=self._view())
+        assert "197" not in self._user_message(engine)
+
+    def test_it_declines_a_line_the_view_does_not_hold(self):
+        engine = self._engine()
+        assert engine.generate_line_hint("ignored", 50, "python", view=self._view()) == (
+            "",
+            "general",
+        )
+
+    def test_a_request_with_no_view_behaves_as_it_does_today(self):
+        engine = self._engine()
+        code = "x = 1\ny = 2\nz = 3"
+        hint, _ = engine.generate_line_hint(code, 2, "python")
+        assert hint == "check the bound"
+        assert "2> y = 2" in self._user_message(engine)
+
+    def test_a_line_past_the_end_of_a_whole_file_still_declines(self):
+        engine = self._engine()
+        assert engine.generate_line_hint("x = 1", 9, "python") == ("", "general")
