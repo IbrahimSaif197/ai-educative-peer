@@ -16,12 +16,16 @@
  */
 
 import type { LineSpan } from "./annotationStore";
+import { SUPPORTED_LANGUAGES } from "./languages";
 
 /** Total lines a digest may carry. Matches `MAX_CODE_LINES_SENT` server-side. */
 export const MAX_DIGEST_LINES = 120;
 
 /** Lines kept either side of the focus block: a decorator, or the comment above it. */
 export const FOCUS_MARGIN_LINES = 3;
+
+/** Header lines kept, at most. Past this it is not a header, it is the file. */
+export const HEADER_BAND_MAX_LINES = 30;
 
 /** 1-based, absolute, inclusive — the coordinates the backend numbers in. */
 export interface CodeBand {
@@ -80,6 +84,48 @@ function take(
   }
 }
 
+/**
+ * The file's header: imports, includes, and the module-level constants under
+ * them, up to the first line that is neither.
+ *
+ * Blank lines and comments continue the header but do not extend it — a file
+ * whose imports are followed by forty lines of comment should not spend its
+ * header budget on the comment. So the band ends at the last line that
+ * actually matched.
+ */
+function headerEnd(lines: string[], languageId: string): number {
+  const language = SUPPORTED_LANGUAGES[languageId];
+  if (!language) return 0;
+  let last = 0;
+  // Whether the header may still absorb one constant line before the next
+  // import re-arms it. A bare `last > 0` check would let this chain forever:
+  // `TAX = 0.2` under the imports and the forty ordinary assignments that
+  // happen to follow it are shaped identically to the scanner, so without a
+  // one-per-run limit the whole file reads as "header".
+  let constantAvailable = false;
+  const limit = Math.min(lines.length, HEADER_BAND_MAX_LINES);
+  for (let i = 0; i < limit; i++) {
+    const text = lines[i];
+    if (!text.trim()) continue;
+    if (text.trim().startsWith(language.lineComment)) continue;
+    if (language.importRegex.test(text)) {
+      last = i + 1; // 1-based
+      constantAvailable = true;
+      continue;
+    }
+    // A single module-level constant under the imports is context worth
+    // having; a second one in a row is the file's body, not its header.
+    // Anything indented, or any definition, ends the header outright.
+    if (constantAvailable && !language.lensRegex.test(text) && !/^\s/.test(text)) {
+      last = i + 1;
+      constantAvailable = false;
+      continue;
+    }
+    break;
+  }
+  return last;
+}
+
 export function buildDigest(
   lines: string[],
   languageId: string,
@@ -89,6 +135,7 @@ export function buildDigest(
   if (totalLines === 0) return { code: "", bands: [], totalLines: 0 };
 
   const chosen = new Set<number>();
+  take(chosen, 1, headerEnd(lines, languageId), totalLines, MAX_DIGEST_LINES);
   // 0-based focus in, 1-based out.
   take(
     chosen,

@@ -78,3 +78,55 @@ describe("buildDigest emits the block the student is on", () => {
     });
   });
 });
+
+import { HEADER_BAND_MAX_LINES } from "../codeDigest";
+
+const LONG_PY = [
+  "import math",                          // 1
+  "from stats import mean",               // 2
+  "",                                     // 3
+  "TAX = 0.2",                            // 4
+  "",                                     // 5
+  ...Array.from({ length: 40 }, (_, i) => `filler_${i} = ${i}`), // 6-45
+  "def deep(x):",                         // 46
+  "    return mean(x) * TAX",             // 47
+];
+
+describe("buildDigest carries the imports however far down the block is", () => {
+  it("sends the header even when the block is forty lines below it", () => {
+    const digest = buildDigest(LONG_PY, "python", { start: 45, end: 46 });
+    expect(digest.code).toContain("import math");
+    expect(digest.code).toContain("from stats import mean");
+    expect(digest.code).toContain("    return mean(x) * TAX");
+  });
+
+  it("keeps the module constant that sits under the imports", () => {
+    // A blank line does not end the header; a definition does.
+    expect(buildDigest(LONG_PY, "python", { start: 45, end: 46 }).code).toContain(
+      "TAX = 0.2"
+    );
+  });
+
+  it("stops the header at the first definition", () => {
+    const digest = buildDigest(LONG_PY, "python", { start: 45, end: 46 });
+    expect(digest.bands[0].end).toBeLessThan(6);
+  });
+
+  it("emits no header band for a file that opens with a definition", () => {
+    const noImports = ["def area(r):", "    return r * r", "", "area(2)"];
+    const digest = buildDigest(noImports, "python", { start: 3, end: 3 });
+    expect(digest.bands).toEqual([{ start: 1, end: 4 }]);
+  });
+
+  it("caps the header at thirty lines", () => {
+    const many = [
+      ...Array.from({ length: 60 }, (_, i) => `import mod_${i}`),
+      ...Array.from({ length: 40 }, (_, i) => `filler_${i} = ${i}`),
+      "def deep(x):",
+      "    return x",
+    ];
+    const digest = buildDigest(many, "python", { start: 100, end: 101 });
+    expect(digest.bands[0]).toEqual({ start: 1, end: HEADER_BAND_MAX_LINES });
+    expect(HEADER_BAND_MAX_LINES).toBe(30);
+  });
+});

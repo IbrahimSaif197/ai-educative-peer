@@ -77,3 +77,30 @@ describe("lensRegex definition detection", () => {
     expect(match("csharp", "int x = 1;")).toBe(false);
   });
 });
+
+describe("every language knows what one of its import lines looks like", () => {
+  const cases: Array<[string, string]> = [
+    ["python", "from stats import mean"],
+    ["javascript", "import { mean } from './stats.js';"],
+    ["typescript", "import type { Stats } from './stats';"],
+    ["java", "import java.util.List;"],
+    ["csharp", "using System.Collections.Generic;"],
+    ["c", "#include <stdio.h>"],
+    ["cpp", "#include <vector>"],
+    ["go", "import \"fmt\""],
+    ["rust", "use std::collections::HashMap;"],
+  ];
+
+  it.each(cases)("%s recognises %s", (id, line) => {
+    expect(SUPPORTED_LANGUAGES[id].importRegex.test(line)).toBe(true);
+  });
+
+  it("does not mistake a function definition for an import", () => {
+    expect(SUPPORTED_LANGUAGES.python.importRegex.test("def area(r):")).toBe(false);
+    expect(SUPPORTED_LANGUAGES.java.importRegex.test("public class Stats {")).toBe(false);
+  });
+
+  it("gives SQL a pattern that matches nothing, because it has no imports", () => {
+    expect(SUPPORTED_LANGUAGES.sql.importRegex.test("SELECT * FROM t;")).toBe(false);
+  });
+});
