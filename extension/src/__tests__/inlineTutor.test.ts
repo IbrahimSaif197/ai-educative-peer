@@ -1237,7 +1237,6 @@ describe("InlineTutor — the seeded marker never reaches the tutor", () => {
 
 describe("the inline surface works on one block", () => {
   let api: any;
-  let tutor: InlineTutor;
 
   beforeEach(() => {
     mock.__reset();
@@ -1255,9 +1254,9 @@ describe("the inline surface works on one block", () => {
     const editor = mock.__makeEditor(doc, 0, 0);
     mock.window.activeTextEditor = editor;
     mock.window.visibleTextEditors = [editor];
-    tutor = new InlineTutor({ subscriptions: [] } as any, api);
-    tutor.activate();
-    live.push(tutor);
+    const newTutor = new InlineTutor({ subscriptions: [] } as any, api);
+    newTutor.activate();
+    live.push(newTutor);
     return doc;
   }
 
@@ -1310,7 +1309,41 @@ describe("the inline surface works on one block", () => {
     const doc = openDocument(LONG_PYTHON_FILE, "python");
     placeCursorOn(doc, 199);
     await runScanNow();
-    expect(tutor.storeForTest(doc.uri).flags()).toEqual([]);
+    // `applyFlagsToDoc` publishes the store's flags as diagnostics after every
+    // successful scan, so this is an existing seam onto the store — no
+    // dedicated test-only accessor needed.
+    expect(diagnostics().get(doc.uri)).toEqual([]);
+  });
+
+  it("keeps a flag exactly on the block's boundary and drops one just outside it", async () => {
+    // Focus for line 200 (1-based) is {start_line: 200, end_line: 201} (see
+    // the "tells the scan which block it is reviewing" test above). A flag
+    // one line before or after that is out of the digest entirely and must
+    // be dropped; a flag exactly on either edge is still within the block
+    // that was scanned and must survive. Line 3's fixture already pins the
+    // "obviously outside" case — this pins the off-by-one at both edges.
+    api.scanCode.mockResolvedValue({
+      flags: [
+        { line: 199, end_line: 199, question: "just before", concept: "general",
+          severity: "info", kind: "bug" },
+        { line: 202, end_line: 202, question: "just after", concept: "general",
+          severity: "info", kind: "bug" },
+        { line: 200, end_line: 200, question: "on start", concept: "general",
+          severity: "info", kind: "bug" },
+        { line: 201, end_line: 201, question: "on end", concept: "general",
+          severity: "info", kind: "bug" },
+      ],
+    });
+    const doc = openDocument(LONG_PYTHON_FILE, "python");
+    placeCursorOn(doc, 199);
+    await runScanNow();
+    const questions = diagnostics()
+      .get(doc.uri)
+      .map((d: any) => d.message);
+    expect(questions.some((q: string) => q.includes("just before"))).toBe(false);
+    expect(questions.some((q: string) => q.includes("just after"))).toBe(false);
+    expect(questions.some((q: string) => q.includes("on start"))).toBe(true);
+    expect(questions.some((q: string) => q.includes("on end"))).toBe(true);
   });
 
   it("sends a digest to the line hint too", async () => {
@@ -1339,5 +1372,43 @@ describe("the inline surface works on one block", () => {
     placeCursorOn(doc, 20);
     await runScanNow();
     expect(api.scanCode).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not repaint a stale editor when the active tab changes mid-scan", async () => {
+    // `runScan` captures `editor` before two awaits (`resolveFocus`, then
+    // `scanCode`). If it trusted that reference at the end, switching tabs
+    // while the scan is in flight would make it paint ghost text onto an
+    // editor that is no longer active, and — because
+    // `renderActiveLineDecoration` clears the decoration on every *other*
+    // visible editor — wipe it from the tab the student is actually looking
+    // at as a side effect.
+    let resolveScan: (value: any) => void = () => {};
+    api.scanCode = jest.fn(() => new Promise((resolve) => (resolveScan = resolve)));
+    const doc = openDocument(LONG_PYTHON_FILE, "python");
+    placeCursorOn(doc, 199);
+    const originalEditor = mock.window.activeTextEditor;
+
+    await runScanNow();
+    // Past `resolveFocus` and into the (still-pending) `scanCode` call.
+    expect(api.scanCode).toHaveBeenCalledTimes(1);
+    const originalCallsBeforeSwitch = originalEditor.setDecorations.mock.calls.length;
+
+    // The student switches to a different file while the scan is still running.
+    const otherDoc = mock.__makeDocument("x = 1\n", "python", "/tmp/other.py");
+    const otherEditor = mock.__makeEditor(otherDoc, 0, 0);
+    mock.window.activeTextEditor = otherEditor;
+    mock.window.visibleTextEditors = [otherEditor];
+
+    resolveScan({ flags: [] });
+    await Promise.resolve();
+    await Promise.resolve();
+    await Promise.resolve();
+
+    // The scan was for the tab the student has since left: it must not
+    // repaint that now-inactive editor, and it must not touch the one now
+    // on screen (which it would, to clear it, if it still held the stale
+    // reference and treated the new editor as "some other visible editor").
+    expect(originalEditor.setDecorations.mock.calls.length).toBe(originalCallsBeforeSwitch);
+    expect(otherEditor.setDecorations).not.toHaveBeenCalled();
   });
 });

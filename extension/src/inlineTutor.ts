@@ -330,11 +330,6 @@ export class InlineTutor {
     return store;
   }
 
-  /** Test-only window onto the per-document store; production code uses `storeFor`. */
-  storeForTest(uri: vscode.Uri): AnnotationStore {
-    return this.storeFor(uri);
-  }
-
   private get lensMode(): "all" | "flagged" {
     return vscode.workspace
       .getConfiguration("edupeer")
@@ -552,7 +547,13 @@ export class InlineTutor {
 
     // Keyed by block, not by document: a file is not one thing to scan any
     // more, and a URI key would report the second block already scanned.
-    const key = `${doc.uri.toString()}#${focus.label}`;
+    // `breadcrumb`, not `label`: `label` is the bare identifier ("run",
+    // "__init__") with no qualifier, so two same-named blocks in one file —
+    // two classes each with a `run` method — would collide on one key.
+    // `breadcrumb` is the qualified path ("demo.py › Stats › run") and is
+    // documented as display-only, never leaving the extension, so it is safe
+    // to key an in-memory map on even though it must never reach the wire.
+    const key = `${doc.uri.toString()}#${focus.breadcrumb}`;
     // Fingerprinted as well as sent, so removing a marker — which changes the
     // buffer but not the code under review — does not spend a scan re-reading
     // an identical digest.
@@ -580,7 +581,17 @@ export class InlineTutor {
       store.setFlagsIn({ start: focus.startLine, end: focus.endLine }, inFocus);
       this.applyFlagsToDoc(doc);
       this.emitter.fire();
-      this.renderActiveLineDecoration(editor);
+      // Re-fetched and re-validated rather than trusting the `editor`
+      // captured above `await resolveFocus`/`await scanCode`: the student may
+      // have switched tabs while the scan was in flight, and painting onto
+      // that stale reference would clear the ghost text on the editor they
+      // are actually looking at (`renderActiveLineDecoration`'s own "clear
+      // every other visible editor" loop treats it as "other") while
+      // repainting one that is no longer active.
+      const activeEditor = vscode.window.activeTextEditor;
+      if (activeEditor && activeEditor.document === doc) {
+        this.renderActiveLineDecoration(activeEditor);
+      }
       this.maybeOfferReflection(doc, key, focus, digest.code, inFocus.length);
     } catch (err) {
       if (err instanceof RateLimitError) {
