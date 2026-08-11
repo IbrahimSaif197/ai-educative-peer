@@ -938,6 +938,24 @@ class TestGenerateLineHintFocusWindow:
         # focus includes it.
         assert "code_010" not in message
 
+    def test_a_focus_ending_past_the_files_real_length_is_ignored(self):
+        # end_line one past the file's real length used to be caught by the
+        # old guard's `f_end <= len(lines)` clause. Without an equivalent, a
+        # focus the file cannot back up would still widen the window instead
+        # of being rejected like any other nonsense span.
+        engine = self._engine('{"hint":"h","concept":"general"}')
+        code = self._numbered_code(10)
+        engine.generate_line_hint(
+            code, 6, "python", {"start_line": 5, "end_line": 11, "label": ""}
+        )
+        message = self._user_message(engine)
+        # The focus is rejected outright, so the tight +/-3 default applies
+        # (lines 3-9 around cursor line 6) rather than the widened window
+        # the unusable focus would have produced (lines 5-10).
+        assert "code_003" in message
+        assert "code_009" in message
+        assert "code_010" not in message
+
 
 class TestTheFourthRungIsTheWorkedExample:
     """Level 4 is not a fourth Socratic hint - it *is* the worked example.
@@ -1460,7 +1478,11 @@ class TestTheLineHintReadsAbsoluteLineNumbers:
     def test_it_skips_the_numbers_the_view_does_not_hold(self):
         engine = self._engine()
         engine.generate_line_hint("ignored", 199, "python", view=self._view())
-        assert "197" not in self._user_message(engine)
+        # "197:" rather than bare "197" - the message also carries a random
+        # 16-hex-char nonce, which can coincidentally contain "197" as a
+        # substring on about one run in three hundred. A pure-hex nonce can
+        # never contain a colon, so "197:" only matches an actual line 197.
+        assert "197:" not in self._user_message(engine)
 
     def test_it_declines_a_line_the_view_does_not_hold(self):
         engine = self._engine()

@@ -830,7 +830,12 @@ class HintingEngine:
                 f_end = int(focus.get("end_line", 0))
             except (TypeError, ValueError):
                 f_start, f_end = 0, 0
-            if 0 < f_start <= line_number <= f_end:
+            # f_end must be within what the view can actually vouch for - a
+            # focus reaching past the file (or the digest) is exactly as
+            # unusable as one with start > end, and must fall back to the
+            # tight default rather than silently widening into lines nobody
+            # sent.
+            if 0 < f_start <= line_number <= f_end <= view.max_line:
                 start = max(f_start, line_number - 30)
                 end = min(f_end, line_number + 30)
         # Absolute numbers throughout, and lines the view does not hold are
