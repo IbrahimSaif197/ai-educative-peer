@@ -1501,3 +1501,84 @@ class TestTheLineHintReadsAbsoluteLineNumbers:
     def test_a_line_past_the_end_of_a_whole_file_still_declines(self):
         engine = self._engine()
         assert engine.generate_line_hint("x = 1", 9, "python") == ("", "general")
+
+
+class TestTheScanReviewsTheBlockNotTheFile:
+    """A scan of the whole file marks up code the student is not working on.
+
+    A student editing `parse` collected lenses and Problems entries on three
+    other functions - and, because the scan also fired on activation, on a
+    file they had only just opened.
+    """
+
+    FLAGS = (
+        '{"flags": ['
+        '{"line": 174, "end_line": 174, "question": "Off by one?", "concept": "loops"},'
+        '{"line": 2, "end_line": 2, "question": "Unused import?", "concept": "imports"}'
+        "]}"
+    )
+
+    def _engine(self, reply=None):
+        from hinting_engine import HintingEngine
+        engine = HintingEngine(api_key="test-key")
+        engine.client = _make_mock_client(reply if reply is not None else self.FLAGS)
+        return engine
+
+    def _user_message(self, engine):
+        messages = engine.client.chat.completions.create.call_args.kwargs["messages"]
+        return messages[-1]["content"]
+
+    def _view(self):
+        from hinting_engine import CodeView
+        return CodeView.of(
+            "import math\nfrom stats import mean\ndef deep(n):\n    return n - 1",
+            [{"start": 1, "end": 2}, {"start": 173, "end": 174}],
+            total_lines=241,
+        )
+
+    FOCUS = {"start_line": 173, "end_line": 174, "label": "deep"}
+
+    def test_it_names_the_block_it_is_reviewing(self):
+        engine = self._engine()
+        engine.scan_code("ignored", "python", focus=self.FOCUS, view=self._view())
+        assert "Review lines 173-174 (deep)" in self._user_message(engine)
+
+    def test_it_keeps_a_flag_inside_the_block(self):
+        engine = self._engine()
+        flags = engine.scan_code("ignored", "python", focus=self.FOCUS, view=self._view())
+        assert [f["line"] for f in flags] == [174]
+
+    def test_it_drops_a_flag_on_an_import_it_was_only_shown_for_context(self):
+        engine = self._engine()
+        flags = engine.scan_code("ignored", "python", focus=self.FOCUS, view=self._view())
+        assert all(f["line"] != 2 for f in flags)
+
+    def test_it_drops_a_flag_on_a_line_the_view_never_held(self):
+        engine = self._engine('{"flags": [{"line": 90, "end_line": 90, "question": "Why?"}]}')
+        assert engine.scan_code("ignored", "python", focus=self.FOCUS, view=self._view()) == []
+
+    def test_it_clamps_a_flag_that_runs_past_the_block(self):
+        engine = self._engine(
+            '{"flags": [{"line": 173, "end_line": 400, "question": "Why?"}]}'
+        )
+        flags = engine.scan_code("ignored", "python", focus=self.FOCUS, view=self._view())
+        assert flags[0]["end_line"] == 174
+
+    def test_a_scan_with_no_focus_keeps_todays_wording(self):
+        # The published extension sends no focus and must get the prompt it
+        # gets today, byte for byte.
+        engine = self._engine('{"flags": []}')
+        engine.scan_code("x = 1\ny = 2", "python")
+        assert "Review this beginner's Python file." in self._user_message(engine)
+
+    def test_a_scan_with_no_focus_still_flags_anywhere_in_the_file(self):
+        engine = self._engine('{"flags": [{"line": 2, "end_line": 2, "question": "Why?"}]}')
+        flags = engine.scan_code("x = 1\ny = 2", "python")
+        assert [f["line"] for f in flags] == [2]
+
+    def test_it_numbers_the_digest_at_its_real_lines(self):
+        engine = self._engine()
+        engine.scan_code("ignored", "python", focus=self.FOCUS, view=self._view())
+        sent = self._user_message(engine)
+        assert "173: def deep(n):" in sent
+        assert "[lines 3-172 of this file are not shown]" in sent

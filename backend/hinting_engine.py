@@ -625,6 +625,21 @@ def focus_instruction(focus: Optional[dict]) -> str:
     )
 
 
+def scan_target(focus: Optional[dict]) -> Optional[Tuple[int, int, str]]:
+    """The block a scan is scoped to, or None to review the whole file."""
+    if not focus:
+        return None
+    try:
+        start = int(focus.get("start_line", 0))
+        end = int(focus.get("end_line", 0))
+    except (TypeError, ValueError):
+        return None
+    if start < 1 or end < start:
+        return None
+    label = " ".join(str(focus.get("label", "")).split())[:MAX_FOCUS_LABEL_CHARS]
+    return start, end, label
+
+
 class HintingEngine:
     def __init__(self, api_key: str = "", client=None):
         # `client` is the provider backend. Injected in tests; built from the
@@ -748,16 +763,26 @@ class HintingEngine:
         except json.JSONDecodeError:
             return {}
 
-    def scan_code(self, code: str, language: str = "python") -> List[dict]:
+    def scan_code(
+        self, code: str, language: str = "python", focus: Optional[dict] = None,
+        view: Optional[CodeView] = None,
+    ) -> List[dict]:
         stripped = code.strip()
         if not stripped:
             return []
         lang = get_language(language)
+        view = view if view is not None else CodeView.of(code)
+        target = scan_target(focus)
         nonce = secrets.token_hex(8)
-        numbered = "\n".join(f"{i+1}: {ln}" for i, ln in enumerate(code.splitlines()))
+        if target:
+            start, end, label = target
+            named = f" ({label})" if label else ""
+            what = f"lines {start}-{end}{named} of this beginner's {lang['display_name']} file"
+        else:
+            what = f"this beginner's {lang['display_name']} file"
         user_msg = (
-            f"Review this beginner's {lang['display_name']} file. Flag at most 5 suspicious lines.\n\n"
-            + self._wrap_untrusted("student_code", nonce, numbered)
+            f"Review {what}. Flag at most 5 suspicious lines.\n\n"
+            + self._wrap_untrusted("student_code", nonce, view.numbered())
             + "\n\nRespond with JSON only."
         )
         system = SCAN_SYSTEM_PROMPT_TEMPLATE.format(language=lang["display_name"]) + UNTRUSTED_INPUT_RULE
@@ -766,7 +791,6 @@ class HintingEngine:
         flags = data.get("flags") if isinstance(data, dict) else None
         if not isinstance(flags, list):
             return []
-        total_lines = max(1, len(code.splitlines()))
         cleaned: List[dict] = []
         bug_count = 0
         style_count = 0
@@ -778,9 +802,13 @@ class HintingEngine:
                 end_line = int(f.get("end_line", line))
             except (TypeError, ValueError):
                 continue
-            if line < 1 or line > total_lines:
+            # A model shown an import for context does not get to mark it up.
+            if not view.contains(line):
                 continue
-            end_line = max(line, min(end_line, total_lines))
+            if target and not (target[0] <= line <= target[1]):
+                continue
+            ceiling = target[1] if target else view.max_line
+            end_line = max(line, min(end_line, ceiling))
             question = str(f.get("question", "")).strip()
             if not question:
                 continue
