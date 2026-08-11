@@ -10,6 +10,7 @@ import {
 import { localLineHint } from "./localTutor";
 import { resolveFocus } from "./focusScope";
 import { findBugMarkers, stripBugMarkers } from "./bugMarkers";
+import { buildDigest } from "./codeDigest";
 
 import { codeFingerprint as fingerprintCode } from "./pedagogy";
 
@@ -283,11 +284,19 @@ export class InlineTutor {
     // ever visited inside it.
     this.disposables.push(
       vscode.workspace.onDidCloseTextDocument((doc) => {
-        const key = doc.uri.toString();
-        this.stores.delete(key);
-        this.scanFingerprints.delete(key);
-        this.inFlightFingerprints.delete(key);
-        this.lastFlagCounts.delete(key);
+        const prefix = doc.uri.toString();
+        this.stores.delete(prefix);
+        // The other three are keyed per block now (`${uri}#${label}`), so a
+        // bare-URI delete would leave every block's entry behind.
+        for (const map of [
+          this.scanFingerprints,
+          this.inFlightFingerprints,
+          this.lastFlagCounts as Map<string, unknown>,
+        ]) {
+          for (const k of [...map.keys()]) {
+            if (k === prefix || k.startsWith(`${prefix}#`)) map.delete(k);
+          }
+        }
         this.diagnostics.delete(doc.uri);
       })
     );
@@ -319,6 +328,11 @@ export class InlineTutor {
       this.stores.set(key, store);
     }
     return store;
+  }
+
+  /** Test-only window onto the per-document store; production code uses `storeFor`. */
+  storeForTest(uri: vscode.Uri): AnnotationStore {
+    return this.storeFor(uri);
   }
 
   private get lensMode(): "all" | "flagged" {
@@ -405,8 +419,12 @@ export class InlineTutor {
           ? active.selection
           : new vscode.Selection(at, at);
       const focus = await resolveFocus(doc, selection);
-      const code = stripBugMarkers(doc.getText(), doc.languageId);
-      const res = await this.api.getLineHint(code, line + 1, doc.languageId, {
+      const lines = stripBugMarkers(doc.getText(), doc.languageId).split("\n");
+      const digest = buildDigest(lines, doc.languageId, {
+        start: focus.startLine,
+        end: focus.endLine,
+      });
+      const res = await this.api.getLineHint(digest, line + 1, doc.languageId, {
         start_line: focus.startLine + 1,
         end_line: focus.endLine + 1,
         label: focus.label,
@@ -522,12 +540,23 @@ export class InlineTutor {
   }
 
   private async runScan(doc: vscode.TextDocument, opts: { force?: boolean } = {}) {
+    const editor = vscode.window.activeTextEditor;
+    if (!editor || editor.document !== doc) return;
+    const focus = await resolveFocus(doc, editor.selection);
+    const lines = stripBugMarkers(doc.getText(), doc.languageId).split("\n");
+    const digest = buildDigest(lines, doc.languageId, {
+      start: focus.startLine,
+      end: focus.endLine,
+    });
+    if (!digest.code.trim()) return;
+
+    // Keyed by block, not by document: a file is not one thing to scan any
+    // more, and a URI key would report the second block already scanned.
+    const key = `${doc.uri.toString()}#${focus.label}`;
     // Fingerprinted as well as sent, so removing a marker — which changes the
     // buffer but not the code under review — does not spend a scan re-reading
-    // an identical file.
-    const code = stripBugMarkers(doc.getText(), doc.languageId);
-    const fp = fingerprintCode(code);
-    const key = doc.uri.toString();
+    // an identical digest.
+    const fp = fingerprintCode(digest.code);
     if (!opts.force && this.scanFingerprints.get(key) === fp) return;
     // `inFlightFingerprints` de-dupes concurrent requests without claiming the
     // scan succeeded. Committing `scanFingerprints` up front meant a failed
@@ -536,17 +565,23 @@ export class InlineTutor {
     if (!opts.force && this.inFlightFingerprints.get(key) === fp) return;
     this.inFlightFingerprints.set(key, fp);
     try {
-      const res = await this.api.scanCode(code, doc.languageId);
+      const res = await this.api.scanCode(digest, doc.languageId, {
+        start_line: focus.startLine + 1,
+        end_line: focus.endLine + 1,
+        label: focus.label,
+      });
       this.scanFingerprints.set(key, fp);
       const store = this.storeFor(doc.uri);
-      store.setFlags(res.flags || []);
+      // The backend drops these too. Doing it here as well means a flag can
+      // only ever appear on the block the student is actually on.
+      const inFocus = (res.flags || []).filter(
+        (f) => f.line - 1 >= focus.startLine && f.line - 1 <= focus.endLine
+      );
+      store.setFlagsIn({ start: focus.startLine, end: focus.endLine }, inFocus);
       this.applyFlagsToDoc(doc);
       this.emitter.fire();
-      const editor = vscode.window.activeTextEditor;
-      if (editor && editor.document === doc) {
-        this.renderActiveLineDecoration(editor);
-      }
-      this.maybeOfferReflection(doc, code, store.flags().length);
+      this.renderActiveLineDecoration(editor);
+      this.maybeOfferReflection(doc, key, focus, digest.code, inFocus.length);
     } catch (err) {
       if (err instanceof RateLimitError) {
         this.quietUntil = Date.now() + err.retryAfterSeconds * 1000;
@@ -568,13 +603,20 @@ export class InlineTutor {
    * body opens with `bug:`, and only on the flagged-to-clean transition. The
    * edit goes through a single `WorkspaceEdit`, so one Ctrl+Z puts it back.
    */
-  private async removeFixedBugMarkers(doc: vscode.TextDocument) {
+  private async removeFixedBugMarkers(
+    doc: vscode.TextDocument,
+    focus: { startLine: number; endLine: number }
+  ) {
     const enabled = vscode.workspace
       .getConfiguration("edupeer")
       .get<boolean>("removeFixedBugComments", true);
     if (!enabled) return;
 
-    const markers = findBugMarkers(doc.getText().split("\n"), doc.languageId);
+    const markers = findBugMarkers(doc.getText().split("\n"), doc.languageId).filter(
+      // Narrowed with the scan: this is the one place EduPeer writes into the
+      // student's code, and it may only speak for the block that went clean.
+      (m) => m.line >= focus.startLine && m.line <= focus.endLine
+    );
     if (!markers.length) return;
 
     const edit = new vscode.WorkspaceEdit();
@@ -589,15 +631,20 @@ export class InlineTutor {
     await vscode.workspace.applyEdit(edit);
   }
 
-  /** After a file goes from flagged to clean, offer a reflection quiz once. */
-  private maybeOfferReflection(doc: vscode.TextDocument, code: string, flagCount: number) {
-    const key = doc.uri.toString();
+  /** After a block goes from flagged to clean, offer a reflection quiz once. */
+  private maybeOfferReflection(
+    doc: vscode.TextDocument,
+    key: string,
+    focus: { startLine: number; endLine: number },
+    code: string,
+    flagCount: number
+  ) {
     const prev = this.lastFlagCounts.get(key) ?? 0;
     this.lastFlagCounts.set(key, flagCount);
     if (prev === 0 || flagCount > 0) return;
     // Ahead of the reflection gate on purpose: the markers describe code that
     // is already fixed whether or not this fingerprint has been quizzed.
-    void this.removeFixedBugMarkers(doc);
+    void this.removeFixedBugMarkers(doc, focus);
     this.cleanEmitter.fire();
     const fp = fingerprintCode(code);
     if (this.reflectOffered.has(fp)) return;

@@ -11,6 +11,26 @@ const PY = `def average(numbers):
     return total / len(numbers)
 `;
 
+/**
+ * Long enough that a block-scoped digest can be proven to exclude most of
+ * it. `import math` is the header; `_spacer` is a one-line definition placed
+ * right after it purely so `codeDigest`'s header band stops there — without
+ * a definition line to land on, the header band treats every top-level
+ * assignment below it as a module-level constant and keeps swallowing them
+ * one at a time, up to its own 30-line cap, which would pull early filler
+ * (e.g. `line_10 = 10`) into the digest and falsify the very thing this
+ * fixture exists to prove. `deep` lands exactly on line 200 (0-based 199),
+ * so a cursor there sits inside a block `resolveFocus` can name.
+ */
+const LONG_PYTHON_FILE =
+  [
+    "import math",
+    "def _spacer(): pass",
+    ...Array.from({ length: 197 }, (_, i) => `line_${i + 1} = ${i + 1}`),
+    "def deep(n):",
+    "    return n - 1",
+  ].join("\n") + "\n";
+
 function makeApi(overrides: Record<string, any> = {}) {
   return {
     isAvailable: true,
@@ -403,11 +423,11 @@ describe("line hints", () => {
     await mock.__runCommand("edupeer.nudgeLine", editor.document.uri, 2);
     // Line 2 (0-based) sits inside `average`'s body (lines 0-4), so the
     // heuristic resolves the whole function as the focus block.
-    expect(api.getLineHint).toHaveBeenCalledWith(PY, 3, "python", {
-      start_line: 1,
-      end_line: 5,
-      label: "average",
-    });
+    const [digest, line, language, focus] = api.getLineHint.mock.calls[0];
+    expect(digest.code).toBe(PY);
+    expect(line).toBe(3);
+    expect(language).toBe("python");
+    expect(focus).toEqual({ start_line: 1, end_line: 5, label: "average" });
     const call = editor.setDecorations.mock.calls.at(-1);
     expect(call[1][0].renderOptions.after.contentText).toBe("💡 Check the bound");
   });
@@ -854,11 +874,12 @@ describe("InlineTutor — the lens is the feedback channel", () => {
     jest.advanceTimersByTime(2000);
     for (let i = 0; i < 12; i++) await Promise.resolve();
 
-    expect(api.getLineHint).toHaveBeenCalledWith(expect.any(String), 5, "python", {
-      start_line: 4,
-      end_line: 5,
-      label: "selection",
-    });
+    expect(api.getLineHint).toHaveBeenCalledWith(
+      expect.objectContaining({ code: expect.any(String) }),
+      5,
+      "python",
+      { start_line: 4, end_line: 5, label: "selection" }
+    );
     jest.useRealTimers();
   });
 
@@ -998,12 +1019,11 @@ describe("InlineTutor — the lens is the feedback channel", () => {
 
       await vscode.__runCommand("edupeer.nudgeLine", doc.uri, 1);
 
-      expect(api.getLineHint).toHaveBeenCalledWith(
-        doc.getText(),
-        2,
-        "python",
-        { start_line: 1, end_line: 2, label: "f" }
-      );
+      const [digest, line, language, focus] = api.getLineHint.mock.calls[0];
+      expect(digest.code).toBe(doc.getText());
+      expect(line).toBe(2);
+      expect(language).toBe("python");
+      expect(focus).toEqual({ start_line: 1, end_line: 2, label: "f" });
     });
   });
 });
@@ -1173,11 +1193,11 @@ describe("InlineTutor — the seeded marker never reaches the tutor", () => {
     await mock.__runCommand("edupeer.scanFile");
 
     const sent = api.scanCode.mock.calls[0][0];
-    expect(sent).not.toContain("bug:");
-    expect(sent).toContain("return a + b");
+    expect(sent.code).not.toContain("bug:");
+    expect(sent.code).toContain("return a + b");
     // Line numbers come back 1-based against this text, so blanking a marker
     // must never change how many lines there are.
-    expect(sent.split("\n")).toHaveLength(doc.getText().split("\n").length);
+    expect(sent.code.split("\n")).toHaveLength(doc.getText().split("\n").length);
     expect(doc.getText()).toContain("# bug: subtracts instead of adds");
   });
 
@@ -1188,16 +1208,19 @@ describe("InlineTutor — the seeded marker never reaches the tutor", () => {
     await mock.__runCommand("edupeer.nudgeLine", doc.uri, 1);
 
     const sent = api.getLineHint.mock.calls[0][0];
-    expect(sent).not.toContain("bug:");
-    expect(sent).toContain("return a + b");
+    expect(sent.code).not.toContain("bug:");
+    expect(sent.code).toContain("return a + b");
   });
 
   it("lets a fixed file scan clean instead of the marker keeping it flagged", async () => {
     // Stands in for the real reviewer, which reads the comment and believes
     // it. While the marker was on the wire this file could never scan clean,
     // and the removal that needed a clean scan could therefore never fire.
-    const scanCode = jest.fn(async (code: string) => ({
-      flags: code.includes("bug:") || code.includes("a - b") ? [flag({ line: 2, end_line: 2 })] : [],
+    const scanCode = jest.fn(async (digest: { code: string }) => ({
+      flags:
+        digest.code.includes("bug:") || digest.code.includes("a - b")
+          ? [flag({ line: 2, end_line: 2 })]
+          : [],
     }));
     const api = makeApi({ scanCode });
     const { doc } = setup(api, MARKED.replace("a + b", "a - b"));
@@ -1209,5 +1232,112 @@ describe("InlineTutor — the seeded marker never reaches the tutor", () => {
     await mock.__runCommand("edupeer.scanFile");
 
     expect(mock.workspace.applyEdit).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("the inline surface works on one block", () => {
+  let api: any;
+  let tutor: InlineTutor;
+
+  beforeEach(() => {
+    mock.__reset();
+    jest.useFakeTimers();
+    api = makeApi();
+  });
+
+  afterEach(() => {
+    jest.useRealTimers();
+  });
+
+  /** Open a document as the active editor and stand up a tutor for it. */
+  function openDocument(text: string, languageId = "python") {
+    const doc = mock.__makeDocument(text, languageId);
+    const editor = mock.__makeEditor(doc, 0, 0);
+    mock.window.activeTextEditor = editor;
+    mock.window.visibleTextEditors = [editor];
+    tutor = new InlineTutor({ subscriptions: [] } as any, api);
+    tutor.activate();
+    live.push(tutor);
+    return doc;
+  }
+
+  /** Move the active editor's cursor to `line` (0-based), an empty selection. */
+  function placeCursorOn(doc: any, line: number) {
+    const editor =
+      mock.window.visibleTextEditors.find((e: any) => e.document === doc) ??
+      mock.window.activeTextEditor;
+    const pos = new vscode.Position(line, 0);
+    editor.selection = new vscode.Selection(pos, pos);
+  }
+
+  /**
+   * Trigger the same (unforced) scan path a resting cursor does, and let it
+   * settle. Re-fires the active-editor hook rather than `edupeer.scanFile`,
+   * which always forces — forcing would bypass the very fingerprint de-dupe
+   * these tests are checking.
+   */
+  async function runScanNow() {
+    const editor = mock.window.activeTextEditor;
+    mock.__state.listeners.activeEditor.forEach((fn: any) => fn(editor));
+    await runScheduledScan();
+  }
+
+  it("sends a digest to the scan, not the file", async () => {
+    const doc = openDocument(LONG_PYTHON_FILE, "python");
+    placeCursorOn(doc, 199);
+    await runScanNow();
+    const [digest] = api.scanCode.mock.calls[0];
+    expect(digest.code).not.toContain("line_10 = 10");
+    expect(digest.code).toContain("import math");
+    expect(digest.bands.length).toBeGreaterThan(1);
+  });
+
+  it("tells the scan which block it is reviewing", async () => {
+    const doc = openDocument(LONG_PYTHON_FILE, "python");
+    placeCursorOn(doc, 199);
+    await runScanNow();
+    const [, , focus] = api.scanCode.mock.calls[0];
+    expect(focus.start_line).toBeLessThanOrEqual(200);
+    expect(focus.end_line).toBeGreaterThanOrEqual(200);
+  });
+
+  it("drops a flag the backend returned outside the block", async () => {
+    // Defence in depth: the model should not have been able to see line 3.
+    api.scanCode.mockResolvedValue({
+      flags: [{ line: 3, end_line: 3, question: "Why?", concept: "general",
+                severity: "info", kind: "bug" }],
+    });
+    const doc = openDocument(LONG_PYTHON_FILE, "python");
+    placeCursorOn(doc, 199);
+    await runScanNow();
+    expect(tutor.storeForTest(doc.uri).flags()).toEqual([]);
+  });
+
+  it("sends a digest to the line hint too", async () => {
+    const doc = openDocument(LONG_PYTHON_FILE, "python");
+    placeCursorOn(doc, 199);
+    await mock.__runCommand("edupeer.nudgeLine");
+    const [digest, line] = api.getLineHint.mock.calls[0];
+    expect(line).toBe(200);
+    expect(digest.totalLines).toBe(LONG_PYTHON_FILE.split("\n").length);
+    expect(digest.code).not.toContain("line_10 = 10");
+  });
+
+  it("scans a block once per version of its own text", async () => {
+    const doc = openDocument(LONG_PYTHON_FILE, "python");
+    placeCursorOn(doc, 199);
+    await runScanNow();
+    placeCursorOn(doc, 200);
+    await runScanNow();
+    expect(api.scanCode).toHaveBeenCalledTimes(1);
+  });
+
+  it("scans a second block on its own fingerprint", async () => {
+    const doc = openDocument(LONG_PYTHON_FILE, "python");
+    placeCursorOn(doc, 199);
+    await runScanNow();
+    placeCursorOn(doc, 20);
+    await runScanNow();
+    expect(api.scanCode).toHaveBeenCalledTimes(2);
   });
 });
