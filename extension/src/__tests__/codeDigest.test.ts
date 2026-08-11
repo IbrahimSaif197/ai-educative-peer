@@ -157,3 +157,100 @@ describe("buildDigest carries the imports however far down the block is", () => 
     expect(digest.bands[0].end).toBeLessThan(7);
   });
 });
+
+// Fix round 1: cases the code review found broken by execution, in the
+// languages whose importRegex changed again to fix them.
+
+const C_HEADER_GUARD = [
+  "#ifndef FOO_H",       // 1
+  "#define FOO_H",       // 2
+  "#include <stdio.h>",  // 3
+  "",                    // 4
+  "",                    // 5
+  "",                    // 6
+  "",                    // 7
+  "int main(void) {",    // 8
+  "    return 0;",       // 9
+  "}",                   // 10
+];
+
+const RUST_PUB_USE = [
+  "pub use crate::foo::Bar;",   // 1
+  "pub mod foo;",                // 2
+  "",                             // 3
+  "",                             // 4
+  "",                             // 5
+  "",                             // 6
+  "",                             // 7
+  "fn main() {}",                 // 8
+];
+
+const JAVA_IMPORTS = [
+  "import java.util.List;",             // 1
+  "",                                   // 2
+  "import static org.junit.Assert.*;",  // 3
+  "",                                   // 4
+  "import com.example.Foo;",            // 5
+  "",                                   // 6
+  "",                                   // 7
+  "",                                   // 8
+  "",                                   // 9
+  "public class Foo {",                 // 10
+  "}",                                  // 11
+];
+
+const GO_IMPORTS = [
+  "package main",          // 1
+  "",                      // 2
+  "import (",              // 3
+  "\t\"fmt\"",              // 4
+  "\t\"os\"",               // 5
+  ")",                      // 6
+  "",                       // 7
+  "const MaxRetries = 3",   // 8
+  "",                       // 9
+  "",                       // 10
+  "",                       // 11
+  "",                       // 12
+  "",                       // 13
+  "func main() {",          // 14
+  "}",                      // 15
+];
+
+describe("buildDigest keeps the header across the languages the fix round touched", () => {
+  it("C: a header guard's #ifndef doesn't blank out the header - it still reaches the #include", () => {
+    // Before the fix, #ifndef matched nothing, sawImport stayed false, and
+    // the catch-all didn't apply either - headerEnd returned 0 on the first
+    // iteration and #define/#include on lines 2-3 were never reached.
+    const digest = buildDigest(C_HEADER_GUARD, "c", { start: 7, end: 9 });
+    expect(digest.bands[0]).toEqual({ start: 1, end: 3 });
+    expect(digest.code).toContain("#include <stdio.h>");
+  });
+
+  it("Rust: a file opening with pub use / pub mod gets a non-zero header, not the pre-fix zero", () => {
+    const digest = buildDigest(RUST_PUB_USE, "rust", { start: 7, end: 7 });
+    expect(digest.bands[0]).toEqual({ start: 1, end: 2 });
+    expect(digest.code).toContain("pub use crate::foo::Bar;");
+    expect(digest.code).toContain("pub mod foo;");
+  });
+
+  it("Java: import static does not fall into the constant branch and get cut short by the next blank line", () => {
+    // Before the fix, "import static ..." missed importRegex, fell into the
+    // module-constant catch-all, set constantTaken, and the blank line after
+    // it ended the header before "import com.example.Foo;" was reached.
+    const digest = buildDigest(JAVA_IMPORTS, "java", { start: 9, end: 10 });
+    expect(digest.bands[0]).toEqual({ start: 1, end: 5 });
+    expect(digest.code).toContain("import java.util.List;");
+    expect(digest.code).toContain("import static org.junit.Assert.*;");
+    expect(digest.code).toContain("import com.example.Foo;");
+  });
+
+  it("Go: the closing paren of a multi-import block is not mistaken for a constant, so the real constant survives", () => {
+    // Before the fix, the bare ")" missed importRegex, got claimed as a
+    // module constant instead, and the blank line after it ended the header
+    // before "const MaxRetries = 3" was reached.
+    const digest = buildDigest(GO_IMPORTS, "go", { start: 13, end: 14 });
+    expect(digest.bands[0]).toEqual({ start: 1, end: 8 });
+    expect(digest.code).toContain("const MaxRetries = 3");
+  });
+});
