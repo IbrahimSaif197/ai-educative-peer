@@ -1351,7 +1351,11 @@ class TestACodeViewRebuildsAbsoluteLineNumbers:
     def test_it_announces_nothing_after_the_end_when_the_length_is_unknown(self):
         from hinting_engine import CodeView
         view = CodeView.of(self.DIGEST, self.BANDS)
-        assert "175" not in view.numbered()
+        # The last band's last line is the last thing said. Asserted as "and
+        # then nothing" rather than as "175 is absent": the tail announcement
+        # this rules out is `[lines 175-241 ...]`, so a needle narrow enough
+        # to be unambiguous would also stop matching it.
+        assert view.numbered().endswith("174:     return mean(x)")
 
     def test_it_announces_the_head_when_the_first_band_does_not_start_at_one(self):
         from hinting_engine import CodeView
@@ -1445,7 +1449,7 @@ class TestACodeViewRebuildsAbsoluteLineNumbers:
     def test_a_non_numeric_total_lines_is_treated_as_unknown(self):
         from hinting_engine import CodeView
         view = CodeView.of(self.DIGEST, self.BANDS, total_lines="lots")
-        assert "175" not in view.numbered()
+        assert view.numbered().endswith("174:     return mean(x)")
 
 
 class TestTheConversationReadsTheDigest:
