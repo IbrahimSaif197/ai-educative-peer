@@ -2317,4 +2317,34 @@ describe("the conversation carries a digest, not the file", () => {
     const body = hintRequest(h.api);
     expect(body.bands).toBeDefined();
   });
+
+  it("does not answer with a closed file's digest after the editor closes", async () => {
+    // 1. Open a file and ask, so `lastDigest` is populated for it.
+    const h = await build();
+    const doc = openDocument(LONG_PYTHON_FILE, "python");
+    placeCursorOn(doc, 199);
+    await sendFocusNow(h);
+    await h.provider.askExternal("why does this fail?", "");
+    // Sanity check: the first ask really did carry this file's digest, so
+    // the negative assertion below is meaningful rather than vacuous.
+    expect(hintRequest(h.api).code).toContain("def deep(n):");
+
+    // 2. Close the editor and force a fresh resolve — `sendFocus`'s
+    // no-active-editor branch is what is supposed to clear `lastDigest`
+    // alongside `lastFocus`.
+    mock.window.activeTextEditor = undefined;
+    await sendFocusNow(h);
+
+    // 3. Ask again through the webview path: `askHint` never requires an
+    // active editor, and `aboutOpenFile` defaults true regardless of mode.
+    // "reflect" sidesteps the explain-first gate, which is orthogonal to
+    // what this test checks.
+    await h.send({ type: "askHint", question: "still there?", code: "", mode: "reflect" });
+
+    // 4. A stale `lastDigest` left behind by the reset would answer this ask
+    // with the closed file's content instead of falling back to `code`.
+    const body = hintRequest(h.api);
+    expect(body.code).not.toContain("def deep(n):");
+    expect(body.code).not.toContain("import math");
+  });
 });
