@@ -437,8 +437,8 @@ describe("buildDigest stays inside its budget", () => {
   it("saturates the budget when focus alone exceeds it", () => {
     // Focus {100, 399} (0-based) = file lines 101-400 (1-based), 300 lines.
     // With 3-line margin: 98-403 clamped to 98-401 = 304 lines.
-    // Header adds 1 line. No signatures (huge has no defs).
-    // Without a budget guard, this would send 305 lines; the guard cuts to 120.
+    // headerEnd(huge, "python") = 30 (module-constant catch-all extends to max).
+    // Without a budget guard, this would send 334 lines; the guard cuts to 120.
     const digest = buildDigest(huge, "python", { start: 100, end: 399 });
     expect(bandLineCount(digest.bands)).toBe(MAX_DIGEST_LINES);
   });
@@ -453,8 +453,8 @@ describe("buildDigest stays inside its budget", () => {
 
   it("spends the budget on the block before the signatures", () => {
     // Header: 1 line (import). Focus on target function (index 63-163): 101 lines.
-    // With 3-line margin: 104 lines total. Budget left: ~15 lines for 30 signatures.
-    // The nearest ~7-8 definitions fit; the distant ones do not.
+    // With 3-line margin: 104 lines total. Budget left: ~15 new signature lines.
+    // Signatures f_14 through f_29 fit (nearest 16 defs); f_0 through f_13 do not.
     const digest = buildDigest(withDefinitions, "python", { start: 63, end: 163 });
     // target's last body line should be present (focus got all its lines)
     expect(digest.code).toContain("body_line_99 = 99");
@@ -464,10 +464,13 @@ describe("buildDigest stays inside its budget", () => {
     expect(digest.code).not.toContain("def f_0():");
   });
 
-  it("holds the band invariant at saturation", () => {
-    // Same saturating focus as test 1: ensure the invariant holds
-    // even when the budget truncates the digest.
+  it("spends the budget on the block before the header", () => {
+    // With saturating focus {100, 399}, the focus take fills all 120 slots as
+    // file lines 98-217 before the header take runs. Header (line 1) loses.
     const digest = buildDigest(huge, "python", { start: 100, end: 399 });
-    expect(digest.code.split("\n")).toHaveLength(bandLineCount(digest.bands));
+    // Line 1 "import math" is not in the digest (header lost to budget)
+    expect(digest.code).not.toContain("import math");
+    // Line 217 is the last line focus kept before budget was exhausted
+    expect(digest.code).toContain("line_216 = 216");
   });
 });
