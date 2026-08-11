@@ -179,8 +179,13 @@ export class InlineTutor {
         if (!this.isSupported(e.textEditor.document)) return;
         this.scheduleLineHint(e.textEditor);
         // Resting the cursor in a block is working on it. The fingerprint in
-        // `runScan` is per block, so a student scrolling through a file pays
-        // once per block rather than once per pause.
+        // `runScan` is per block, so a student scrolling through a file
+        // usually pays once per block rather than once per pause — with one
+        // exception, since the cursor anchor: in a block longer than the
+        // digest budget the digest itself moves with the cursor, so its
+        // fingerprint changes and an unchanged block can be scanned again.
+        // See the note at the anchor in `runScan` for why that is the price
+        // worth paying.
         this.scheduleScan(e.textEditor.document);
         this.renderActiveLineDecoration(e.textEditor);
       })
@@ -552,13 +557,19 @@ export class InlineTutor {
     if (!editor || editor.document !== doc) return;
     const focus = await resolveFocus(doc, editor.selection);
     // Anchored on the cursor for the same reason `fetchLineHint` is: in a
-    // block longer than the digest budget the tail is dropped, and a scan
-    // that never saw the line the student is on still reports the block
-    // clean — which clears its flags and, on the flagged-to-clean edge,
-    // deletes the `bug:` markers inside it. The cost is that in such a block
-    // the digest changes as the cursor moves, so `fp` changes and the scan
-    // re-runs; that is the honest reading, because a different part of the
-    // block is genuinely under review.
+    // block longer than the digest budget the tail is dropped, so the review
+    // could otherwise never reach the line the student is on. What the anchor
+    // buys is exact — a flag can land where they are looking, which it
+    // previously could not — and no more than that. It does NOT make the
+    // verdict trustworthy for the rest of an oversized block: `setFlagsIn`
+    // below and `removeFixedBugMarkers`'s filter both act on the whole focus
+    // range, so a marker at line 250 of a 300-line class is still deletable
+    // by a scan that only ever saw lines 1-119 and the anchor. That hazard
+    // predates the anchor and is not closed by it.
+    //
+    // The cost: in such a block the digest moves with the cursor, so `fp`
+    // changes and an unchanged block can be rescanned. Worth paying, because
+    // a different part of the block is genuinely under review each time.
     const digest = digestFor(doc, focus, editor.selection.active.line);
     if (!digest.code.trim()) return;
 
