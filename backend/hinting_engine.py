@@ -456,6 +456,13 @@ def number_lines(
     editor; anything dropped from the top silently shifts every number after
     it. Same `<n>: <text>` format `scan_code` and `generate_line_hint` use.
 
+    "The client sends the whole document" is true of pre-1.5.2 clients only.
+    From 1.5.2 the extension sends a digest with `bands`, and `CodeView`
+    numbers that instead — this function, `_window` and `FOCUS_CONTEXT_LINES`
+    are the compatibility path for every marketplace install that has not
+    updated yet. They are still reached, still correct, and must stay until
+    that population turns over. Not dead code.
+
     Over `max_lines` the file is windowed around `focus` rather than sent
     whole — see `MAX_CODE_LINES_SENT`. The numbers stay absolute, so a hint
     about line 180 still says 180, and each elision is announced: a model that

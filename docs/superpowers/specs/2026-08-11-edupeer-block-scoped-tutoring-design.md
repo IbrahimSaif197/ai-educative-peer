@@ -239,12 +239,21 @@ block they are generous, which is the right direction.
 | Extension activates | scans whole file | nothing |
 | Switch tab | scans whole file | nothing |
 | Cursor rests in a block | line hint only | line hint, and scan that block |
-| Edit inside the current block | scans whole file | scans that block |
-| Edit in a different block | scans whole file | nothing |
+| Edit anywhere | scans whole file | scans the block the cursor is in |
 
 Opening a file is not working on it. The activation scan
 (`inlineTutor.ts:295-298`) and the active-editor scan (`:199-206`) are removed;
 nothing runs until the student lands somewhere.
+
+An earlier draft of this table split the edit row in two — "edit inside the
+current block" scans it, "edit in a different block" does nothing — and that
+is not what ships. `runScan` resolves the focus from the live cursor, so an
+edit anywhere scans wherever the cursor is. That is the better behaviour
+(you cannot edit a block without your cursor in it) and it needs no
+before-and-after comparison of where the edit landed, but it is one row, not
+two. One exception is worth knowing: `runScan` returns early when the
+document is not the active editor's, so an edit followed by a tab switch
+inside the 3.5s debounce drops that scan.
 
 Resting the cursor in a block now schedules a scan of it, which it did not do
 before. That is the "using it" signal — a student stuck on a function is
@@ -253,9 +262,13 @@ looking at it, not necessarily typing in it.
 The obvious risk is a student scrolling through a ten-function file and firing
 ten scans. `scanFingerprints` is keyed by document URI, which would treat "same
 file" as "already scanned" and mask the problem inconsistently. It becomes
-keyed by `uri#label#blockText`, so revisiting a block that has not changed
-costs nothing and each block is scanned once per version of its own text. The
-3.5s debounce and the 429 back-off window are unchanged.
+keyed by `uri#breadcrumb`, with the digest's fingerprint as the value, so
+revisiting a block that has not changed costs nothing and each block is scanned
+once per version of its own text. `breadcrumb`, not `label`: a bare identifier
+collides — two classes in one file can each have a `run` — and the breadcrumb
+is the qualified path. It carries the span on the selection and window paths,
+where there is no name to qualify. The 3.5s debounce and the 429 back-off
+window are unchanged.
 
 `edupeer.scanFile` keeps its command id, for anyone who has bound it, and is
 retitled **EduPeer: Scan This Block**.

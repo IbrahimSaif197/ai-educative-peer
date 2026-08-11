@@ -11,8 +11,12 @@ export interface TokenProvider {
 
 /**
  * The block inside `code` the student is working on, 1-based and inclusive.
- * `code` still carries the whole file — this narrows attention, it does not
- * replace context.
+ *
+ * `code` is a digest, not the file: the imports, the enclosing headers, one
+ * line per top-level definition, and this block. So the span is not merely
+ * advisory any more — it names the part of the digest the answer is about,
+ * and the backend scopes both its instruction and its flags to it. The
+ * numbers are absolute editor lines, the same coordinates `bands` uses.
  */
 export interface FocusRange {
   start_line: number;

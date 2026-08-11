@@ -3,7 +3,12 @@
  *
  * The tutor needs the student's imports and the block they are working on. It
  * does not need the other four hundred lines, and until this module existed
- * every request carried them: six call sites posted `doc.getText()`.
+ * every request carried them: seven call sites posted `doc.getText()` — the
+ * seventh, `extension.ts`'s `askWithActiveFile`, was only found in Task 16.
+ *
+ * `documentDigest.digestFor` is the one door from a `TextDocument` to a
+ * digest. This module never imports `vscode`, so everything below is testable
+ * against a fixture array.
  *
  * A digest is a handful of line ranges lifted out of the file, plus the
  * absolute line numbers they came from. The numbers are the whole point —

@@ -543,6 +543,12 @@ export class InlineTutor {
 
   private async runScan(doc: vscode.TextDocument, opts: { force?: boolean } = {}) {
     const editor = vscode.window.activeTextEditor;
+    // No active editor showing this document means no cursor, and without a
+    // cursor there is no block to scan — "the code the student is working on"
+    // is defined by where they are. One consequence worth naming: an edit
+    // followed by a tab switch inside the 3.5s debounce silently drops the
+    // scheduled scan. That is bounded and arguably right (they left), and
+    // coming back to the tab and resting the cursor schedules a fresh one.
     if (!editor || editor.document !== doc) return;
     const focus = await resolveFocus(doc, editor.selection);
     // Anchored on the cursor for the same reason `fetchLineHint` is: in a
@@ -673,7 +679,9 @@ export class InlineTutor {
     this.reflectOffered.add(fp);
     void vscode.window
       .showInformationMessage(
-        "EduPeer: your file scans clean now. Want a quick reflection quiz on the fix?",
+        // "this block", not "your file": the gate above is per block, and a
+        // file with three functions can have two of them still flagged.
+        "EduPeer: this block scans clean now. Want a quick reflection quiz on the fix?",
         "Quiz me",
         "Not now"
       )
