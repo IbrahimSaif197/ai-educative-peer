@@ -143,6 +143,14 @@ function indentOf(line: string): number {
 }
 
 /**
+ * A line that is nothing but braces/brackets/punctuation once whitespace is
+ * stripped. An Allman-style opening `{` on its own line is the common case.
+ */
+function isPunctuationOnly(text: string): boolean {
+  return /^[{}()\[\];:,]+$/.test(text.replace(/\s+/g, ""));
+}
+
+/**
  * The headers of the blocks the focus sits inside, outermost last.
  *
  * Walked by decreasing indentation rather than by parsing: a line above the
@@ -150,6 +158,18 @@ function indentOf(line: string): number {
  * anything already collected, is enclosing it. Good enough for a `class` in
  * Python and an outer `class`/`impl` in the brace languages, which is what
  * this band is for.
+ *
+ * Two adjustments for Allman-style braces (the opening `{` on its own line —
+ * routine in C#/Java, and what some C++/Rust formatters produce too). First,
+ * a lone brace is skipped outright rather than measured: at column 0 it
+ * would read as a file-level boundary and stop the walk one line short of
+ * the real header, and at any other indent it would read as a sibling and
+ * mask the header sitting right behind it, since a header shares its own
+ * opening brace's indent. Second, java's and csharp's `lensRegex` requires a
+ * trailing `{` or `)` — deliberately, so a bare forward declaration doesn't
+ * light up — which a header split across two lines never has on its own
+ * line; a candidate that misses `lensRegex` alone is retried joined with the
+ * next line's text before it is given up on.
  */
 function scopeHeaderLines(
   lines: string[],
@@ -163,10 +183,14 @@ function scopeHeaderLines(
   for (let i = focusStart - 1; i >= 0 && found.length < SCOPE_BAND_MAX_LINES; i--) {
     const text = lines[i];
     if (!text.trim()) continue;
+    if (isPunctuationOnly(text)) continue;
     const indent = indentOf(text);
     if (indent >= minIndent) continue;
     minIndent = indent;
-    if (language.lensRegex.test(text)) found.push(i + 1); // 1-based
+    const joined = `${text.trim()} ${(lines[i + 1] ?? "").trim()}`;
+    if (language.lensRegex.test(text) || language.lensRegex.test(joined)) {
+      found.push(i + 1); // 1-based, the candidate's own line, not the brace's
+    }
     if (indent === 0) break;
   }
   return found;

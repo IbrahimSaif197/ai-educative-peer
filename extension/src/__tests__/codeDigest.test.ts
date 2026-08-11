@@ -2,6 +2,8 @@ import {
   bandLineCount,
   buildDigest,
   FOCUS_MARGIN_LINES,
+  SCOPE_BAND_MAX_LINES,
+  SIGNATURE_BAND_MAX_LINES,
   toBands,
 } from "../codeDigest";
 
@@ -255,8 +257,6 @@ describe("buildDigest keeps the header across the languages the fix round touche
   });
 });
 
-import { SCOPE_BAND_MAX_LINES, SIGNATURE_BAND_MAX_LINES } from "../codeDigest";
-
 const CLASSY = [
   "import math",                        // 1
   "",                                   // 2
@@ -295,8 +295,34 @@ describe("buildDigest names what the block can call", () => {
     expect(digest.code).toContain("class Stats:");
   });
 
-  it("caps the scope chain at three headers", () => {
+  it("caps the scope chain at three headers, keeping the ones nearest the block", () => {
     expect(SCOPE_BAND_MAX_LINES).toBe(3);
+    // Four levels of nesting, with twenty filler methods between class D and
+    // the method so that none of the four class headers are close enough to
+    // reach the digest via the focus margin - and, since signatureLines
+    // scans the whole file for definitions regardless of nesting, so that
+    // class A also falls outside its own twenty-nearest window. Both bands
+    // are pushed away deliberately: with only one level of nesting (as in
+    // the tests above), the cap is never actually exercised, and margin or
+    // signature bleed can make a broken cap look like a working one - which
+    // is exactly how the test this replaces shipped never having caught one.
+    const DEEPLY_NESTED = [
+      "class A:",
+      " ".repeat(4) + "class B:",
+      " ".repeat(8) + "class C:",
+      " ".repeat(12) + "class D:",
+      ...Array.from(
+        { length: 20 },
+        (_, i) => " ".repeat(16) + `def filler_${i}(self): pass`
+      ),
+      " ".repeat(16) + "def method(self):",
+      " ".repeat(20) + "return 1",
+    ];
+    const digest = buildDigest(DEEPLY_NESTED, "python", { start: 24, end: 25 });
+    expect(digest.code).toContain("class B:");
+    expect(digest.code).toContain("class C:");
+    expect(digest.code).toContain("class D:");
+    expect(digest.code).not.toContain("class A:");
   });
 
   it("caps signatures at twenty, keeping the ones nearest the block", () => {
@@ -319,5 +345,71 @@ describe("buildDigest names what the block can call", () => {
   it("still holds the band invariant with every band in play", () => {
     const digest = buildDigest(CLASSY, "python", { start: 6, end: 7 });
     expect(digest.code.split("\n")).toHaveLength(bandLineCount(digest.bands));
+  });
+});
+
+// Fix round 1: scopeHeaderLines returned [] for idiomatic Allman-brace C#
+// and Java - a lone opening brace on its own line either read as a same-
+// indent sibling (masking the real header behind it) or, at column 0, as a
+// file-level boundary that stopped the walk one line short of the header.
+
+const CSHARP_ALLMAN = [
+  "public class Foo",       // 1
+  "{",                       // 2
+  "    public void Bar()",   // 3
+  "    {",                   // 4
+  "        DoWork();",       // 5
+  "    }",                   // 6
+  "}",                       // 7
+];
+
+const CSHARP_KNR = [
+  "public class Foo {",       // 1
+  "    public void Bar() {",  // 2
+  "        DoWork();",        // 3
+  "    }",                    // 4
+  "}",                        // 5
+];
+
+describe("scopeHeaderLines reaches past a lone brace to the real header", () => {
+  it("C# Allman: the class header sits behind its own opening brace, not the method's", () => {
+    // Direct lensRegex match fails on "public class Foo" alone (csharp's
+    // pattern requires a trailing `{` or `)`), so this also exercises the
+    // join-with-next-line retry - the brace it joins with is two lines up,
+    // past the method's own header and its own opening brace.
+    const digest = buildDigest(CSHARP_ALLMAN, "csharp", { start: 4, end: 4 });
+    expect(digest.code).toContain("public class Foo");
+  });
+
+  it("C# K&R: the brace-on-the-header-line style this was already handling keeps working", () => {
+    const digest = buildDigest(CSHARP_KNR, "csharp", { start: 2, end: 2 });
+    expect(digest.code).toContain("public class Foo {");
+  });
+
+  it("Rust: a stray brace between the focus and its impl doesn't cut the walk short", () => {
+    // Rust's lensRegex matches "impl Foo" directly (no trailing brace/paren
+    // required), so without the twenty fillers below, the signature band
+    // would independently pull "impl Foo" into the digest and this test
+    // would pass whether or not scopeHeaderLines's own fix worked. The
+    // fillers push "impl Foo" outside the signature band's twenty-nearest
+    // window (and the focus margin never reaches it either), so its
+    // presence here can only come from scopeHeaderLines stepping past the
+    // lone `{` between "impl Foo" and its body - the one thing this test
+    // exists to prove.
+    const RUST_STRAY_BRACE = [
+      "impl Foo",
+      "{",
+      ...Array.from(
+        { length: 20 },
+        (_, i) => " ".repeat(4) + `fn filler_${i}(&self) {}`
+      ),
+      " ".repeat(4) + "fn bar(&self)",
+      " ".repeat(4) + "{",
+      " ".repeat(8) + "do_work();",
+      " ".repeat(4) + "}",
+      "}",
+    ];
+    const digest = buildDigest(RUST_STRAY_BRACE, "rust", { start: 24, end: 24 });
+    expect(digest.code).toContain("impl Foo");
   });
 });
