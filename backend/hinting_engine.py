@@ -478,6 +478,106 @@ def number_lines(
     return "\n".join(parts)
 
 
+def _parse_bands(bands, line_count: int) -> Optional[List[Tuple[int, int]]]:
+    """Bands as (start, end) pairs, or None when they cannot be believed.
+
+    Ascending, disjoint, 1-based, and covering exactly as many lines as the
+    code arrived with. Anything else and the caller falls back to treating
+    the code as a whole file - which is what an extension predating `bands`
+    sends, and the only safe reading of a digest whose coordinates are wrong.
+    """
+    if not bands:
+        return None
+    parsed: List[Tuple[int, int]] = []
+    previous_end = 0
+    for band in bands:
+        try:
+            start = int(band["start"]) if isinstance(band, dict) else int(band.start)
+            end = int(band["end"]) if isinstance(band, dict) else int(band.end)
+        except (TypeError, ValueError, KeyError, AttributeError):
+            return None
+        if start < 1 or end < start or start <= previous_end:
+            return None
+        parsed.append((start, end))
+        previous_end = end
+    if sum(end - start + 1 for start, end in parsed) != line_count:
+        return None
+    return parsed
+
+
+class CodeView:
+    """The student's code, and which of their editor's lines it came from.
+
+    `code` stopped being the whole file: it carries the imports and the block
+    being worked on. Position in the string is therefore no longer the line
+    number, and three separate places used to assume it was - the prompt's
+    numbering, `generate_line_hint`'s window, and `scan_code`'s validation of
+    the model's flags. All three ask this object instead.
+    """
+
+    def __init__(
+        self,
+        lines: List[str],
+        bands: List[Tuple[int, int]],
+        total_lines: Optional[int] = None,
+    ):
+        self._lines = lines
+        self._bands = bands
+        self._total_lines = total_lines
+        self._by_line = {}
+        cursor = 0
+        for start, end in bands:
+            for n in range(start, end + 1):
+                self._by_line[n] = lines[cursor]
+                cursor += 1
+
+    @classmethod
+    def of(cls, code: str, bands=None, total_lines: Optional[int] = None) -> "CodeView":
+        lines = code.splitlines()
+        parsed = _parse_bands(bands, len(lines))
+        if parsed is None:
+            parsed = [(1, len(lines))] if lines else []
+            total_lines = len(lines) or None
+        return cls(lines, parsed, total_lines)
+
+    @property
+    def max_line(self) -> int:
+        return self._bands[-1][1] if self._bands else 0
+
+    def contains(self, n: int) -> bool:
+        return n in self._by_line
+
+    def line_at(self, n: int) -> Optional[str]:
+        return self._by_line.get(n)
+
+    def slice(self, start: int, end: int) -> List[Tuple[int, str]]:
+        return [(n, self._by_line[n]) for n in range(start, end + 1) if n in self._by_line]
+
+    def numbered(self) -> str:
+        """`<n>: <text>`, the format every other prompt in this module uses.
+
+        Each elision is announced. A model handed a block with no notice that
+        the top of the file is missing will confidently report an import that
+        is simply out of frame.
+        """
+        if not self._bands:
+            return "(no code provided)"
+        parts: List[str] = []
+        previous_end = 0
+        for start, end in self._bands:
+            if start > previous_end + 1:
+                parts.append(
+                    f"[lines {previous_end + 1}-{start - 1} of this file are not shown]"
+                )
+            parts.extend(f"{n}: {self._by_line[n]}" for n in range(start, end + 1))
+            previous_end = end
+        if self._total_lines and self._total_lines > previous_end:
+            parts.append(
+                f"[lines {previous_end + 1}-{self._total_lines} of this file are not shown]"
+            )
+        return "\n".join(parts)
+
+
 def focus_instruction(focus: Optional[dict]) -> str:
     """Tell the model which lines to answer about.
 

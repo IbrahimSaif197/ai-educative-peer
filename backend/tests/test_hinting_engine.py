@@ -1240,3 +1240,97 @@ class TestBuildEnginePicksAProvider:
         monkeypatch.delenv("GROQ_API_KEY", raising=False)
         with pytest.raises(RuntimeError, match="ANTHROPIC_API_KEY"):
             hinting_engine.build_engine()
+
+
+class TestACodeViewRebuildsAbsoluteLineNumbers:
+    """`code` is a digest now, so position in the string is not the line number.
+
+    Three places derived line numbers from position and would each be quietly
+    wrong on a digest: the prompt's numbering, `generate_line_hint`'s window,
+    and `scan_code`'s flag validation. This is the one object all three ask.
+    """
+
+    DIGEST = "import math\nfrom stats import mean\ndef deep(x):\n    return mean(x)"
+    BANDS = [{"start": 1, "end": 2}, {"start": 173, "end": 174}]
+
+    def _view(self):
+        from hinting_engine import CodeView
+        return CodeView.of(self.DIGEST, self.BANDS, total_lines=241)
+
+    def test_it_numbers_each_band_at_its_real_lines(self):
+        numbered = self._view().numbered()
+        assert "1: import math" in numbered
+        assert "2: from stats import mean" in numbered
+        assert "173: def deep(x):" in numbered
+        assert "174:     return mean(x)" in numbered
+
+    def test_it_announces_the_gap_between_bands(self):
+        # A tutor that cannot see lines 3-172 must know that, or it reports an
+        # import missing when the import is merely out of frame.
+        assert "[lines 3-172 of this file are not shown]" in self._view().numbered()
+
+    def test_it_announces_the_tail_when_it_knows_the_file_is_longer(self):
+        assert "[lines 175-241 of this file are not shown]" in self._view().numbered()
+
+    def test_it_announces_nothing_after_the_end_when_the_length_is_unknown(self):
+        from hinting_engine import CodeView
+        view = CodeView.of(self.DIGEST, self.BANDS)
+        assert "175" not in view.numbered()
+
+    def test_it_announces_the_head_when_the_first_band_does_not_start_at_one(self):
+        from hinting_engine import CodeView
+        view = CodeView.of("def deep(x):\n    return x", [{"start": 40, "end": 41}], 60)
+        assert "[lines 1-39 of this file are not shown]" in view.numbered()
+
+    def test_line_at_reaches_across_the_gap(self):
+        assert self._view().line_at(173) == "def deep(x):"
+        assert self._view().line_at(1) == "import math"
+
+    def test_line_at_returns_nothing_for_a_line_it_does_not_hold(self):
+        assert self._view().line_at(100) is None
+
+    def test_contains_rejects_a_line_in_the_gap(self):
+        view = self._view()
+        assert view.contains(174) is True
+        assert view.contains(3) is False
+
+    def test_slice_skips_the_numbers_it_does_not_hold(self):
+        assert self._view().slice(1, 173) == [
+            (1, "import math"),
+            (2, "from stats import mean"),
+            (173, "def deep(x):"),
+        ]
+
+    def test_max_line_is_the_last_line_it_holds(self):
+        assert self._view().max_line == 174
+
+    def test_no_bands_means_the_whole_file_starting_at_line_one(self):
+        from hinting_engine import CodeView
+        view = CodeView.of("a = 1\nb = 2")
+        assert view.numbered() == "1: a = 1\n2: b = 2"
+        assert view.line_at(2) == "b = 2"
+
+    def test_bands_that_disagree_with_the_code_fall_back_to_the_whole_file(self):
+        # Two bands claiming six lines against a two-line digest. Believing
+        # them would renumber every line and cite the wrong one; the safe
+        # reading is that this client does not speak bands.
+        from hinting_engine import CodeView
+        view = CodeView.of("a = 1\nb = 2", [{"start": 1, "end": 3}, {"start": 9, "end": 11}])
+        assert view.numbered() == "1: a = 1\n2: b = 2"
+
+    def test_overlapping_bands_fall_back_to_the_whole_file(self):
+        from hinting_engine import CodeView
+        view = CodeView.of("a = 1\nb = 2", [{"start": 1, "end": 1}, {"start": 1, "end": 1}])
+        assert view.line_at(1) == "a = 1"
+        assert view.line_at(2) == "b = 2"
+
+    def test_descending_bands_fall_back_to_the_whole_file(self):
+        from hinting_engine import CodeView
+        view = CodeView.of("a = 1\nb = 2", [{"start": 9, "end": 9}, {"start": 1, "end": 1}])
+        assert view.line_at(2) == "b = 2"
+
+    def test_an_empty_digest_holds_nothing(self):
+        from hinting_engine import CodeView
+        view = CodeView.of("")
+        assert view.line_at(1) is None
+        assert view.max_line == 0
