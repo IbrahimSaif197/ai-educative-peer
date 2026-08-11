@@ -802,12 +802,17 @@ class HintingEngine:
                 end_line = int(f.get("end_line", line))
             except (TypeError, ValueError):
                 continue
-            # A model shown an import for context does not get to mark it up.
+            # A line the digest never sent at all cannot be a real flag.
             if not view.contains(line):
                 continue
+            # A model shown an import for context does not get to mark it up.
             if target and not (target[0] <= line <= target[1]):
                 continue
-            ceiling = target[1] if target else view.max_line
+            # focus.end_line is client-supplied and unchecked against the
+            # digest - a focus reaching past what the view actually covers
+            # must not widen the ceiling past view.max_line, or a flag's
+            # end_line can name a line that was never sent in any digest.
+            ceiling = min(target[1], view.max_line) if target else view.max_line
             end_line = max(line, min(end_line, ceiling))
             question = str(f.get("question", "")).strip()
             if not question:

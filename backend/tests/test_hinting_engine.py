@@ -1564,6 +1564,37 @@ class TestTheScanReviewsTheBlockNotTheFile:
         flags = engine.scan_code("ignored", "python", focus=self.FOCUS, view=self._view())
         assert flags[0]["end_line"] == 174
 
+    def test_it_clamps_a_flag_to_the_focus_even_when_the_view_holds_more(self):
+        # The digest can carry more context than the focus block itself -
+        # that is the whole point of sending it. FOCUS still ends at 174;
+        # this view's second band runs to 190, standing in for extra lines
+        # sent around the block purely for context.
+        from hinting_engine import CodeView
+        body = "\n".join(f"    line_{i}" for i in range(1, 19))  # 18 lines, matches band width
+        view = CodeView.of(
+            "import math\nfrom stats import mean\n" + body,
+            [{"start": 1, "end": 2}, {"start": 173, "end": 190}],
+            total_lines=241,
+        )
+        engine = self._engine(
+            '{"flags": [{"line": 174, "end_line": 185, "question": "Why?"}]}'
+        )
+        flags = engine.scan_code("ignored", "python", focus=self.FOCUS, view=view)
+        assert flags[0]["end_line"] == 174
+
+    def test_it_clamps_a_flag_to_what_the_view_holds_even_when_the_focus_claims_more(self):
+        # focus.end_line is client-supplied and unchecked against the digest:
+        # scan_target only rejects start < 1 or end < start. A focus reaching
+        # past what the view actually covers must not widen the ceiling past
+        # view.max_line - otherwise a flag's end_line can name a line that
+        # was never sent in any digest.
+        engine = self._engine(
+            '{"flags": [{"line": 174, "end_line": 450, "question": "Why?"}]}'
+        )
+        focus = {"start_line": 173, "end_line": 500, "label": "deep"}
+        flags = engine.scan_code("ignored", "python", focus=focus, view=self._view())
+        assert flags[0]["end_line"] == 174
+
     def test_a_scan_with_no_focus_keeps_todays_wording(self):
         # The published extension sends no focus and must get the prompt it
         # gets today, byte for byte.
