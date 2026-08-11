@@ -1262,6 +1262,49 @@ describe("InlineTutor — stripping fixed bug markers", () => {
     await mock.__runCommand("edupeer.scanFile");
     expect(announced).toBe(1);
   });
+
+  it("does not credit one selection's flags to the next selection", async () => {
+    // Every per-block map in the tutor is keyed on `focus.breadcrumb`. A
+    // breadcrumb that carries no position makes every selection in a file one
+    // block: `parse` scans dirty, `validate` scans clean, and the clean scan
+    // reads as a flagged-to-clean transition for a block that was never
+    // flagged — so the toast fires and the `bug:` marker inside `validate`,
+    // describing a bug nobody has fixed, is deleted from the student's file.
+    const TWO_BLOCKS = [
+      "def parse(payload):",                                        // 0
+      "    return payload",                                         // 1
+      "",                                                           // 2
+      "def validate(payload):",                                     // 3
+      "    return bool(payload)   # bug: accepts an empty payload", // 4
+    ].join("\n");
+    const scanCode = jest
+      .fn()
+      .mockResolvedValueOnce({ flags: [flag({ line: 1, end_line: 1 })] })
+      .mockResolvedValueOnce({ flags: [] });
+    const { doc } = setupMarked(makeApi({ scanCode }), {}, TWO_BLOCKS);
+    const editor = mock.window.activeTextEditor;
+
+    // `parse` selected, and flagged.
+    editor.selection = new vscode.Selection(
+      new vscode.Position(0, 0),
+      new vscode.Position(1, 10)
+    );
+    await mock.__runCommand("edupeer.scanFile");
+    expect(scanCode).toHaveBeenCalledTimes(1);
+
+    // `validate` selected, and clean. A different block, so nothing to
+    // celebrate and nothing to strip.
+    editor.selection = new vscode.Selection(
+      new vscode.Position(3, 0),
+      new vscode.Position(4, 10)
+    );
+    await mock.__runCommand("edupeer.scanFile");
+    expect(scanCode).toHaveBeenCalledTimes(2);
+
+    expect(mock.workspace.applyEdit).not.toHaveBeenCalled();
+    expect(mock.window.showInformationMessage).not.toHaveBeenCalled();
+    expect(doc.getText()).toContain("# bug: accepts an empty payload");
+  });
 });
 
 describe("InlineTutor — the seeded marker never reaches the tutor", () => {
