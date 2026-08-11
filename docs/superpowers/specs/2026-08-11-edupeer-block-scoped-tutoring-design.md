@@ -143,9 +143,22 @@ class CodeBand(BaseModel):
     start: int = Field(ge=1)
     end: int = Field(ge=1)
 
-# on HintRequest, LineHintRequest, ScanRequest and TraceRequest
+# on HintRequest, LineHintRequest and ScanRequest
 bands: list[CodeBand] | None = None
+total_lines: int | None = None
 ```
+
+Not on `TraceRequest`. `/trace` reads `req.code` only as a fallback when
+`selection` is empty (`main.py:451`) and never numbers it, so its fix is
+simply to stop sending the file: the extension passes the focus block, and no
+coordinates are needed to make sense of it.
+
+A `total_lines: int | None` rides with them. Without it the backend cannot
+name its own last elision: it can say `[lines 4-172 of this file are not
+shown]` between two bands, because both ends are known, but after the final
+band it has no idea whether one line follows or four hundred. One integer buys
+an exact marker instead of a vague one, and the panel already computes the
+number.
 
 `ScanRequest` also gains the `focus: FocusRange | None` the other two hint
 endpoints already carry. The 2026-08-09 spec left it off deliberately, on the
