@@ -88,37 +88,41 @@ function take(
  * The file's header: imports, includes, and the module-level constants under
  * them, up to the first line that is neither.
  *
- * Blank lines and comments continue the header but do not extend it — a file
- * whose imports are followed by forty lines of comment should not spend its
- * header budget on the comment. So the band ends at the last line that
- * actually matched.
+ * Comments continue the header but do not extend it — a file whose imports
+ * are followed by forty lines of comment should not spend its header budget
+ * on the comment. Blank lines are similar, but only until the first constant
+ * is claimed: imports are often broken into groups by a blank line, so one
+ * should not end the header early. Once a constant has been taken, though, a
+ * blank line is the signal that the constants block is over and the file's
+ * ordinary body begins — without that signal, `TAX = 0.2` and the forty
+ * unrelated assignments that happen to follow it are shaped identically to
+ * the scanner, and the header would swallow the whole file one plausible
+ * line at a time.
  */
 function headerEnd(lines: string[], languageId: string): number {
   const language = SUPPORTED_LANGUAGES[languageId];
   if (!language) return 0;
   let last = 0;
-  // Whether the header may still absorb one constant line before the next
-  // import re-arms it. A bare `last > 0` check would let this chain forever:
-  // `TAX = 0.2` under the imports and the forty ordinary assignments that
-  // happen to follow it are shaped identically to the scanner, so without a
-  // one-per-run limit the whole file reads as "header".
-  let constantAvailable = false;
+  let sawImport = false;
+  let constantTaken = false;
   const limit = Math.min(lines.length, HEADER_BAND_MAX_LINES);
   for (let i = 0; i < limit; i++) {
     const text = lines[i];
-    if (!text.trim()) continue;
+    if (!text.trim()) {
+      if (constantTaken) break;
+      continue;
+    }
     if (text.trim().startsWith(language.lineComment)) continue;
     if (language.importRegex.test(text)) {
       last = i + 1; // 1-based
-      constantAvailable = true;
+      sawImport = true;
       continue;
     }
-    // A single module-level constant under the imports is context worth
-    // having; a second one in a row is the file's body, not its header.
-    // Anything indented, or any definition, ends the header outright.
-    if (constantAvailable && !language.lensRegex.test(text) && !/^\s/.test(text)) {
+    // A module-level constant under the imports is context worth having;
+    // anything indented, or any definition, means the header is over.
+    if (sawImport && !language.lensRegex.test(text) && !/^\s/.test(text)) {
       last = i + 1;
-      constantAvailable = false;
+      constantTaken = true;
       continue;
     }
     break;

@@ -92,6 +92,20 @@ const LONG_PY = [
   "    return mean(x) * TAX",             // 47
 ];
 
+// An ordinary beginner file: several constants in a row under the imports,
+// not just one, separated from the function body by a blank line.
+const MULTI_CONST_PY = [
+  "import math",                          // 1
+  "",                                     // 2
+  "TAX_RATE = 0.2",                       // 3
+  "MAX_ITEMS = 100",                      // 4
+  "DEBUG = False",                        // 5
+  "",                                     // 6
+  ...Array.from({ length: 40 }, (_, i) => `filler_${i} = ${i}`), // 7-46
+  "def calculate(items):",                // 47
+  "    return len(items) * TAX_RATE",     // 48
+];
+
 describe("buildDigest carries the imports however far down the block is", () => {
   it("sends the header even when the block is forty lines below it", () => {
     const digest = buildDigest(LONG_PY, "python", { start: 45, end: 46 });
@@ -128,5 +142,18 @@ describe("buildDigest carries the imports however far down the block is", () => 
     const digest = buildDigest(many, "python", { start: 100, end: 101 });
     expect(digest.bands[0]).toEqual({ start: 1, end: HEADER_BAND_MAX_LINES });
     expect(HEADER_BAND_MAX_LINES).toBe(30);
+  });
+
+  it("keeps every constant in a run under the imports, not just the first", () => {
+    // TAX_RATE, MAX_ITEMS and DEBUG all sit under the same import with no
+    // blank line between them - a tutor that can see only TAX_RATE would
+    // explain a loop bound (MAX_ITEMS) it cannot read.
+    const digest = buildDigest(MULTI_CONST_PY, "python", { start: 46, end: 47 });
+    expect(digest.code).toContain("TAX_RATE = 0.2");
+    expect(digest.code).toContain("MAX_ITEMS = 100");
+    expect(digest.code).toContain("DEBUG = False");
+    // The blank line before the filler body ends the header - the def line
+    // and the forty lines above it never enter the header band.
+    expect(digest.bands[0].end).toBeLessThan(7);
   });
 });
