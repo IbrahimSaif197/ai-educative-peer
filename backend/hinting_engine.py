@@ -485,12 +485,19 @@ def _parse_bands(bands, line_count: int) -> Optional[List[Tuple[int, int]]]:
     code arrived with. Anything else and the caller falls back to treating
     the code as a whole file - which is what an extension predating `bands`
     sends, and the only safe reading of a digest whose coordinates are wrong.
+    That includes a `bands` that is not even a list - a bare int, a single
+    CodeBand instead of one wrapped in a list - which is exactly as
+    unbelievable as a malformed one, not a reason to raise past this function.
     """
     if not bands:
         return None
+    try:
+        band_list = list(bands)
+    except TypeError:
+        return None
     parsed: List[Tuple[int, int]] = []
     previous_end = 0
-    for band in bands:
+    for band in band_list:
         try:
             start = int(band["start"]) if isinstance(band, dict) else int(band.start)
             end = int(band["end"]) if isinstance(band, dict) else int(band.end)
@@ -521,9 +528,15 @@ class CodeView:
         bands: List[Tuple[int, int]],
         total_lines: Optional[int] = None,
     ):
-        self._lines = lines
         self._bands = bands
-        self._total_lines = total_lines
+        # Defensive like every other externally-supplied int in this module
+        # (`clamp_hint_level`, `_window`, `focus_instruction`): unreachable
+        # while the only caller is `of`, but a non-numeric value must degrade
+        # to "unknown" rather than raise out of `numbered()` later.
+        try:
+            self._total_lines = int(total_lines) if total_lines is not None else None
+        except (TypeError, ValueError):
+            self._total_lines = None
         self._by_line = {}
         cursor = 0
         for start, end in bands:
@@ -533,6 +546,15 @@ class CodeView:
 
     @classmethod
     def of(cls, code: str, bands=None, total_lines: Optional[int] = None) -> "CodeView":
+        # A blank digest - the whole file was whitespace, or every band's
+        # text was - has nothing to number, exactly like `number_lines`'s own
+        # `if not code.strip()` check. Decided before the bands are even
+        # looked at: a bands list that is internally coherent against a
+        # blank digest must not win and produce a `numbered()` that
+        # disagrees with what `number_lines` would have said about the same
+        # file.
+        if not code.strip():
+            return cls([], [], None)
         lines = code.splitlines()
         parsed = _parse_bands(bands, len(lines))
         if parsed is None:

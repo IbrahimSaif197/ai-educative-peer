@@ -1334,3 +1334,39 @@ class TestACodeViewRebuildsAbsoluteLineNumbers:
         view = CodeView.of("")
         assert view.line_at(1) is None
         assert view.max_line == 0
+
+    def test_whitespace_only_code_is_no_code(self):
+        # `number_lines` treats anything that strips to empty as "no code".
+        # splitlines() alone does not agree - "   " is one non-empty line by
+        # that measure - so a digest of pure whitespace must be caught the
+        # same way number_lines catches it, not numbered as "1:    ".
+        from hinting_engine import CodeView
+        view = CodeView.of("   ")
+        assert view.numbered() == "(no code provided)"
+
+    def test_blank_lines_only_code_is_no_code(self):
+        from hinting_engine import CodeView
+        view = CodeView.of("\n\n\n")
+        assert view.numbered() == "(no code provided)"
+
+    def test_blank_code_outranks_bands_that_would_otherwise_be_believed(self):
+        # This band is internally coherent - it claims exactly the two lines
+        # the digest has - so a blank check placed after band-parsing would
+        # still number them. A digest that is entirely whitespace carries
+        # nothing to number regardless of what its bands claim.
+        from hinting_engine import CodeView
+        view = CodeView.of("   \n   ", [{"start": 5, "end": 6}], total_lines=10)
+        assert view.numbered() == "(no code provided)"
+
+    def test_a_non_iterable_bands_value_falls_back_instead_of_raising(self):
+        # A caller handing a stray int, or a single band object instead of a
+        # list containing one, must degrade like any other unbelievable
+        # bands - never raise past this class.
+        from hinting_engine import CodeView
+        view = CodeView.of("a = 1\nb = 2", bands=42)
+        assert view.numbered() == "1: a = 1\n2: b = 2"
+
+    def test_a_non_numeric_total_lines_is_treated_as_unknown(self):
+        from hinting_engine import CodeView
+        view = CodeView.of(self.DIGEST, self.BANDS, total_lines="lots")
+        assert "175" not in view.numbered()
