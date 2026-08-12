@@ -460,7 +460,11 @@ export class EduPeerSidebarProvider implements vscode.WebviewViewProvider {
     this.reveal();
     this.post({ type: "loading", value: true });
     try {
-      const design = await this.api.getTrace(code, snippet, this.lastLanguageId);
+      // `code` is not sent: the handler never reads it when `selection` is
+      // non-empty, and the caller guarantees that. It is kept as a parameter
+      // because the follow-up ask below still needs the block for context —
+      // and that path digests it, so it is bounded.
+      const design = await this.api.getTrace(snippet, this.lastLanguageId);
       if (!design.steps || design.variables.length < 2) {
         this.startPrediction(snippet, code);
         return;

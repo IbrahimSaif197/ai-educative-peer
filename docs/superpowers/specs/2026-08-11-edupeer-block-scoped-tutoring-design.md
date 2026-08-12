@@ -53,8 +53,21 @@ that answer.
 
 The digest contains code — it has to. What leaves is the file's imports, the
 headers of the scopes enclosing the block, one line per top-level definition,
-the block itself, and three lines either side of it. Every other line of the
-student's file never crosses the network.
+the block itself, three lines either side of it, and the cursor's own line.
+Every other line of the student's file never crosses the network.
+
+One exception, and it is the feature rather than a hole: asking for a desk-check
+trace with nothing selected sends the block whole, because the block *is* the
+exercise and a digest's elided bands would produce a trace with holes in it.
+That path is bounded by the block's own length, not by `MAX_DIGEST_LINES`.
+Everything else — hints, scans, the conversation, prediction, and the trace
+follow-up — goes through `buildDigest` and is capped.
+
+`/trace` also used to carry a second, redundant copy of the block in `code`,
+which the handler reads only when `selection` is empty — something the caller
+never allows. It was uploaded and discarded on every trace, and being a plain
+string rather than a digest it was unbounded. The client no longer sends it;
+the field stays on `TraceRequest` for the published 1.5.1 build.
 
 ---
 

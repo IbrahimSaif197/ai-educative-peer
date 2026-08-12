@@ -425,25 +425,32 @@ describe("ApiClient.getTrace", () => {
   it("returns the designed exercise", async () => {
     mockFetch(200, { variables: ["i", "total"], steps: 4, prompt: "Trace the loop." });
     const api = new ApiClient(BASE, makeTokens());
-    expect(await api.getTrace("code", "snippet", "python")).toEqual({
+    expect(await api.getTrace("snippet", "python")).toEqual({
       variables: ["i", "total"],
       steps: 4,
       prompt: "Trace the loop.",
     });
   });
 
-  it("sends the selection and language", async () => {
+  it("sends the selection and language, and no code at all", async () => {
+    // `/trace` reads `req.code` only when `selection` is empty, and the caller
+    // never lets that happen — `traceCode` bails before asking when it has
+    // nothing to trace. So the block this used to carry was uploaded and then
+    // discarded on every trace. It is the one payload in the extension that
+    // `buildDigest` never bounded, which made it the only place the whole of a
+    // long block could leave the machine, for nothing.
     const fetchMock = mockFetch(200, { variables: [], steps: 0, prompt: "" });
     const api = new ApiClient(BASE, makeTokens());
-    await api.getTrace("whole file", "just this", "rust");
+    await api.getTrace("just this", "rust");
     const body = JSON.parse(fetchMock.mock.calls[0][1].body);
-    expect(body).toEqual({ code: "whole file", selection: "just this", language: "rust" });
+    expect(body).toEqual({ selection: "just this", language: "rust" });
+    expect(body).not.toHaveProperty("code");
   });
 
   it("degrades to an empty exercise on a backend error", async () => {
     mockFetch(500, {});
     const api = new ApiClient(BASE, makeTokens());
-    expect(await api.getTrace("code", "snippet")).toEqual({
+    expect(await api.getTrace("snippet")).toEqual({
       variables: [],
       steps: 0,
       prompt: "",
@@ -453,7 +460,7 @@ describe("ApiClient.getTrace", () => {
   it("degrades to an empty exercise when the backend is unreachable", async () => {
     (global as any).fetch = jest.fn().mockRejectedValue(new Error("ECONNREFUSED"));
     const api = new ApiClient(BASE, makeTokens());
-    expect((await api.getTrace("code", "snippet")).steps).toBe(0);
+    expect((await api.getTrace("snippet")).steps).toBe(0);
   });
 
   it("degrades rather than throwing when throttled", async () => {
@@ -466,7 +473,7 @@ describe("ApiClient.getTrace", () => {
       text: async () => "",
     });
     const api = new ApiClient(BASE, makeTokens());
-    expect((await api.getTrace("code", "snippet")).steps).toBe(0);
+    expect((await api.getTrace("snippet")).steps).toBe(0);
   });
 });
 

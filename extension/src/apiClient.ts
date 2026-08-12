@@ -290,13 +290,17 @@ function timeoutSignal(ms: number): AbortSignal {
  * The three fields `scanCode` and `getLineHint` build their payload from.
  *
  * One function so there is one place a digest becomes those fields — but it
- * is not the only door to the network. `getTrace` takes `code` as a plain
- * string and never runs it through here, and `getHint`/`streamHint` just
- * forward whatever `code` the caller already put on the request. So the
- * property that makes "the file never leaves the machine" checkable rather
- * than merely intended lives in the callers, not in this function —
- * `auditRegressions` reads `sidebarProvider.ts`, `inlineTutor.ts` and
- * `extension.ts` directly rather than trusting that they used this.
+ * is not the only door to the network: `getHint`/`streamHint` forward
+ * whatever `code` the caller already put on the request. So the property that
+ * makes "the file never leaves the machine" checkable rather than merely
+ * intended lives in the callers, not in this function — `auditRegressions`
+ * reads `sidebarProvider.ts`, `inlineTutor.ts` and `extension.ts` directly
+ * rather than trusting that they used this.
+ *
+ * `getTrace` used to be the third door and the only unbounded one, carrying a
+ * whole block as a plain string. It now sends no code at all, because the
+ * handler never read it — so every remaining door goes through `buildDigest`
+ * and is bounded at `MAX_DIGEST_LINES`.
  */
 export function digestFields(digest: CodeDigest): {
   code: string;
@@ -477,11 +481,20 @@ export class ApiClient {
    * Ask the backend to design a desk-check exercise for a snippet. Returns
    * steps: 0 when there is nothing worth tracing or the backend is unhappy —
    * callers fall back to a free-text prediction rather than showing an error.
+   *
+   * Deliberately sends no `code`. The handler reads `req.code` only as a
+   * fallback for an empty `selection`, and `design_trace_table` never sees it
+   * either way; the caller bails before asking when it has nothing to trace,
+   * so that fallback is unreachable from this client. The block this used to
+   * carry was uploaded and discarded on every trace — and being a plain string
+   * rather than a digest, it was the one payload `buildDigest` never bounded.
+   * The field stays on `TraceRequest` for the published 1.5.1 build, which
+   * does send a whole file there.
    */
-  async getTrace(code: string, selection: string, language = "python"): Promise<TraceResponse> {
+  async getTrace(selection: string, language = "python"): Promise<TraceResponse> {
     const empty: TraceResponse = { variables: [], steps: 0, prompt: "" };
     try {
-      const res = await this.authedJson("/trace", { code, selection, language });
+      const res = await this.authedJson("/trace", { selection, language });
       if (!res.ok) return empty;
       return (await res.json()) as TraceResponse;
     } catch {
