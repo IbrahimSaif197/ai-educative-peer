@@ -56,18 +56,26 @@ headers of the scopes enclosing the block, one line per top-level definition,
 the block itself, three lines either side of it, and the cursor's own line.
 Every other line of the student's file never crosses the network.
 
-One exception, and it is the feature rather than a hole: asking for a desk-check
-trace with nothing selected sends the block whole, because the block *is* the
-exercise and a digest's elided bands would produce a trace with holes in it.
-That path is bounded by the block's own length, not by `MAX_DIGEST_LINES`.
-Everything else — hints, scans, the conversation, prediction, and the trace
-follow-up — goes through `buildDigest` and is capped.
+Nothing leaves implicitly. One payload is not a digest — the snippet you ask
+`EduPeer: Trace This Code` to desk-check, because the snippet *is* the exercise
+and a digest's elided bands would produce a trace with holes in it. So that
+command requires a selection: what travels whole is what the student chose by
+selecting it, never what a resting cursor happened to sit inside. Everything
+else — hints, scans, the conversation, prediction, and the trace follow-up —
+goes through `buildDigest` and is capped at `MAX_DIGEST_LINES`.
 
-`/trace` also used to carry a second, redundant copy of the block in `code`,
-which the handler reads only when `selection` is empty — something the caller
-never allows. It was uploaded and discarded on every trace, and being a plain
-string rather than a digest it was unbounded. The client no longer sends it;
-the field stays on `TraceRequest` for the published 1.5.1 build.
+Two things had to change for that to be true, and both were found after the
+sixteen tasks shipped:
+
+- `/trace` carried a second, redundant copy of the block in `code`, which the
+  handler reads only when `selection` is empty — something the caller never
+  allows. It was uploaded and discarded on every trace, and being a plain
+  string rather than a digest it was unbounded. The client no longer sends it;
+  the field stays on `TraceRequest` for the published 1.5.1 build.
+- `traceCode` used to fall back to the enclosing block when nothing was
+  selected, so a cursor resting at class level in a long class sent the class.
+  `focusScope` caps the heuristic path at `MAX_FOCUS_LINES` but not the symbol
+  path, so that block had no bound at all.
 
 ---
 

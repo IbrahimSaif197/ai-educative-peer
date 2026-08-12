@@ -34,14 +34,12 @@ const DEFAULT_BACKEND_URL = "https://edupeer-backend.onrender.com";
  * trace of the code they can see. Everything that asks for a *hint* about a
  * file goes through `digestFor`; this does not.
  *
- * Where it goes matters, and only one route leaves the machine unbounded.
- * `/predict`, `discussLines` and the trace follow-up all reach the wire
- * through `handleAsk`, which digests whatever it is handed, so they are capped
- * at `MAX_DIGEST_LINES`. The exception is `traceCode` with no selection: the
- * block becomes the snippet, and the snippet is the thing being traced, so it
- * travels whole. That is the feature rather than a leak — you cannot
- * desk-check code you did not send — but it is the one place the block's full
- * text still crosses the network, and it is bounded only by the block's size.
+ * Every route out of here is bounded. `/predict`, `discussLines`, the debug
+ * companion and the trace follow-up all reach the wire through `handleAsk`,
+ * which digests whatever it is handed, so they cap at `MAX_DIGEST_LINES`.
+ * `traceCode` no longer draws its snippet from this at all — it requires a
+ * selection — so the one payload a digest cannot bound is now something the
+ * student chose by selecting it, never something a resting cursor implied.
  */
 async function blockAround(
   doc: vscode.TextDocument,
@@ -265,16 +263,31 @@ export async function activate(context: vscode.ExtensionContext) {
         vscode.window.showInformationMessage("EduPeer: open a file first.");
         return;
       }
-      const block = await blockAround(editor.document, editor.selection.active);
-      // Tracing a whole file was never the intent; with no selection the
-      // block the cursor is in is what the student means. `block` is trimmed
-      // here same as the selection branch — a window fallback over a blank
-      // file is a line of spaces, not empty, and only the trim tells them apart.
-      const snippet = editor.document.getText(editor.selection).trim() || block.trim();
+      // A trace needs a selection, and this is the one command that insists.
+      //
+      // The snippet is the exercise, so it travels whole — a desk-check over a
+      // digest's elided bands would have holes in it. That makes this the only
+      // payload `buildDigest` cannot bound, and it used to fill itself from the
+      // enclosing block when nothing was selected: a cursor resting at class
+      // level in a long class sent the class. Requiring a selection puts that
+      // bound in the student's hand instead. Nothing leaves for a trace they
+      // did not ask for by selecting it.
+      //
+      // `isEmpty` rather than trimming `getText(selection)`: an empty range is
+      // the question being asked here, and reading it off the selection says so
+      // directly instead of inferring it from the text a range happens to span.
+      const snippet = editor.selection.isEmpty
+        ? ""
+        : editor.document.getText(editor.selection).trim();
       if (!snippet) {
-        vscode.window.showInformationMessage("EduPeer: there's nothing here to trace.");
+        vscode.window.showInformationMessage(
+          "EduPeer: select the code you want to trace."
+        );
         return;
       }
+      // Context for the follow-up ask, which digests it — so unlike the
+      // snippet, this one is capped.
+      const block = await blockAround(editor.document, editor.selection.active);
       await vscode.commands.executeCommand("workbench.view.extension.edupeer-sidebar");
       await provider.startTrace(snippet, block);
     })

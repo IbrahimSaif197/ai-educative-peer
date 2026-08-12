@@ -287,13 +287,13 @@ describe("commands", () => {
     );
   });
 
-  it("says there is nothing to trace in an empty file", async () => {
+  it("asks for a selection rather than tracing whatever the cursor sits in", async () => {
     const doc = mock.__makeDocument("   \n", "python");
     mock.window.activeTextEditor = mock.__makeEditor(doc);
     await activate(makeContext());
     await mock.__runCommand("edupeer.traceCode");
     expect(vscode.window.showInformationMessage).toHaveBeenCalledWith(
-      expect.stringContaining("nothing here to trace")
+      expect.stringContaining("select the code you want to trace")
     );
   });
 
@@ -564,19 +564,29 @@ describe("the commands that reach for the file send a block instead", () => {
     expect(code).toContain("def deep(n):");
   });
 
-  it("traceCode with no selection traces the block, not the file", async () => {
+  it("traceCode refuses to trace when nothing is selected", async () => {
+    // The snippet is the exercise, and it travels whole — a desk-check over a
+    // digest's elided bands would have holes in it. So this is the one command
+    // whose payload `buildDigest` cannot bound, and requiring a selection is
+    // what keeps that bound under the student's own hand: nothing leaves for a
+    // trace they did not ask for by selecting it.
     const doc = openDocument(LONG_PYTHON_FILE, "python");
-    // A body line, not the `def` line. The mock's `getText(range)` slices by
-    // whole line regardless of column, so a collapsed selection anywhere
-    // returns that line's own text for `snippet` (arg 1) — on the `def`
-    // line that already reads "def deep(n):", which would satisfy this
-    // test's assertions even with `blockAround` broken. `code` (arg 2) is
-    // where the no-selection fallback is actually exercised: it comes from
-    // `blockAround`'s heuristic resolution over the whole file, not from
-    // the mock's per-line `getText`, so it is what is checked below.
     placeCursorOn(doc, 200);
     await mock.__runCommand("edupeer.traceCode");
+    expect(provider.startTrace).not.toHaveBeenCalled();
+    expect(vscode.window.showInformationMessage).toHaveBeenCalledWith(
+      expect.stringContaining("select the code you want to trace")
+    );
+  });
+
+  it("traceCode traces the selection and sends the block as context", async () => {
+    const doc = openDocument(LONG_PYTHON_FILE, "python");
+    selectLines(doc, 199, 200);
+    await mock.__runCommand("edupeer.traceCode");
     const [snippet, code] = provider.startTrace.mock.calls[0];
+    expect(snippet).toContain("def deep(n):");
+    // The context still narrows to the block. It reaches the wire only through
+    // the trace follow-up, which digests it, so it is capped there.
     expect(code).not.toContain("line_10 = 10");
     expect(code).toContain("def deep(n):");
   });

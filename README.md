@@ -294,7 +294,9 @@ it:
 - **trace-check** — `EduPeer: Trace This Code` picks 2–4 variables worth
   following and gives you a grid to fill in step by step. Submitting it marks
   the first row where your trace diverges from reality, and asks a question
-  about that line. Students who can't trace code can't write it.
+  about that line. Students who can't trace code can't write it. Select the
+  code you want traced: the snippet is the exercise, so it is the one thing
+  EduPeer sends whole rather than as a digest, and that is your call to make.
 - **explain-concept** / **predict-output** / **review-exercise** — construct
   explanations, output-prediction exercises, and spaced-review drills.
 

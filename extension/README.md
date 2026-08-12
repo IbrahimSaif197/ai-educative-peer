@@ -44,7 +44,7 @@ The **Get started with EduPeer** walkthrough opens automatically on first run.
 | `EduPeer: Explain This Error` | Work through an error message |
 | `EduPeer: Explain This Construct` | Explain the selected syntax |
 | `EduPeer: Predict the Output` | Commit to an answer, then check it |
-| `EduPeer: Trace This Code` | Step through execution |
+| `EduPeer: Trace This Code` | Step through execution — select the code first |
 | `EduPeer: Reflection Quiz on My Fix` | Check you understood your own fix |
 | `EduPeer: Show My Progress` | Open the progress dashboard |
 | `EduPeer: Set Learning Goal` | Set what you are working towards |
