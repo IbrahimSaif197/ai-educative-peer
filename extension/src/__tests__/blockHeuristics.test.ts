@@ -94,11 +94,25 @@ describe("findEnclosingBlock — SQL statements", () => {
 });
 
 describe("findEnclosingBlock — limits", () => {
-  it("caps a runaway block at MAX_FOCUS_LINES", () => {
+  it("caps a runaway block at MAX_FOCUS_LINES and still contains the cursor", () => {
+    // The cap used to keep the block's head, so a cursor deep inside a long
+    // function fell outside the span that claimed to enclose it. Everything
+    // downstream keys off that containment: which flags a scan replaces, which
+    // `bug:` markers may be deleted, and what the tutor is told the student is
+    // working on. Length alone never caught it — the old assertion passed with
+    // the cursor 100 lines outside the span.
     const long = ["def big():", ...Array.from({ length: 400 }, (_, i) => `    x = ${i}`)];
     const span = findEnclosingBlock(long, 300, "python");
     expect(span).not.toBeNull();
     expect(span!.end - span!.start + 1).toBeLessThanOrEqual(MAX_FOCUS_LINES);
+    expect(span!.start).toBeLessThanOrEqual(300);
+    expect(span!.end).toBeGreaterThanOrEqual(300);
+  });
+
+  it("keeps the head when the cursor is near the top of a runaway block", () => {
+    const long = ["def big():", ...Array.from({ length: 400 }, (_, i) => `    x = ${i}`)];
+    const span = findEnclosingBlock(long, 3, "python");
+    expect(span).toEqual({ start: 0, end: MAX_FOCUS_LINES - 1 });
   });
 
   it("returns null for an out-of-range cursor", () => {

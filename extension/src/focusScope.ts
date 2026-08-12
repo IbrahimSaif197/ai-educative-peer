@@ -9,7 +9,7 @@
  */
 
 import * as vscode from "vscode";
-import { findEnclosingBlock } from "./blockHeuristics";
+import { clampAroundCursor, findEnclosingBlock } from "./blockHeuristics";
 
 /** Half-height of the fallback window, in lines. */
 export const WINDOW_RADIUS = 15;
@@ -137,9 +137,22 @@ async function fromSymbols(
   if (!focusable) return undefined;
 
   const names = chain.slice(0, chain.indexOf(focusable) + 1).map((s) => s.name);
+  // A language server reports whatever it parsed, and a class is a symbol. With
+  // the cursor on a class-level line of an 800-line class the innermost
+  // focusable symbol *is* that class, so the span was the whole thing — the
+  // heuristic path has been capped since it was written, this one never was.
+  // The span is what tells the tutor which lines the student is working on, and
+  // what decides which flags a scan may replace and which `bug:` markers it may
+  // delete, so it has to mean something. Same rule as the heuristic path, and
+  // the label and breadcrumb are untouched: this is still that block, just a
+  // bounded view of it, so the hint ladder and the conversation thread stay put.
+  const span = clampAroundCursor(
+    { start: focusable.range.start.line, end: focusable.range.end.line },
+    cursor
+  );
   return {
-    startLine: focusable.range.start.line,
-    endLine: focusable.range.end.line,
+    startLine: span.start,
+    endLine: span.end,
     // Some language servers return a name carrying its signature —
     // `calculate(int)` from clangd, and the C# style. The label keys the hint
     // ladder and reaches the prompt outside the untrusted-input wrapper, so

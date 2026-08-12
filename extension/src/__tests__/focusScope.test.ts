@@ -9,6 +9,7 @@
  */
 const vscode = require("vscode");
 import { resolveFocus, focusText, WINDOW_RADIUS } from "../focusScope";
+import { MAX_FOCUS_LINES } from "../blockHeuristics";
 
 const SOURCE = [
   "import math",                        // 0
@@ -121,6 +122,39 @@ describe("resolveFocus", () => {
       kind: "symbol",
     });
     expect(focus.breadcrumb).toBe("demo.py › Stats › calculate_average");
+  });
+
+  it("caps a symbol span at MAX_FOCUS_LINES, keeping the cursor inside it", async () => {
+    // A symbol provider hands back whatever the language server parsed, and a
+    // class is a symbol. With the cursor on a class-level line of a long class
+    // the "block" was the whole class, unbounded — the heuristic path has been
+    // capped since it was written, the symbol path never was. The range is what
+    // tells the tutor "the student is working on lines X-Y", and what decides
+    // which flags a scan may replace and which `bug:` markers it may delete.
+    const long = ["class Big:", ...Array.from({ length: 800 }, (_, i) => `    x = ${i}`)];
+    const doc = docFor("symbol-runaway", long.join("\n"));
+    vscode.commands.executeCommand.mockResolvedValue([
+      symbol("Big", vscode.SymbolKind.Class, 0, 800),
+    ]);
+
+    const focus = await resolveFocus(doc, selectionAt(500));
+
+    expect(focus.kind).toBe("symbol");
+    expect(focus.label).toBe("Big");
+    expect(focus.endLine - focus.startLine + 1).toBeLessThanOrEqual(MAX_FOCUS_LINES);
+    expect(focus.startLine).toBeLessThanOrEqual(500);
+    expect(focus.endLine).toBeGreaterThanOrEqual(500);
+  });
+
+  it("leaves a symbol span alone when it already fits", async () => {
+    const doc = docFor("symbol-fits");
+    vscode.commands.executeCommand.mockResolvedValue([
+      symbol("calculate_average", vscode.SymbolKind.Function, 2, 6),
+    ]);
+
+    const focus = await resolveFocus(doc, selectionAt(4));
+
+    expect(focus).toMatchObject({ startLine: 2, endLine: 6, kind: "symbol" });
   });
 
   it("ignores symbols that do not contain the cursor", async () => {

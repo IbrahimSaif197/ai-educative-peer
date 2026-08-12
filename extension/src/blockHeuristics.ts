@@ -40,9 +40,31 @@ function indentOf(line: string): number {
   return expanded.length - expanded.trimStart().length;
 }
 
-function clamp(span: LineSpan): LineSpan {
+/**
+ * A span no longer than `MAX_FOCUS_LINES` that still contains the cursor.
+ *
+ * Keeping the head is the right instinct — a signature and the first lines of
+ * a body are what make a function legible — but it is wrong on its own for a
+ * block the cursor sits deep inside. A 400-line function with the cursor at
+ * line 300 clamped to 0-199, and the span that claimed to enclose the cursor
+ * no longer did. Everything downstream keys off that containment: which flags
+ * a scan may replace, which `bug:` markers it may delete, and what the tutor is
+ * told the student is working on.
+ *
+ * So the window keeps the head while the cursor is near it, and slides only as
+ * far as it must to keep the cursor inside.
+ *
+ * Exported because `focusScope` needs the same rule for spans a symbol
+ * provider hands back. A language server will happily report an 800-line class
+ * as one symbol, and this path was capped from the day it was written while
+ * that one never was.
+ */
+export function clampAroundCursor(span: LineSpan, cursorLine: number): LineSpan {
   if (span.end - span.start + 1 <= MAX_FOCUS_LINES) return span;
-  return { start: span.start, end: span.start + MAX_FOCUS_LINES - 1 };
+  const cursor = Math.max(span.start, Math.min(cursorLine, span.end));
+  const latestStart = span.end - MAX_FOCUS_LINES + 1;
+  const start = Math.max(span.start, Math.min(cursor - Math.floor(MAX_FOCUS_LINES / 2), latestStart));
+  return { start, end: start + MAX_FOCUS_LINES - 1 };
 }
 
 /**
@@ -61,7 +83,9 @@ export function findEnclosingBlock(
   if (!language) return null;
 
   const style = blockStyleFor(languageId);
-  if (style === "statement") return clamp(sqlStatement(lines, cursorLine));
+  if (style === "statement") {
+    return clampAroundCursor(sqlStatement(lines, cursorLine), cursorLine);
+  }
 
   const header = findHeader(lines, cursorLine, language.lensRegex);
   if (header === null) return null;
@@ -75,7 +99,7 @@ export function findEnclosingBlock(
   // `area(2);` after `function area(r) { … }` is top-level code, not the body.
   if (cursorLine < span.start || cursorLine > span.end) return null;
 
-  return clamp(span);
+  return clampAroundCursor(span, cursorLine);
 }
 
 /**

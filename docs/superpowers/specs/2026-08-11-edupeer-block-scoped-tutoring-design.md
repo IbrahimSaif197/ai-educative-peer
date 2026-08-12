@@ -49,6 +49,16 @@ any change to how `focusScope` resolves a block. `focusScope.ts` already
 answers "which block is the student on"; this spec changes what is done with
 that answer.
 
+That last exclusion held until the work shipped, then had to be relaxed once.
+`focusScope` picks a block but never bounded one: `MAX_FOCUS_LINES` capped the
+heuristic path from the day it was written, while a symbol provider's answer
+went through untouched — and a language server reports a class as a symbol, so
+a cursor on a class-level line made the whole class "the block". Both paths now
+share one rule, `clampAroundCursor`, which also fixes a latent defect in the
+capped path: it kept the block's head, so a cursor deep inside a 400-line
+function fell outside the span that claimed to enclose it. Which block gets
+resolved is still untouched; only how far it is allowed to reach.
+
 ### What "the file stays home" means precisely
 
 The digest contains code — it has to. What leaves is the file's imports, the
