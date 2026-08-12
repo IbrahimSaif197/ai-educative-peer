@@ -27,6 +27,11 @@ MAX_QUESTION_CHARS = 4000
 MAX_GOAL_CHARS = 500
 MAX_PROBLEM_KEY_CHARS = 512
 
+# A digest is a handful of ranges, not hundreds. Bounded for the same reason
+# every other free-form field here is: an unbounded list is a free multiplier
+# on request size.
+MAX_CODE_BANDS = 64
+
 # The top of the hint ladder. Rungs 1-3 are the Socratic ladder; rung 4 *is*
 # the worked example - see `effective_mode` in hinting_engine.py. Kept here
 # because both session_store (which walks the ladder) and hinting_engine
@@ -95,8 +100,23 @@ class FocusRange(BaseModel):
         return value if _SAFE_FOCUS_LABEL_RE.fullmatch(value) else ""
 
 
+class CodeBand(BaseModel):
+    """One absolute line range that `code` was lifted from.
+
+    The extension stopped sending whole files: `code` now carries the
+    student's imports and the block they are working on, and `bands` says
+    which editor lines those were. The tutor cites real line numbers back to
+    the student, so a digest that arrived without its coordinates - or with
+    coordinates that disagree with it - is numbered from line 1 instead,
+    which is what an extension that predates this field expects.
+    """
+
+    start: int = Field(..., ge=1, description="1-based first line, inclusive")
+    end: int = Field(..., ge=1, description="1-based last line, inclusive")
+
+
 class HintRequest(BaseModel):
-    code: str = Field(default="", max_length=MAX_CODE_CHARS, description="The student's current code")
+    code: str = Field(default="", max_length=MAX_CODE_CHARS, description="The student's digest: imports and the block being worked on")
     question: str = Field(
         ...,
         max_length=MAX_QUESTION_CHARS,
@@ -144,6 +164,14 @@ class HintRequest(BaseModel):
         default=None,
         description="The block inside `code` the student is working on",
     )
+    bands: Optional[List[CodeBand]] = Field(
+        default=None,
+        max_length=MAX_CODE_BANDS,
+        description="Absolute line ranges `code` was lifted from; None means whole file",
+    )
+    total_lines: Optional[int] = Field(
+        default=None, ge=0, description="Lines in the student's real file"
+    )
 
 
 class HintResponse(BaseModel):
@@ -174,8 +202,19 @@ class UserBadges(BaseModel):
 
 
 class ScanRequest(BaseModel):
-    code: str = Field(default="", max_length=MAX_CODE_CHARS, description="Full file content")
+    code: str = Field(default="", max_length=MAX_CODE_CHARS, description="The student's digest: imports and the block being worked on")
     language: str = Field(default="python", description="VS Code languageId of the code")
+    bands: Optional[List[CodeBand]] = Field(
+        default=None,
+        max_length=MAX_CODE_BANDS,
+        description="Absolute line ranges `code` was lifted from; None means whole file",
+    )
+    total_lines: Optional[int] = Field(
+        default=None, ge=0, description="Lines in the student's real file"
+    )
+    focus: Optional[FocusRange] = Field(
+        default=None, description="The block the student is working on"
+    )
 
 
 class LineFlag(BaseModel):
@@ -194,12 +233,20 @@ class ScanResponse(BaseModel):
 
 
 class LineHintRequest(BaseModel):
-    code: str = Field(default="", max_length=MAX_CODE_CHARS, description="Full file content")
+    code: str = Field(default="", max_length=MAX_CODE_CHARS, description="The student's digest: imports and the block being worked on")
     line: int = Field(..., ge=1, description="1-based line the user is editing")
     language: str = Field(default="python", description="VS Code languageId of the code")
     focus: Optional[FocusRange] = Field(
         default=None,
         description="The block inside `code` the student is working on",
+    )
+    bands: Optional[List[CodeBand]] = Field(
+        default=None,
+        max_length=MAX_CODE_BANDS,
+        description="Absolute line ranges `code` was lifted from; None means whole file",
+    )
+    total_lines: Optional[int] = Field(
+        default=None, ge=0, description="Lines in the student's real file"
     )
 
 

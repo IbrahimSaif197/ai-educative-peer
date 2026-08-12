@@ -74,7 +74,34 @@ describe("resolveFocus", () => {
     const focus = await resolveFocus(doc, selectionOver(3, 5));
 
     expect(focus).toMatchObject({ startLine: 3, endLine: 5, kind: "selection" });
-    expect(focus.breadcrumb).toBe("demo.py › selection");
+    expect(focus.breadcrumb).toBe("demo.py › selection 4-6");
+  });
+
+  it("gives two selections in one file two different breadcrumbs", async () => {
+    // The breadcrumb is what `inlineTutor` keys per-block scan state on, so a
+    // constant here makes every selection in a file one block: flags earned
+    // on one become a flagged-to-clean transition on the next, which fires
+    // the reflection offer and deletes the `bug:` markers inside a block that
+    // was never flagged.
+    const doc = docFor("two-selections");
+    const first = await resolveFocus(doc, selectionOver(2, 6));
+    const second = await resolveFocus(doc, selectionOver(8, 9));
+    expect(first.breadcrumb).not.toBe(second.breadcrumb);
+    expect(first.breadcrumb).toBe("demo.py › selection 3-7");
+    expect(second.breadcrumb).toBe("demo.py › selection 9-10");
+  });
+
+  it("names the line the drag really covers, not the one it stopped at", async () => {
+    // Same trimming `startLine`/`endLine` get: a drag ending at column 0 of
+    // the next line did not mean to include it, and the name must not claim
+    // it did — otherwise two selections differing only by that trim collide.
+    const doc = docFor("selection-trim-breadcrumb");
+    const focus = await resolveFocus(
+      doc,
+      new vscode.Selection(new vscode.Position(2, 0), new vscode.Position(7, 0))
+    );
+    expect(focus.endLine).toBe(6);
+    expect(focus.breadcrumb).toBe("demo.py › selection 3-7");
   });
 
   it("prefers the innermost matching symbol over the heuristic", async () => {

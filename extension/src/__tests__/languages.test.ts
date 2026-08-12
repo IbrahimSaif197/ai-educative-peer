@@ -77,3 +77,48 @@ describe("lensRegex definition detection", () => {
     expect(match("csharp", "int x = 1;")).toBe(false);
   });
 });
+
+describe("every language knows what one of its import lines looks like", () => {
+  const cases: Array<[string, string]> = [
+    ["python", "from stats import mean"],
+    ["javascript", "import { mean } from './stats.js';"],
+    ["typescript", "import type { Stats } from './stats';"],
+    ["java", "import java.util.List;"],
+    ["csharp", "using System.Collections.Generic;"],
+    ["c", "#include <stdio.h>"],
+    ["cpp", "#include <vector>"],
+    ["go", "import \"fmt\""],
+    ["rust", "use std::collections::HashMap;"],
+    // Fix round 1: cases the code review found broken by execution.
+    ["java", "import static org.junit.Assert.*;"],
+    ["c", "#ifndef FOO_H"],
+    ["cpp", "#ifndef FOO_H"],
+    ["go", ")"],
+    ["rust", "pub use crate::foo::Bar;"],
+    ["rust", "pub mod foo;"],
+  ];
+
+  it.each(cases)("%s recognises %s", (id, line) => {
+    expect(SUPPORTED_LANGUAGES[id].importRegex.test(line)).toBe(true);
+  });
+
+  it("does not mistake a function definition for an import", () => {
+    expect(SUPPORTED_LANGUAGES.python.importRegex.test("def area(r):")).toBe(false);
+    expect(SUPPORTED_LANGUAGES.java.importRegex.test("public class Stats {")).toBe(false);
+  });
+
+  it("does not mistake a definition for an import, in every language the fix round touched", () => {
+    // "static" is now part of the Java pattern and "pub" is now part of the
+    // Rust pattern, so these specifically check that the looser regexes
+    // still require the import/use/mod keyword itself, not just a neighbour.
+    expect(SUPPORTED_LANGUAGES.java.importRegex.test("public static void main(String[] args) {")).toBe(false);
+    expect(SUPPORTED_LANGUAGES.c.importRegex.test("int main(void) {")).toBe(false);
+    expect(SUPPORTED_LANGUAGES.cpp.importRegex.test("class Dog {")).toBe(false);
+    expect(SUPPORTED_LANGUAGES.go.importRegex.test("func main() {")).toBe(false);
+    expect(SUPPORTED_LANGUAGES.rust.importRegex.test("pub fn main() {")).toBe(false);
+  });
+
+  it("gives SQL a pattern that matches nothing, because it has no imports", () => {
+    expect(SUPPORTED_LANGUAGES.sql.importRegex.test("SELECT * FROM t;")).toBe(false);
+  });
+});

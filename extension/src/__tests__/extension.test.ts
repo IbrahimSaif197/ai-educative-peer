@@ -1,5 +1,6 @@
 import * as vscode from "vscode";
 import { activate, deactivate } from "../extension";
+import { EduPeerSidebarProvider } from "../sidebarProvider";
 
 const mock = vscode as any;
 
@@ -472,5 +473,118 @@ describe("configuration changes", () => {
     jest.advanceTimersByTime(31_000);
     await settle();
     expect(fetchMock.mock.calls.length).toBeGreaterThan(before);
+  });
+});
+
+describe("the commands that reach for the file send a block instead", () => {
+  /**
+   * Long enough that a block-scoped digest can be proven to exclude most of
+   * it. Mirrors the fixture `inlineTutor.test.ts` and `sidebarProvider.test.ts`
+   * use for the same proof (Task 13): `import math` is the header; `_spacer`
+   * is a one-line definition placed right after it purely so `codeDigest`'s
+   * header band stops there. `deep` lands exactly on line 200 (0-based 199),
+   * so a cursor there sits inside a block `resolveFocus` can name.
+   */
+  const LONG_PYTHON_FILE =
+    [
+      "import math",
+      "def _spacer(): pass",
+      ...Array.from({ length: 197 }, (_, i) => `line_${i + 1} = ${i + 1}`),
+      "def deep(n):",
+      "    return n - 1",
+    ].join("\n") + "\n";
+
+  let provider: any;
+
+  /** Open a document as the active editor, cursor at the top. */
+  function openDocument(text: string, languageId = "python") {
+    const doc = mock.__makeDocument(text, languageId);
+    mock.window.activeTextEditor = mock.__makeEditor(doc, 0, 0);
+    // `discussLines` re-opens the document by uri instead of reading the
+    // active editor; the mock's default stub ignores whatever uri it is
+    // asked for, so it is pointed at this same document for the one call
+    // these tests make.
+    mock.workspace.openTextDocument.mockResolvedValueOnce(doc);
+    return doc;
+  }
+
+  /** Move the active editor's cursor to `line` (0-based), an empty selection. */
+  function placeCursorOn(doc: any, line: number) {
+    mock.window.activeTextEditor = mock.__makeEditor(doc, line);
+  }
+
+  /** Select lines `startLine`-`endLine` (0-based, inclusive) in the active editor. */
+  function selectLines(doc: any, startLine: number, endLine: number) {
+    const editor = mock.__makeEditor(doc, startLine, 0);
+    editor.selection = new vscode.Selection(
+      new vscode.Position(startLine, 0),
+      new vscode.Position(endLine, doc.lineAt(endLine).text.length)
+    );
+    mock.window.activeTextEditor = editor;
+  }
+
+  beforeEach(async () => {
+    mock.__reset();
+    stubFetch();
+    jest.useFakeTimers();
+    // predictOutput/traceCode/discussLines call straight through to the real
+    // provider otherwise, which would exercise the whole ask/stream machinery
+    // sidebarProvider.test.ts already covers. Spying on the prototype lets
+    // `activate()` build its usual real instance while these three calls stay
+    // inspectable, the way `provider.startPrediction.mock.calls` needs.
+    provider = {
+      startPrediction: jest
+        .spyOn(EduPeerSidebarProvider.prototype, "startPrediction")
+        .mockImplementation(() => {}),
+      startTrace: jest
+        .spyOn(EduPeerSidebarProvider.prototype, "startTrace")
+        .mockResolvedValue(undefined),
+      askExternal: jest
+        .spyOn(EduPeerSidebarProvider.prototype, "askExternal")
+        .mockResolvedValue(undefined),
+    };
+    await activate(makeContext());
+  });
+
+  afterEach(() => {
+    jest.clearAllTimers();
+    jest.useRealTimers();
+    delete (global as any).fetch;
+    provider.startPrediction.mockRestore();
+    provider.startTrace.mockRestore();
+    provider.askExternal.mockRestore();
+  });
+
+  it("predictOutput sends the block around the selection", async () => {
+    const doc = openDocument(LONG_PYTHON_FILE, "python");
+    selectLines(doc, 199, 200);
+    await mock.__runCommand("edupeer.predictOutput");
+    const [, code] = provider.startPrediction.mock.calls[0];
+    expect(code).not.toContain("line_10 = 10");
+    expect(code).toContain("def deep(n):");
+  });
+
+  it("traceCode with no selection traces the block, not the file", async () => {
+    const doc = openDocument(LONG_PYTHON_FILE, "python");
+    // A body line, not the `def` line. The mock's `getText(range)` slices by
+    // whole line regardless of column, so a collapsed selection anywhere
+    // returns that line's own text for `snippet` (arg 1) — on the `def`
+    // line that already reads "def deep(n):", which would satisfy this
+    // test's assertions even with `blockAround` broken. `code` (arg 2) is
+    // where the no-selection fallback is actually exercised: it comes from
+    // `blockAround`'s heuristic resolution over the whole file, not from
+    // the mock's per-line `getText`, so it is what is checked below.
+    placeCursorOn(doc, 200);
+    await mock.__runCommand("edupeer.traceCode");
+    const [snippet, code] = provider.startTrace.mock.calls[0];
+    expect(code).not.toContain("line_10 = 10");
+    expect(code).toContain("def deep(n):");
+  });
+
+  it("discussLines sends the block, not the file", async () => {
+    const doc = openDocument(LONG_PYTHON_FILE, "python");
+    await mock.__runCommand("edupeer.discussLines", doc.uri, 199, 200, "Off by one?");
+    const [, code] = provider.askExternal.mock.calls[0];
+    expect(code).not.toContain("line_10 = 10");
   });
 });

@@ -876,6 +876,64 @@ def test_focus_instruction_ignores_a_nonsense_span():
     assert focus_instruction({"start_line": 9, "end_line": 2}) == ""
 
 
+class TestFocusSpanIsTheOneReadingOfAFocus:
+    """`focus_instruction`, `scan_target` and `generate_line_hint` used to parse
+    `focus` separately, and disagreed about what a usable span was. That is
+    where this feature's recurring defect lived: the missing ceiling was fixed
+    once in `generate_line_hint`, then turned up again in `scan_code`'s clamp.
+    """
+
+    def test_it_returns_the_span_and_a_cleaned_label(self):
+        from hinting_engine import focus_span
+        assert focus_span({"start_line": 12, "end_line": 19, "label": "  a   b "}) == (
+            12,
+            19,
+            "a b",
+        )
+
+    def test_it_truncates_the_label_the_way_both_callers_did(self):
+        from hinting_engine import focus_span
+        from models import MAX_FOCUS_LABEL_CHARS
+        _, _, label = focus_span(
+            {"start_line": 1, "end_line": 2, "label": "z" * 500}
+        )
+        assert label == "z" * MAX_FOCUS_LABEL_CHARS
+
+    def test_it_rejects_the_spans_both_callers_rejected(self):
+        from hinting_engine import focus_span
+        assert focus_span(None) is None
+        assert focus_span({}) is None
+        assert focus_span({"start_line": 0, "end_line": 4}) is None
+        assert focus_span({"start_line": 9, "end_line": 2}) is None
+        assert focus_span({"start_line": "abc", "end_line": "def"}) is None
+        assert focus_span({"start_line": None, "end_line": None}) is None
+
+    def test_a_ceiling_rejects_a_span_reaching_past_it(self):
+        from hinting_engine import focus_span
+        assert focus_span({"start_line": 5, "end_line": 11}, ceiling=10) is None
+        assert focus_span({"start_line": 5, "end_line": 10}, ceiling=10) == (5, 10, "")
+
+    def test_no_ceiling_accepts_a_span_a_ceiling_would_reject(self):
+        # `focus_instruction` and `scan_target` pass none, deliberately: the
+        # scan clamps its flags where it uses them, and the instruction names
+        # the block the student asked about rather than the part that fit.
+        from hinting_engine import focus_span, scan_target
+        assert focus_span({"start_line": 5, "end_line": 900}) == (5, 900, "")
+        assert scan_target({"start_line": 5, "end_line": 900}) == (5, 900, "")
+
+    def test_a_focus_that_is_not_a_mapping_degrades_instead_of_raising(self):
+        # This used to raise AttributeError straight out of the prompt
+        # builder. An optional enrichment field must never cost the student
+        # their hint - `models.FocusRange` accepts a nonsensical span on
+        # exactly that reasoning and leaves the judgement here.
+        from hinting_engine import focus_span
+        for bad in ([1, 2], 42, "focus", (1, 2)):
+            assert focus_span(bad) is None
+        assert focus_instruction([1, 2]) == ""
+        from hinting_engine import scan_target
+        assert scan_target(42) is None
+
+
 class TestGenerateLineHintFocusWindow:
     """Which lines `generate_line_hint` actually shows the model, focus vs. default."""
 
@@ -936,6 +994,24 @@ class TestGenerateLineHintFocusWindow:
         assert "code_019" not in message
         # ...and a line well outside the cap stays hidden even though the
         # focus includes it.
+        assert "code_010" not in message
+
+    def test_a_focus_ending_past_the_files_real_length_is_ignored(self):
+        # end_line one past the file's real length used to be caught by the
+        # old guard's `f_end <= len(lines)` clause. Without an equivalent, a
+        # focus the file cannot back up would still widen the window instead
+        # of being rejected like any other nonsense span.
+        engine = self._engine('{"hint":"h","concept":"general"}')
+        code = self._numbered_code(10)
+        engine.generate_line_hint(
+            code, 6, "python", {"start_line": 5, "end_line": 11, "label": ""}
+        )
+        message = self._user_message(engine)
+        # The focus is rejected outright, so the tight +/-3 default applies
+        # (lines 3-9 around cursor line 6) rather than the widened window
+        # the unusable focus would have produced (lines 5-10).
+        assert "code_003" in message
+        assert "code_009" in message
         assert "code_010" not in message
 
 
@@ -1240,3 +1316,362 @@ class TestBuildEnginePicksAProvider:
         monkeypatch.delenv("GROQ_API_KEY", raising=False)
         with pytest.raises(RuntimeError, match="ANTHROPIC_API_KEY"):
             hinting_engine.build_engine()
+
+
+class TestACodeViewRebuildsAbsoluteLineNumbers:
+    """`code` is a digest now, so position in the string is not the line number.
+
+    Three places derived line numbers from position and would each be quietly
+    wrong on a digest: the prompt's numbering, `generate_line_hint`'s window,
+    and `scan_code`'s flag validation. This is the one object all three ask.
+    """
+
+    DIGEST = "import math\nfrom stats import mean\ndef deep(x):\n    return mean(x)"
+    BANDS = [{"start": 1, "end": 2}, {"start": 173, "end": 174}]
+
+    def _view(self):
+        from hinting_engine import CodeView
+        return CodeView.of(self.DIGEST, self.BANDS, total_lines=241)
+
+    def test_it_numbers_each_band_at_its_real_lines(self):
+        numbered = self._view().numbered()
+        assert "1: import math" in numbered
+        assert "2: from stats import mean" in numbered
+        assert "173: def deep(x):" in numbered
+        assert "174:     return mean(x)" in numbered
+
+    def test_it_announces_the_gap_between_bands(self):
+        # A tutor that cannot see lines 3-172 must know that, or it reports an
+        # import missing when the import is merely out of frame.
+        assert "[lines 3-172 of this file are not shown]" in self._view().numbered()
+
+    def test_it_announces_the_tail_when_it_knows_the_file_is_longer(self):
+        assert "[lines 175-241 of this file are not shown]" in self._view().numbered()
+
+    def test_it_announces_nothing_after_the_end_when_the_length_is_unknown(self):
+        from hinting_engine import CodeView
+        view = CodeView.of(self.DIGEST, self.BANDS)
+        # The last band's last line is the last thing said. Asserted as "and
+        # then nothing" rather than as "175 is absent": the tail announcement
+        # this rules out is `[lines 175-241 ...]`, so a needle narrow enough
+        # to be unambiguous would also stop matching it.
+        assert view.numbered().endswith("174:     return mean(x)")
+
+    def test_it_announces_the_head_when_the_first_band_does_not_start_at_one(self):
+        from hinting_engine import CodeView
+        view = CodeView.of("def deep(x):\n    return x", [{"start": 40, "end": 41}], 60)
+        assert "[lines 1-39 of this file are not shown]" in view.numbered()
+
+    def test_line_at_reaches_across_the_gap(self):
+        assert self._view().line_at(173) == "def deep(x):"
+        assert self._view().line_at(1) == "import math"
+
+    def test_line_at_returns_nothing_for_a_line_it_does_not_hold(self):
+        assert self._view().line_at(100) is None
+
+    def test_contains_rejects_a_line_in_the_gap(self):
+        view = self._view()
+        assert view.contains(174) is True
+        assert view.contains(3) is False
+
+    def test_slice_skips_the_numbers_it_does_not_hold(self):
+        assert self._view().slice(1, 173) == [
+            (1, "import math"),
+            (2, "from stats import mean"),
+            (173, "def deep(x):"),
+        ]
+
+    def test_max_line_is_the_last_line_it_holds(self):
+        assert self._view().max_line == 174
+
+    def test_no_bands_means_the_whole_file_starting_at_line_one(self):
+        from hinting_engine import CodeView
+        view = CodeView.of("a = 1\nb = 2")
+        assert view.numbered() == "1: a = 1\n2: b = 2"
+        assert view.line_at(2) == "b = 2"
+
+    def test_bands_that_disagree_with_the_code_fall_back_to_the_whole_file(self):
+        # Two bands claiming six lines against a two-line digest. Believing
+        # them would renumber every line and cite the wrong one; the safe
+        # reading is that this client does not speak bands.
+        from hinting_engine import CodeView
+        view = CodeView.of("a = 1\nb = 2", [{"start": 1, "end": 3}, {"start": 9, "end": 11}])
+        assert view.numbered() == "1: a = 1\n2: b = 2"
+
+    def test_overlapping_bands_fall_back_to_the_whole_file(self):
+        from hinting_engine import CodeView
+        view = CodeView.of("a = 1\nb = 2", [{"start": 1, "end": 1}, {"start": 1, "end": 1}])
+        assert view.line_at(1) == "a = 1"
+        assert view.line_at(2) == "b = 2"
+
+    def test_descending_bands_fall_back_to_the_whole_file(self):
+        from hinting_engine import CodeView
+        view = CodeView.of("a = 1\nb = 2", [{"start": 9, "end": 9}, {"start": 1, "end": 1}])
+        assert view.line_at(2) == "b = 2"
+
+    def test_an_empty_digest_holds_nothing(self):
+        from hinting_engine import CodeView
+        view = CodeView.of("")
+        assert view.line_at(1) is None
+        assert view.max_line == 0
+
+    def test_whitespace_only_code_is_no_code(self):
+        # `number_lines` treats anything that strips to empty as "no code".
+        # splitlines() alone does not agree - "   " is one non-empty line by
+        # that measure - so a digest of pure whitespace must be caught the
+        # same way number_lines catches it, not numbered as "1:    ".
+        from hinting_engine import CodeView
+        view = CodeView.of("   ")
+        assert view.numbered() == "(no code provided)"
+
+    def test_blank_lines_only_code_is_no_code(self):
+        from hinting_engine import CodeView
+        view = CodeView.of("\n\n\n")
+        assert view.numbered() == "(no code provided)"
+
+    def test_blank_code_outranks_bands_that_would_otherwise_be_believed(self):
+        # This band is internally coherent - it claims exactly the two lines
+        # the digest has - so a blank check placed after band-parsing would
+        # still number them. A digest that is entirely whitespace carries
+        # nothing to number regardless of what its bands claim.
+        from hinting_engine import CodeView
+        view = CodeView.of("   \n   ", [{"start": 5, "end": 6}], total_lines=10)
+        assert view.numbered() == "(no code provided)"
+
+    def test_a_non_iterable_bands_value_falls_back_instead_of_raising(self):
+        # A caller handing a stray int, or a single band object instead of a
+        # list containing one, must degrade like any other unbelievable
+        # bands - never raise past this class.
+        from hinting_engine import CodeView
+        view = CodeView.of("a = 1\nb = 2", bands=42)
+        assert view.numbered() == "1: a = 1\n2: b = 2"
+
+    def test_a_non_numeric_total_lines_is_treated_as_unknown(self):
+        from hinting_engine import CodeView
+        view = CodeView.of(self.DIGEST, self.BANDS, total_lines="lots")
+        assert view.numbered().endswith("174:     return mean(x)")
+
+
+class TestTheConversationReadsTheDigest:
+    """The panel sends a digest; the prompt has to number it correctly."""
+
+    def _engine(self):
+        from hinting_engine import HintingEngine
+        engine = HintingEngine(api_key="test-key")
+        engine.client = _make_mock_client("ok")
+        return engine
+
+    def _user_message(self, engine):
+        messages = engine.client.chat.completions.create.call_args.kwargs["messages"]
+        return messages[-1]["content"]
+
+    def test_a_request_with_no_view_is_unchanged(self):
+        # The published 1.5.1 extension sends whole files and must keep
+        # producing the prompt it produces today, byte for byte.
+        from hinting_engine import number_lines
+        engine = self._engine()
+        code = "a = 1\nb = 2"
+        engine.generate_hint(code, "help", 1)
+        assert number_lines(code) in self._user_message(engine)
+
+    def test_a_view_puts_the_imports_and_the_block_in_the_prompt(self):
+        from hinting_engine import CodeView
+        engine = self._engine()
+        view = CodeView.of(
+            "import math\ndef deep(x):\n    return math.sqrt(x)",
+            [{"start": 1, "end": 1}, {"start": 173, "end": 174}],
+            total_lines=241,
+        )
+        engine.generate_hint("ignored", "help", 1, view=view)
+        sent = self._user_message(engine)
+        assert "1: import math" in sent
+        assert "173: def deep(x):" in sent
+        assert "[lines 2-172 of this file are not shown]" in sent
+
+    def test_the_streaming_path_reads_the_view_too(self):
+        from hinting_engine import CodeView
+        engine = self._engine()
+        view = CodeView.of("def deep(x):\n    return x", [{"start": 40, "end": 41}], 60)
+        list(engine.stream_hint("ignored", "help", 1, view=view))
+        assert "40: def deep(x):" in self._user_message(engine)
+
+
+class TestTheLineHintReadsAbsoluteLineNumbers:
+    """The cursor's line number is absolute; the code it arrives with is not.
+
+    `generate_line_hint` indexed `code.splitlines()[line_number - 1]`. Against
+    a digest, line 200 of a 42-line digest is out of range and the function
+    returns an empty hint - the whole inline surface going quiet on exactly
+    the long files the digest exists for.
+    """
+
+    def _engine(self):
+        from hinting_engine import HintingEngine
+        engine = HintingEngine(api_key="test-key")
+        engine.client = _make_mock_client('{"hint": "check the bound", "concept": "loops"}')
+        return engine
+
+    def _user_message(self, engine):
+        messages = engine.client.chat.completions.create.call_args.kwargs["messages"]
+        return messages[-1]["content"]
+
+    def _view(self):
+        from hinting_engine import CodeView
+        return CodeView.of(
+            "import math\ndef deep(n):\n    for i in range(1, n):\n        print(i)",
+            [{"start": 1, "end": 1}, {"start": 198, "end": 200}],
+            total_lines=241,
+        )
+
+    def test_it_answers_about_a_line_in_the_second_band(self):
+        engine = self._engine()
+        hint, concept = engine.generate_line_hint("ignored", 199, "python", view=self._view())
+        assert hint == "check the bound"
+        assert concept == "loops"
+
+    def test_it_marks_the_cursor_line_at_its_real_number(self):
+        engine = self._engine()
+        engine.generate_line_hint("ignored", 199, "python", view=self._view())
+        sent = self._user_message(engine)
+        assert "The student's cursor is on line 199" in sent
+        assert "199>     for i in range(1, n):" in sent
+        assert "198: def deep(n):" in sent
+
+    def test_it_skips_the_numbers_the_view_does_not_hold(self):
+        engine = self._engine()
+        engine.generate_line_hint("ignored", 199, "python", view=self._view())
+        # "197:" rather than bare "197" - the message also carries a random
+        # 16-hex-char nonce, which can coincidentally contain "197" as a
+        # substring on about one run in three hundred. A pure-hex nonce can
+        # never contain a colon, so "197:" only matches an actual line 197.
+        assert "197:" not in self._user_message(engine)
+
+    def test_it_declines_a_line_the_view_does_not_hold(self):
+        engine = self._engine()
+        assert engine.generate_line_hint("ignored", 50, "python", view=self._view()) == (
+            "",
+            "general",
+        )
+
+    def test_a_request_with_no_view_behaves_as_it_does_today(self):
+        engine = self._engine()
+        code = "x = 1\ny = 2\nz = 3"
+        hint, _ = engine.generate_line_hint(code, 2, "python")
+        assert hint == "check the bound"
+        assert "2> y = 2" in self._user_message(engine)
+
+    def test_a_line_past_the_end_of_a_whole_file_still_declines(self):
+        engine = self._engine()
+        assert engine.generate_line_hint("x = 1", 9, "python") == ("", "general")
+
+
+class TestTheScanReviewsTheBlockNotTheFile:
+    """A scan of the whole file marks up code the student is not working on.
+
+    A student editing `parse` collected lenses and Problems entries on three
+    other functions - and, because the scan also fired on activation, on a
+    file they had only just opened.
+    """
+
+    FLAGS = (
+        '{"flags": ['
+        '{"line": 174, "end_line": 174, "question": "Off by one?", "concept": "loops"},'
+        '{"line": 2, "end_line": 2, "question": "Unused import?", "concept": "imports"}'
+        "]}"
+    )
+
+    def _engine(self, reply=None):
+        from hinting_engine import HintingEngine
+        engine = HintingEngine(api_key="test-key")
+        engine.client = _make_mock_client(reply if reply is not None else self.FLAGS)
+        return engine
+
+    def _user_message(self, engine):
+        messages = engine.client.chat.completions.create.call_args.kwargs["messages"]
+        return messages[-1]["content"]
+
+    def _view(self):
+        from hinting_engine import CodeView
+        return CodeView.of(
+            "import math\nfrom stats import mean\ndef deep(n):\n    return n - 1",
+            [{"start": 1, "end": 2}, {"start": 173, "end": 174}],
+            total_lines=241,
+        )
+
+    FOCUS = {"start_line": 173, "end_line": 174, "label": "deep"}
+
+    def test_it_names_the_block_it_is_reviewing(self):
+        engine = self._engine()
+        engine.scan_code("ignored", "python", focus=self.FOCUS, view=self._view())
+        assert "Review lines 173-174 (deep)" in self._user_message(engine)
+
+    def test_it_keeps_a_flag_inside_the_block(self):
+        engine = self._engine()
+        flags = engine.scan_code("ignored", "python", focus=self.FOCUS, view=self._view())
+        assert [f["line"] for f in flags] == [174]
+
+    def test_it_drops_a_flag_on_an_import_it_was_only_shown_for_context(self):
+        engine = self._engine()
+        flags = engine.scan_code("ignored", "python", focus=self.FOCUS, view=self._view())
+        assert all(f["line"] != 2 for f in flags)
+
+    def test_it_drops_a_flag_on_a_line_the_view_never_held(self):
+        engine = self._engine('{"flags": [{"line": 90, "end_line": 90, "question": "Why?"}]}')
+        assert engine.scan_code("ignored", "python", focus=self.FOCUS, view=self._view()) == []
+
+    def test_it_clamps_a_flag_that_runs_past_the_block(self):
+        engine = self._engine(
+            '{"flags": [{"line": 173, "end_line": 400, "question": "Why?"}]}'
+        )
+        flags = engine.scan_code("ignored", "python", focus=self.FOCUS, view=self._view())
+        assert flags[0]["end_line"] == 174
+
+    def test_it_clamps_a_flag_to_the_focus_even_when_the_view_holds_more(self):
+        # The digest can carry more context than the focus block itself -
+        # that is the whole point of sending it. FOCUS still ends at 174;
+        # this view's second band runs to 190, standing in for extra lines
+        # sent around the block purely for context.
+        from hinting_engine import CodeView
+        body = "\n".join(f"    line_{i}" for i in range(1, 19))  # 18 lines, matches band width
+        view = CodeView.of(
+            "import math\nfrom stats import mean\n" + body,
+            [{"start": 1, "end": 2}, {"start": 173, "end": 190}],
+            total_lines=241,
+        )
+        engine = self._engine(
+            '{"flags": [{"line": 174, "end_line": 185, "question": "Why?"}]}'
+        )
+        flags = engine.scan_code("ignored", "python", focus=self.FOCUS, view=view)
+        assert flags[0]["end_line"] == 174
+
+    def test_it_clamps_a_flag_to_what_the_view_holds_even_when_the_focus_claims_more(self):
+        # focus.end_line is client-supplied and unchecked against the digest:
+        # scan_target only rejects start < 1 or end < start. A focus reaching
+        # past what the view actually covers must not widen the ceiling past
+        # view.max_line - otherwise a flag's end_line can name a line that
+        # was never sent in any digest.
+        engine = self._engine(
+            '{"flags": [{"line": 174, "end_line": 450, "question": "Why?"}]}'
+        )
+        focus = {"start_line": 173, "end_line": 500, "label": "deep"}
+        flags = engine.scan_code("ignored", "python", focus=focus, view=self._view())
+        assert flags[0]["end_line"] == 174
+
+    def test_a_scan_with_no_focus_keeps_todays_wording(self):
+        # The published extension sends no focus and must get the prompt it
+        # gets today, byte for byte.
+        engine = self._engine('{"flags": []}')
+        engine.scan_code("x = 1\ny = 2", "python")
+        assert "Review this beginner's Python file." in self._user_message(engine)
+
+    def test_a_scan_with_no_focus_still_flags_anywhere_in_the_file(self):
+        engine = self._engine('{"flags": [{"line": 2, "end_line": 2, "question": "Why?"}]}')
+        flags = engine.scan_code("x = 1\ny = 2", "python")
+        assert [f["line"] for f in flags] == [2]
+
+    def test_it_numbers_the_digest_at_its_real_lines(self):
+        engine = self._engine()
+        engine.scan_code("ignored", "python", focus=self.FOCUS, view=self._view())
+        sent = self._user_message(engine)
+        assert "173: def deep(n):" in sent
+        assert "[lines 3-172 of this file are not shown]" in sent

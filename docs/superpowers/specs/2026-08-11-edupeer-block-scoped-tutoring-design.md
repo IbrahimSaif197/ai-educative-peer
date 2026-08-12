@@ -82,11 +82,21 @@ export interface CodeDigest {
 export function buildDigest(
   lines: string[],
   languageId: string,
-  focus: LineSpan
+  focus: LineSpan,
+  cursorLine?: number
 ): CodeDigest;
 ```
 
-Four bands, merged where they touch or overlap, under a 120-line budget
+`cursorLine` is 0-based, like `focus`, and optional because not every digest
+has a cursor behind it — the panel's conversation is about the block. It was
+added after the branch's final review: see **Anchor** below.
+
+`buildDigest` is a pure module and never imports `vscode`. The one door from a
+`TextDocument` to a digest is `documentDigest.digestFor(doc, focus,
+cursorLine?, languageId?)`, which does the marker strip, the split and the
+call.
+
+Up to five bands, merged where they touch or overlap, under a 120-line budget
 (`MAX_CODE_LINES_SENT`, unchanged):
 
 **Header** — line 1 to the first line that is not an import, a `#include`,
@@ -129,6 +139,23 @@ land, and the signature band now covers that case for one line instead of
 forty. What ±3 buys that ±0 does not is the decorator, the `@staticmethod`, and
 the comment sitting immediately above the block — context that belongs to the
 block without being inside it.
+
+**Anchor** — the cursor's own line, claimed before the focus band and so
+before anything else. Usually free: in a block that fits the budget the focus
+band already holds it, and the chosen lines are a set. It only becomes a band
+of its own in a block longer than the budget, where the focus band keeps the
+head and drops the tail. Without it, `fetchLineHint` builds a digest around the
+*block* and then asks about the *cursor*, and nothing guarantees the two
+overlap: the backend finds no such line, returns an empty hint, and the lens
+renders that as "✓ Nothing to flag on this line" — the tutor reassuring the
+student about code it was never shown.
+
+What the anchor buys is exactly that, plus the same guarantee for the scan: a
+flag can land on the line the student is looking at. It does **not** make an
+oversized block's verdict trustworthy elsewhere in the block — `setFlagsIn` and
+`removeFixedBugMarkers` both act on the whole focus range, so a marker deep in
+an unreviewed tail is still deletable. That hazard predates the anchor and is
+out of scope here.
 
 On a 241-line file with a 15-line block: 65 lines sent today with no imports,
 about 42 after this, imports included.
@@ -201,16 +228,38 @@ The three callers that need it:
 
 ### A4. Every send site goes through it
 
-All six sites call `buildDigest`. `traceCode`'s no-selection fallback, which
-currently traces `editor.document.getText().trim()`, becomes the focus block —
+Six sites were named here at design time; there were seven —
+`extension.ts`'s `askWithActiveFile` was only found in Task 16. None of them
+still posts `doc.getText()`, but they do not all reach `buildDigest`, and the
+split is deliberate:
+
+- The three that ask for a *hint about a file* — the line hint, the scan and
+  the panel's conversation — go through `documentDigest.digestFor`, the one
+  document-to-digest door, which calls `buildDigest`.
+- `/trace`, `/predict` and `askWithActiveFile` go through
+  `extension.ts`'s `blockAround` → `focusText`: the block's own text,
+  verbatim, seeded `bug:` markers included. A desk-check exercise with elided
+  bands in it is not a desk-check exercise, and `getTrace` never numbers what
+  it is given, so absolute coordinates buy nothing there. `blockAround`'s
+  comment says this, so the next reader does not "unify" it by mistake.
+- `sidebarProvider`'s fallback branch calls `buildDigest` directly on a
+  string — a review exercise, a prediction, a trace answer — which was never a
+  `TextDocument` and so has no door to go through.
+
+`traceCode`'s no-selection fallback, which traced
+`editor.document.getText().trim()`, becomes the focus block either way —
 tracing an entire file was never the intent.
 
 `lastFullCode` is renamed `panelFullCode`. It still feeds the webview's
 **Whole file** toggle, which is local to the editor and stays exactly as it is;
 the rename stops it being reached for as a request payload again.
 
-A test in `auditRegressions.test.ts` asserts no `getText()` result reaches an
-`apiClient` method, so this cannot regress quietly.
+Tests in `auditRegressions.test.ts` keep this from regressing quietly. They
+assert against the chokepoint symbol rather than the shape of the old inline
+incantation: no sender feeds a document's own text into a `buildDigest` call
+(checked by walking each call's arguments, since the call spans four lines),
+`codeDigest.ts` imports no `vscode`, and a bare `getText()` in a sender must be
+the panel's display copy or a marker search.
 
 ---
 
@@ -239,12 +288,21 @@ block they are generous, which is the right direction.
 | Extension activates | scans whole file | nothing |
 | Switch tab | scans whole file | nothing |
 | Cursor rests in a block | line hint only | line hint, and scan that block |
-| Edit inside the current block | scans whole file | scans that block |
-| Edit in a different block | scans whole file | nothing |
+| Edit anywhere | scans whole file | scans the block the cursor is in |
 
 Opening a file is not working on it. The activation scan
 (`inlineTutor.ts:295-298`) and the active-editor scan (`:199-206`) are removed;
 nothing runs until the student lands somewhere.
+
+An earlier draft of this table split the edit row in two — "edit inside the
+current block" scans it, "edit in a different block" does nothing — and that
+is not what ships. `runScan` resolves the focus from the live cursor, so an
+edit anywhere scans wherever the cursor is. That is the better behaviour
+(you cannot edit a block without your cursor in it) and it needs no
+before-and-after comparison of where the edit landed, but it is one row, not
+two. One exception is worth knowing: `runScan` returns early when the
+document is not the active editor's, so an edit followed by a tab switch
+inside the 3.5s debounce drops that scan.
 
 Resting the cursor in a block now schedules a scan of it, which it did not do
 before. That is the "using it" signal — a student stuck on a function is
@@ -253,9 +311,21 @@ looking at it, not necessarily typing in it.
 The obvious risk is a student scrolling through a ten-function file and firing
 ten scans. `scanFingerprints` is keyed by document URI, which would treat "same
 file" as "already scanned" and mask the problem inconsistently. It becomes
-keyed by `uri#label#blockText`, so revisiting a block that has not changed
-costs nothing and each block is scanned once per version of its own text. The
-3.5s debounce and the 429 back-off window are unchanged.
+keyed by `uri#breadcrumb`, with the digest's fingerprint as the value, so
+revisiting a block that has not changed usually costs nothing. `breadcrumb`,
+not `label`: a bare identifier collides — two classes in one file can each have
+a `run` — and the breadcrumb is the qualified path. It carries the span on the
+selection and window paths, where there is no name to qualify. The 3.5s
+debounce and the 429 back-off window are unchanged.
+
+"Usually" is the honest word, and it is narrower than the first draft's "each
+block is scanned once per version of its own text". The digest carries the
+cursor's own line, so in a block longer than the 120-line budget — where the
+digest keeps the block's head and drops its tail — the digest's content moves
+with the cursor and its fingerprint moves with it. Resting the cursor at a new
+tail position in an unchanged oversized block therefore does cost a scan. That
+is the price of the anchor (see below); it does not apply to any block that
+fits in the budget, which is nearly all of them.
 
 `edupeer.scanFile` keeps its command id, for anyone who has bound it, and is
 retitled **EduPeer: Scan This Block**.
@@ -292,13 +362,19 @@ Two consequences follow:
 ```
 cursor rests in a block, or an edit lands inside it
    └─> resolveFocus                       [unchanged]
-   └─> buildDigest(lines, language, focus)
-         └─> { code, bands }  ──> /scan, /line-hint, /hint, /trace
+   └─> digestFor(doc, focus, cursorLine?) [the one document -> digest door]
+         └─> stripBugMarkers, split
+         └─> buildDigest(lines, language, focus, cursorLine?)
+               └─> { code, bands } ──> /scan, /line-hint, /hint
                                     └─> CodeView.of(code, bands)
                                           ├─ numbered()  -> the prompt
                                           ├─ line_at(n)  -> generate_line_hint
                                           └─ contains(n) -> flags outside focus dropped
    └─> setFlagsIn(focusSpan, flags)       [other blocks untouched]
+
+/trace and /predict do not take this path
+   └─> blockAround -> focusText           [the block verbatim, markers and all;
+                                            getTrace never numbers it]
 
 open a file / switch tab
    └─> nothing
@@ -319,8 +395,17 @@ open a file / switch tab
 `codeDigest` (Jest, pure): header band found per supported language; a file
 with no imports yields no header band; header cap at 30; signature cap at 20
 prefers the nearest; enclosing class header included for a method; adjacent
-bands merge; a block larger than the budget keeps its head; and the invariant
-that band lengths always equal the emitted line count.
+bands merge; a block larger than the budget keeps its head; the cursor's line
+survives a budget that drops the block's tail; and the band invariant.
+
+The invariant has to be stated as *the bands name the lines the digest
+carries* — `expect(code.split("\n")).toEqual(bands.flatMap((b) =>
+FIXTURE.slice(b.start - 1, b.end)))` — and not as "band lengths equal the
+emitted line count", which is what the first draft said and what shipped.
+`code` is built by joining exactly the lines the bands name, so a length
+comparison compares `join` with `length` and cannot fail. The form above flips
+on any off-by-one in `slice(b.start - 1, b.end)`, which is the most
+load-bearing arithmetic in the module.
 
 `CodeView` (pytest): absent bands behave exactly as today; inconsistent bands
 fall back rather than raise; `line_at` resolves an absolute number into the

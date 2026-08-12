@@ -456,6 +456,13 @@ def number_lines(
     editor; anything dropped from the top silently shifts every number after
     it. Same `<n>: <text>` format `scan_code` and `generate_line_hint` use.
 
+    "The client sends the whole document" is true of pre-1.5.2 clients only.
+    From 1.5.2 the extension sends a digest with `bands`, and `CodeView`
+    numbers that instead — this function, `_window` and `FOCUS_CONTEXT_LINES`
+    are the compatibility path for every marketplace install that has not
+    updated yet. They are still reached, still correct, and must stay until
+    that population turns over. Not dead code.
+
     Over `max_lines` the file is windowed around `focus` rather than sent
     whole — see `MAX_CODE_LINES_SENT`. The numbers stay absolute, so a hint
     about line 180 still says 180, and each elision is announced: a model that
@@ -478,22 +485,176 @@ def number_lines(
     return "\n".join(parts)
 
 
+def _parse_bands(bands, line_count: int) -> Optional[List[Tuple[int, int]]]:
+    """Bands as (start, end) pairs, or None when they cannot be believed.
+
+    Ascending, disjoint, 1-based, and covering exactly as many lines as the
+    code arrived with. Anything else and the caller falls back to treating
+    the code as a whole file - which is what an extension predating `bands`
+    sends, and the only safe reading of a digest whose coordinates are wrong.
+    That includes a `bands` that is not even a list - a bare int, a single
+    CodeBand instead of one wrapped in a list - which is exactly as
+    unbelievable as a malformed one, not a reason to raise past this function.
+    """
+    if not bands:
+        return None
+    try:
+        band_list = list(bands)
+    except TypeError:
+        return None
+    parsed: List[Tuple[int, int]] = []
+    previous_end = 0
+    for band in band_list:
+        try:
+            start = int(band["start"]) if isinstance(band, dict) else int(band.start)
+            end = int(band["end"]) if isinstance(band, dict) else int(band.end)
+        except (TypeError, ValueError, KeyError, AttributeError):
+            return None
+        if start < 1 or end < start or start <= previous_end:
+            return None
+        parsed.append((start, end))
+        previous_end = end
+    if sum(end - start + 1 for start, end in parsed) != line_count:
+        return None
+    return parsed
+
+
+class CodeView:
+    """The student's code, and which of their editor's lines it came from.
+
+    `code` stopped being the whole file: it carries the imports and the block
+    being worked on. Position in the string is therefore no longer the line
+    number, and three separate places used to assume it was - the prompt's
+    numbering, `generate_line_hint`'s window, and `scan_code`'s validation of
+    the model's flags. All three ask this object instead.
+    """
+
+    def __init__(
+        self,
+        lines: List[str],
+        bands: List[Tuple[int, int]],
+        total_lines: Optional[int] = None,
+    ):
+        self._bands = bands
+        # Defensive like every other externally-supplied int in this module
+        # (`clamp_hint_level`, `_window`, `focus_instruction`): unreachable
+        # while the only caller is `of`, but a non-numeric value must degrade
+        # to "unknown" rather than raise out of `numbered()` later.
+        try:
+            self._total_lines = int(total_lines) if total_lines is not None else None
+        except (TypeError, ValueError):
+            self._total_lines = None
+        self._by_line = {}
+        cursor = 0
+        for start, end in bands:
+            for n in range(start, end + 1):
+                self._by_line[n] = lines[cursor]
+                cursor += 1
+
+    @classmethod
+    def of(cls, code: str, bands=None, total_lines: Optional[int] = None) -> "CodeView":
+        # A blank digest - the whole file was whitespace, or every band's
+        # text was - has nothing to number, exactly like `number_lines`'s own
+        # `if not code.strip()` check. Decided before the bands are even
+        # looked at: a bands list that is internally coherent against a
+        # blank digest must not win and produce a `numbered()` that
+        # disagrees with what `number_lines` would have said about the same
+        # file.
+        if not code.strip():
+            return cls([], [], None)
+        lines = code.splitlines()
+        parsed = _parse_bands(bands, len(lines))
+        if parsed is None:
+            parsed = [(1, len(lines))] if lines else []
+            total_lines = len(lines) or None
+        return cls(lines, parsed, total_lines)
+
+    @property
+    def max_line(self) -> int:
+        return self._bands[-1][1] if self._bands else 0
+
+    def contains(self, n: int) -> bool:
+        return n in self._by_line
+
+    def line_at(self, n: int) -> Optional[str]:
+        return self._by_line.get(n)
+
+    def slice(self, start: int, end: int) -> List[Tuple[int, str]]:
+        return [(n, self._by_line[n]) for n in range(start, end + 1) if n in self._by_line]
+
+    def numbered(self) -> str:
+        """`<n>: <text>`, the format every other prompt in this module uses.
+
+        Each elision is announced. A model handed a block with no notice that
+        the top of the file is missing will confidently report an import that
+        is simply out of frame.
+        """
+        if not self._bands:
+            return "(no code provided)"
+        parts: List[str] = []
+        previous_end = 0
+        for start, end in self._bands:
+            if start > previous_end + 1:
+                parts.append(
+                    f"[lines {previous_end + 1}-{start - 1} of this file are not shown]"
+                )
+            parts.extend(f"{n}: {self._by_line[n]}" for n in range(start, end + 1))
+            previous_end = end
+        if self._total_lines and self._total_lines > previous_end:
+            parts.append(
+                f"[lines {previous_end + 1}-{self._total_lines} of this file are not shown]"
+            )
+        return "\n".join(parts)
+
+
+def focus_span(
+    focus: Optional[dict], ceiling: Optional[int] = None
+) -> Optional[Tuple[int, int, str]]:
+    """The client's focus block as `(start, end, label)`, or None if unusable.
+
+    One reading of `focus` for the three places that need one. They used to
+    parse it separately, and drifted: two accepted any `start >= 1, end >=
+    start`, the third also required the span to fit inside what the digest
+    actually carried. That is not a style complaint - it is where this
+    feature's recurring defect lived. The missing ceiling was fixed once in
+    `generate_line_hint`, and the identical hole then turned up again in
+    `scan_code`'s clamp. A caller that wants a ceiling now says so.
+
+    None, rather than an exception, for every unusable shape: a missing focus,
+    a non-numeric bound, an inverted or zero-based span, a span reaching past
+    `ceiling` - and a `focus` that is not a mapping at all, which used to
+    raise `AttributeError` straight out of the prompt builder. An optional
+    enrichment field must never cost the student their hint; `models.FocusRange`
+    deliberately accepts a nonsensical span and leaves the judgement here.
+
+    `ceiling` is inclusive, and only bounds `end`: a `start` past the ceiling
+    is already rejected by whatever `end >= start` implies.
+    """
+    if not focus:
+        return None
+    try:
+        start = int(focus.get("start_line", 0))
+        end = int(focus.get("end_line", 0))
+    except (TypeError, ValueError, AttributeError):
+        return None
+    if start < 1 or end < start:
+        return None
+    if ceiling is not None and end > ceiling:
+        return None
+    label = " ".join(str(focus.get("label", "")).split())[:MAX_FOCUS_LABEL_CHARS]
+    return start, end, label
+
+
 def focus_instruction(focus: Optional[dict]) -> str:
     """Tell the model which lines to answer about.
 
     Returns "" for a missing or nonsensical focus, so an older extension — or
     a file where the block could not be resolved — behaves exactly as before.
     """
-    if not focus:
+    span = focus_span(focus)
+    if span is None:
         return ""
-    try:
-        start = int(focus.get("start_line", 0))
-        end = int(focus.get("end_line", 0))
-    except (TypeError, ValueError):
-        return ""
-    if start < 1 or end < start:
-        return ""
-    label = " ".join(str(focus.get("label", "")).split())[:MAX_FOCUS_LABEL_CHARS]
+    start, end, label = span
     where = f"lines {start}-{end}" if end > start else f"line {start}"
     named = f" ({label})" if label else ""
     return (
@@ -501,6 +662,17 @@ def focus_instruction(focus: Optional[dict]) -> str:
         "is background context. Answer about that block, and cite real line "
         "numbers when you point at code.\n\n"
     )
+
+
+def scan_target(focus: Optional[dict]) -> Optional[Tuple[int, int, str]]:
+    """The block a scan is scoped to, or None to review the whole file.
+
+    No ceiling: `scan_code` bounds its flags by `min(target[1],
+    view.max_line)` at the point it uses them, which also keeps the prompt's
+    "Review lines X-Y" naming the block the student asked about rather than
+    the part of it that happened to fit in the digest.
+    """
+    return focus_span(focus)
 
 
 class HintingEngine:
@@ -539,13 +711,15 @@ class HintingEngine:
     def _build_user_message(
         self, code: str, question: str, hint_level: int, language: str,
         mode: str = "hint", edit_summary: str = "", focus: Optional[dict] = None,
+        view: Optional[CodeView] = None,
     ) -> str:
         lang = get_language(language)
         nonce = secrets.token_hex(8)
         # `focus` decides which window survives when the file is too big to
         # send whole, so it has to reach the numbering rather than only the
-        # instruction below it.
-        code_block = number_lines(code, focus)
+        # instruction below it. A `view` means the client already made that
+        # choice and sent a digest; its bands carry the real line numbers.
+        code_block = view.numbered() if view is not None else number_lines(code, focus)
         code_part = self._wrap_untrusted(
             "student_code", nonce, f"language: {lang['display_name']}\n{code_block}"
         )
@@ -624,16 +798,26 @@ class HintingEngine:
         except json.JSONDecodeError:
             return {}
 
-    def scan_code(self, code: str, language: str = "python") -> List[dict]:
+    def scan_code(
+        self, code: str, language: str = "python", focus: Optional[dict] = None,
+        view: Optional[CodeView] = None,
+    ) -> List[dict]:
         stripped = code.strip()
         if not stripped:
             return []
         lang = get_language(language)
+        view = view if view is not None else CodeView.of(code)
+        target = scan_target(focus)
         nonce = secrets.token_hex(8)
-        numbered = "\n".join(f"{i+1}: {ln}" for i, ln in enumerate(code.splitlines()))
+        if target:
+            start, end, label = target
+            named = f" ({label})" if label else ""
+            what = f"lines {start}-{end}{named} of this beginner's {lang['display_name']} file"
+        else:
+            what = f"this beginner's {lang['display_name']} file"
         user_msg = (
-            f"Review this beginner's {lang['display_name']} file. Flag at most 5 suspicious lines.\n\n"
-            + self._wrap_untrusted("student_code", nonce, numbered)
+            f"Review {what}. Flag at most 5 suspicious lines.\n\n"
+            + self._wrap_untrusted("student_code", nonce, view.numbered())
             + "\n\nRespond with JSON only."
         )
         system = SCAN_SYSTEM_PROMPT_TEMPLATE.format(language=lang["display_name"]) + UNTRUSTED_INPUT_RULE
@@ -642,7 +826,6 @@ class HintingEngine:
         flags = data.get("flags") if isinstance(data, dict) else None
         if not isinstance(flags, list):
             return []
-        total_lines = max(1, len(code.splitlines()))
         cleaned: List[dict] = []
         bug_count = 0
         style_count = 0
@@ -654,9 +837,18 @@ class HintingEngine:
                 end_line = int(f.get("end_line", line))
             except (TypeError, ValueError):
                 continue
-            if line < 1 or line > total_lines:
+            # A line the digest never sent at all cannot be a real flag.
+            if not view.contains(line):
                 continue
-            end_line = max(line, min(end_line, total_lines))
+            # A model shown an import for context does not get to mark it up.
+            if target and not (target[0] <= line <= target[1]):
+                continue
+            # focus.end_line is client-supplied and unchecked against the
+            # digest - a focus reaching past what the view actually covers
+            # must not widen the ceiling past view.max_line, or a flag's
+            # end_line can name a line that was never sent in any digest.
+            ceiling = min(target[1], view.max_line) if target else view.max_line
+            end_line = max(line, min(end_line, ceiling))
             question = str(f.get("question", "")).strip()
             if not question:
                 continue
@@ -691,27 +883,31 @@ class HintingEngine:
 
     def generate_line_hint(
         self, code: str, line_number: int, language: str = "python",
-        focus: Optional[dict] = None,
+        focus: Optional[dict] = None, view: Optional[CodeView] = None,
     ) -> Tuple[str, str]:
-        lines = code.splitlines()
-        if not lines or line_number < 1 or line_number > len(lines):
+        view = view if view is not None else CodeView.of(code)
+        if view.line_at(line_number) is None:
             return "", "general"
         lang = get_language(language)
-        idx = line_number - 1
         # A resolved focus block is a better window than a fixed ±3, but it is
         # capped so a 200-line function does not become the whole prompt.
-        start, end = max(0, idx - 3), min(len(lines), idx + 4)
-        if focus:
-            try:
-                f_start = int(focus.get("start_line", 0)) - 1
-                f_end = int(focus.get("end_line", 0))
-            except (TypeError, ValueError):
-                f_start, f_end = -1, -1
-            if 0 <= f_start < f_end <= len(lines) and f_start <= idx < f_end:
-                start = max(f_start, idx - 30)
-                end = min(f_end, idx + 31)
+        start, end = line_number - 3, line_number + 3
+        # The ceiling is what the view can actually vouch for: a focus reaching
+        # past the file (or the digest) is exactly as unusable as one with
+        # start > end, and must fall back to the tight default rather than
+        # silently widening into lines nobody sent.
+        span = focus_span(focus, ceiling=view.max_line)
+        # And the block has to be the one the cursor is in. A focus naming some
+        # other block says nothing about this line.
+        if span is not None and span[0] <= line_number <= span[1]:
+            f_start, f_end, _ = span
+            start = max(f_start, line_number - 30)
+            end = min(f_end, line_number + 30)
+        # Absolute numbers throughout, and lines the view does not hold are
+        # skipped rather than counted - the window may span a band boundary.
         window = "\n".join(
-            f"{i+1}{'>' if i == idx else ':'} {lines[i]}" for i in range(start, end)
+            f"{n}{'>' if n == line_number else ':'} {text}"
+            for n, text in view.slice(start, end)
         )
         # Same treatment as `_build_user_message` and `scan_code`: a bare ```
         # fence is closed by the student typing ```, and this window is now up
@@ -848,6 +1044,7 @@ class HintingEngine:
         pacing: str,
         edit_summary: str = "",
         focus: Optional[dict] = None,
+        view: Optional[CodeView] = None,
     ) -> Tuple[List[dict], str]:
         level = clamp_hint_level(hint_level)
         mode = effective_mode(mode, level)
@@ -876,7 +1073,7 @@ class HintingEngine:
             {
                 "role": "user",
                 "content": self._build_user_message(
-                    code, question, level, language, mode, edit_summary, focus
+                    code, question, level, language, mode, edit_summary, focus, view
                 ),
             }
         )
@@ -903,9 +1100,10 @@ class HintingEngine:
         pacing: str = "",
         edit_summary: str = "",
         focus: Optional[dict] = None,
+        view: Optional[CodeView] = None,
     ) -> Tuple[str, List[str]]:
         messages, mode = self._prepare_hint_messages(
-            code, question, hint_level, language, history, mode, pacing, edit_summary, focus
+            code, question, hint_level, language, history, mode, pacing, edit_summary, focus, view
         )
         raw_text = self._chat_messages(messages, 400)
         return self._finalize_hint(raw_text, code, question, language, mode)
@@ -925,11 +1123,12 @@ class HintingEngine:
         pacing: str = "",
         edit_summary: str = "",
         focus: Optional[dict] = None,
+        view: Optional[CodeView] = None,
     ):
         """Yield {"type": "delta", "text"} events followed by one
         {"type": "done", "hint", "concept_tags"} event."""
         messages, mode = self._prepare_hint_messages(
-            code, question, hint_level, language, history, mode, pacing, edit_summary, focus
+            code, question, hint_level, language, history, mode, pacing, edit_summary, focus, view
         )
         system, turns = split_system(messages)
         full = ""

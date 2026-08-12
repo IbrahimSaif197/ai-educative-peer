@@ -21,6 +21,12 @@ function change(from: number, to: number, inserted: number): ContentChange {
   return { startLine: from, endLine: to, insertedLineCount: inserted };
 }
 
+/**
+ * A span wide enough to hold every flag these tests seed with, standing in
+ * for "the whole file was just scanned" now that seeding requires a span.
+ */
+const wholeFile = { start: 0, end: 100 };
+
 describe("lineDelta", () => {
   it("is zero for an edit inside one line", () => {
     expect(lineDelta(change(2, 2, 1))).toBe(0);
@@ -38,7 +44,7 @@ describe("lineDelta", () => {
 describe("AnnotationStore.applyChanges", () => {
   it("shifts a flag down when lines are inserted above it", () => {
     const store = new AnnotationStore();
-    store.setFlags([flag(10, 12)]);
+    store.setFlagsIn(wholeFile, [flag(10, 12)]);
 
     store.applyChanges([change(0, 0, 4)]); // 3 new lines at the top
 
@@ -49,7 +55,7 @@ describe("AnnotationStore.applyChanges", () => {
 
   it("shifts a flag up when lines are deleted above it", () => {
     const store = new AnnotationStore();
-    store.setFlags([flag(10, 12)]);
+    store.setFlagsIn(wholeFile, [flag(10, 12)]);
 
     store.applyChanges([change(0, 2, 1)]); // 3 lines become 1
 
@@ -60,7 +66,7 @@ describe("AnnotationStore.applyChanges", () => {
 
   it("drops a flag when the edit lands inside it", () => {
     const store = new AnnotationStore();
-    store.setFlags([flag(10, 12)]);
+    store.setFlagsIn(wholeFile, [flag(10, 12)]);
 
     store.applyChanges([change(10, 10, 1)]); // 0-based line 10 == 1-based 11
 
@@ -69,7 +75,7 @@ describe("AnnotationStore.applyChanges", () => {
 
   it("leaves a flag alone when the edit is below it", () => {
     const store = new AnnotationStore();
-    store.setFlags([flag(10, 12)]);
+    store.setFlagsIn(wholeFile, [flag(10, 12)]);
 
     store.applyChanges([change(40, 40, 1)]);
 
@@ -80,7 +86,7 @@ describe("AnnotationStore.applyChanges", () => {
 
   it("drops a flag when a multi-line replace spans it", () => {
     const store = new AnnotationStore();
-    store.setFlags([flag(10, 12)]);
+    store.setFlagsIn(wholeFile, [flag(10, 12)]);
 
     store.applyChanges([change(5, 20, 1)]);
 
@@ -89,7 +95,7 @@ describe("AnnotationStore.applyChanges", () => {
 
   it("applies every change against pre-edit coordinates, in any order", () => {
     const store = new AnnotationStore();
-    store.setFlags([flag(30, 30)]);
+    store.setFlagsIn(wholeFile, [flag(30, 30)]);
 
     // VS Code delivers contentChanges in reverse document order.
     store.applyChanges([change(20, 20, 3), change(5, 5, 3)]);
@@ -128,7 +134,7 @@ describe("AnnotationStore.applyChanges", () => {
 describe("AnnotationStore lookups", () => {
   it("finds the flag covering a line anywhere in its span", () => {
     const store = new AnnotationStore();
-    store.setFlags([flag(10, 12)]);
+    store.setFlagsIn(wholeFile, [flag(10, 12)]);
 
     expect(store.annotationsAt(10).flag).toBeDefined(); // 0-based 10 == 1-based 11
     expect(store.annotationsAt(13).flag).toBeUndefined();
@@ -137,15 +143,6 @@ describe("AnnotationStore lookups", () => {
   it("reports idle for a line that has never been asked about", () => {
     expect(new AnnotationStore().lensStateAt(4)).toEqual({ kind: "idle" });
   });
-
-  it("replaces the whole flag set on setFlags", () => {
-    const store = new AnnotationStore();
-    store.setFlags([flag(1, 1)]);
-    store.setFlags([flag(5, 5)]);
-
-    expect(store.flags()).toHaveLength(1);
-    expect(store.flags()[0].line).toBe(5);
-  });
 });
 
 describe("AnnotationStore.revision", () => {
@@ -153,7 +150,7 @@ describe("AnnotationStore.revision", () => {
     const store = new AnnotationStore();
     const start = store.revision;
 
-    store.setFlags([flag(3, 3)]);
+    store.setFlagsIn(wholeFile, [flag(3, 3)]);
     store.setHint(2, { hint: "off by one?", concept: "loops" });
     store.setLensState(2, { kind: "loading" });
     store.clearHint(2);
@@ -254,5 +251,47 @@ describe("AnnotationStore — a revision bump orphans every loading state", () =
       [4, "ready"],
       [6, "error"],
     ]);
+  });
+});
+
+// `AnnotationStore` and `LineFlag` are already imported above, and `flag(start,
+// end, question)` above already makes a single-line flag via `flag(n, n)`, so
+// this block reuses both rather than redeclaring them under the same names.
+describe("a scan of one block leaves the other blocks alone", () => {
+  it("keeps flags outside the scanned span", () => {
+    const store = new AnnotationStore();
+    store.setFlagsIn({ start: 0, end: 20 }, [flag(5, 5)]);
+    store.setFlagsIn({ start: 40, end: 60 }, [flag(45, 45)]);
+    expect(store.flags().map((f) => f.line).sort((a, b) => a - b)).toEqual([5, 45]);
+  });
+
+  it("replaces flags inside the scanned span", () => {
+    const store = new AnnotationStore();
+    store.setFlagsIn({ start: 0, end: 20 }, [flag(5, 5, "First")]);
+    store.setFlagsIn({ start: 0, end: 20 }, [flag(7, 7, "Second")]);
+    expect(store.flags()).toHaveLength(1);
+    expect(store.flags()[0].question).toBe("Second");
+  });
+
+  it("clears a block whose scan came back clean", () => {
+    const store = new AnnotationStore();
+    store.setFlagsIn({ start: 0, end: 20 }, [flag(5, 5)]);
+    store.setFlagsIn({ start: 0, end: 20 }, []);
+    expect(store.flags()).toEqual([]);
+  });
+
+  it("drops a flag that merely overlaps the scanned span", () => {
+    // A multi-line flag straddling the boundary was written against code the
+    // new scan has just re-read. Keeping it would double up.
+    const store = new AnnotationStore();
+    store.setFlagsIn({ start: 0, end: 20 }, [{ ...flag(18, 18), end_line: 22 }]);
+    store.setFlagsIn({ start: 20, end: 40 }, []);
+    expect(store.flags()).toEqual([]);
+  });
+
+  it("still converts to and from the wire's 1-based lines", () => {
+    const store = new AnnotationStore();
+    store.setFlagsIn({ start: 0, end: 20 }, [flag(5, 5)]);
+    expect(store.annotationsAt(4).flag?.line).toBe(5);
   });
 });

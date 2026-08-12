@@ -7,7 +7,7 @@
  * the adapter that converts to and from VS Code's own types.
  *
  * Line numbers here are 0-based, matching the editor. `LineFlag` arrives from
- * the backend 1-based, so `setFlags`/`flags` convert at that boundary and
+ * the backend 1-based, so `setFlagsIn`/`flags` convert at that boundary and
  * nowhere else.
  */
 
@@ -96,14 +96,29 @@ export class AnnotationStore {
     }
   }
 
-  /** Replace the flag set wholesale, as a fresh scan does. */
-  setFlags(flags: LineFlag[]): void {
-    this.storedFlags = flags.map((flag) => ({
-      // The backend is 1-based; everything below this line is 0-based.
-      start: Math.max(0, flag.line - 1),
-      end: Math.max(0, Math.max(flag.line, flag.end_line) - 1),
-      flag,
-    }));
+  /**
+   * Replace the flags inside one span, leaving every other block alone.
+   *
+   * Scans are per block now, so a wholesale replacement would mean reviewing
+   * `parse` erased every flag on `validate` — the student losing marks on
+   * code they have not touched, simply for moving the cursor.
+   *
+   * A flag merely overlapping the span goes too: it was written against code
+   * this scan has just re-read, and keeping it would double up.
+   */
+  setFlagsIn(span: LineSpan, flags: LineFlag[]): void {
+    const outside = this.storedFlags.filter(
+      (f) => f.end < span.start || f.start > span.end
+    );
+    this.storedFlags = [
+      ...outside,
+      ...flags.map((flag) => ({
+        // The backend is 1-based; everything below this line is 0-based.
+        start: Math.max(0, flag.line - 1),
+        end: Math.max(0, Math.max(flag.line, flag.end_line) - 1),
+        flag,
+      })),
+    ].sort((a, b) => a.start - b.start);
   }
 
   /** The one place a stored span becomes wire-shaped, 1-based line numbers. */

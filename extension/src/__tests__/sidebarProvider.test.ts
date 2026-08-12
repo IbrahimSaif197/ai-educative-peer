@@ -1024,14 +1024,19 @@ describe("EduPeerSidebarProvider — focus scoping", () => {
     expect(provider["lastDocumentKey"]).toContain("#calculate_average");
   });
 
-  it("sends the whole file as code and the block as focus", async () => {
+  it("sends the file's digest as code, ignoring the text passed in, and the block as focus", async () => {
     const { provider, api } = await setupProvider(SOURCE, 4);
     await provider["sendFocus"]();
 
     await provider["handleAsk"]("why is it dividing by zero?", "focus block text", "hint");
 
     const request = api.streamHint.mock.calls[0][0];
+    // `aboutOpenFile` defaults true, so this ignores the "focus block text"
+    // passed in and sends the open file's digest instead — small enough here
+    // that the digest includes the whole thing, header import and all.
     expect(request.code).toContain("import math");
+    expect(request.code).not.toContain("focus block text");
+    expect(request.bands).toBeDefined();
     expect(request.focus).toEqual({
       start_line: 3,
       end_line: 5,
@@ -1289,6 +1294,23 @@ describe("the seeded bug marker never reaches the tutor", () => {
 
     const focus = latest(posted, "focus");
     expect(focus.focusCode).toContain("# bug: subtracts instead of adds");
+  });
+
+  it("strips the marker from a request that isn't about the open file either", async () => {
+    // aboutOpenFile:false is the path a review exercise, a prediction or a
+    // trace answer takes (handleReviewAnswer/handlePredictAnswer/
+    // handleTraceAnswer). That code never passes through `sendFocus`, so
+    // nothing has stripped it by the time it reaches here — unlike the
+    // digest built from the open file, this branch has to keep stripping at
+    // request time, the same as every request used to before digests.
+    const h = await build();
+    await h.provider["handleAsk"]("what does this do?", MARKED, "predict-output", {
+      aboutOpenFile: false,
+    });
+
+    const sent = hintRequest(h.api).code;
+    expect(sent).not.toContain("bug:");
+    expect(sent).toContain("return a + b");
   });
 });
 
@@ -2203,5 +2225,126 @@ describe("the card is labelled with the mode the backend actually ran", () => {
     expect(recordSpy).toHaveBeenCalledTimes(1);
     expect(levels).toEqual([4]);
     recordSpy.mockRestore();
+  });
+});
+
+describe("the conversation carries a digest, not the file", () => {
+  beforeEach(() => mock.__reset());
+
+  /**
+   * Long enough that a block-scoped digest can be proven to exclude most of
+   * it. Mirrors the fixture `inlineTutor.test.ts` uses for the same proof
+   * (Task 13): `import math` is the header; `_spacer` is a one-line
+   * definition placed right after it purely so `codeDigest`'s header band
+   * stops there — without a definition line to land on, the header band
+   * treats every top-level assignment below it as a module-level constant
+   * and keeps swallowing them one at a time, up to its own 30-line cap,
+   * which would pull early filler (e.g. `line_10 = 10`) into the digest and
+   * falsify the very thing this fixture exists to prove. `deep` lands
+   * exactly on line 200 (0-based 199), so a cursor there sits inside a block
+   * `resolveFocus` can name.
+   */
+  const LONG_PYTHON_FILE =
+    [
+      "import math",
+      "def _spacer(): pass",
+      ...Array.from({ length: 197 }, (_, i) => `line_${i + 1} = ${i + 1}`),
+      "def deep(n):",
+      "    return n - 1",
+    ].join("\n") + "\n";
+
+  /** Open a document as the active editor, cursor at the top. */
+  function openDocument(text: string, languageId = "python") {
+    const doc = mock.__makeDocument(text, languageId, "/tmp/long/demo.py");
+    mock.window.activeTextEditor = mock.__makeEditor(doc, 0, 0);
+    return doc;
+  }
+
+  /** Move the active editor's cursor to `line` (0-based), an empty selection. */
+  function placeCursorOn(doc: any, line: number) {
+    mock.window.activeTextEditor = mock.__makeEditor(doc, line);
+  }
+
+  /**
+   * Force a fresh focus (and digest) resolve, the way the panel's Refresh
+   * button does — `refreshCode` is the suite's existing entry point onto
+   * the private `sendFocus({ force: true })`, already exercised elsewhere
+   * in this file (see "sends a diff of what changed" above).
+   */
+  function sendFocusNow(h: Harness): Promise<void> {
+    return h.send({ type: "refreshCode" });
+  }
+
+  it("sends the imports and the block, and nothing between them", async () => {
+    const h = await build();
+    const doc = openDocument(LONG_PYTHON_FILE, "python");
+    placeCursorOn(doc, 199);
+    await sendFocusNow(h);
+    await h.provider.askExternal("why does this fail?", "");
+
+    // Not `api.getHint`: `streamHint` succeeds in this harness by default,
+    // and `getHint` is a fallback the client only reaches for when the
+    // stream itself throws (see apiClient.ts). `hintRequest` is the helper
+    // every other test in this file already uses to read the last request
+    // body regardless of which of the two carried it.
+    const body = hintRequest(h.api);
+    expect(body.code).toContain("import math");
+    expect(body.code).toContain("def deep(n):");
+    expect(body.code).not.toContain("line_10 = 10");
+    expect(body.bands.length).toBeGreaterThan(1);
+    expect(body.total_lines).toBe(LONG_PYTHON_FILE.split("\n").length);
+  });
+
+  it("still shows the student their whole file in the panel", async () => {
+    // The webview is in the editor; nothing it renders crosses the network.
+    const h = await build();
+    const doc = openDocument(LONG_PYTHON_FILE, "python");
+    placeCursorOn(doc, 199);
+    await sendFocusNow(h);
+    await h.send({ type: "requestFullFile" });
+
+    const posted = latest(h.posted, "fullFile");
+    expect(posted.code).toBe(LONG_PYTHON_FILE);
+  });
+
+  it("streams a digest too", async () => {
+    const h = await build();
+    const doc = openDocument(LONG_PYTHON_FILE, "python");
+    placeCursorOn(doc, 199);
+    await sendFocusNow(h);
+    await h.provider.askExternal("why?", "", "hint");
+
+    const body = hintRequest(h.api);
+    expect(body.bands).toBeDefined();
+  });
+
+  it("does not answer with a closed file's digest after the editor closes", async () => {
+    // 1. Open a file and ask, so `lastDigest` is populated for it.
+    const h = await build();
+    const doc = openDocument(LONG_PYTHON_FILE, "python");
+    placeCursorOn(doc, 199);
+    await sendFocusNow(h);
+    await h.provider.askExternal("why does this fail?", "");
+    // Sanity check: the first ask really did carry this file's digest, so
+    // the negative assertion below is meaningful rather than vacuous.
+    expect(hintRequest(h.api).code).toContain("def deep(n):");
+
+    // 2. Close the editor and force a fresh resolve — `sendFocus`'s
+    // no-active-editor branch is what is supposed to clear `lastDigest`
+    // alongside `lastFocus`.
+    mock.window.activeTextEditor = undefined;
+    await sendFocusNow(h);
+
+    // 3. Ask again through the webview path: `askHint` never requires an
+    // active editor, and `aboutOpenFile` defaults true regardless of mode.
+    // "reflect" sidesteps the explain-first gate, which is orthogonal to
+    // what this test checks.
+    await h.send({ type: "askHint", question: "still there?", code: "", mode: "reflect" });
+
+    // 4. A stale `lastDigest` left behind by the reset would answer this ask
+    // with the closed file's content instead of falling back to `code`.
+    const body = hintRequest(h.api);
+    expect(body.code).not.toContain("def deep(n):");
+    expect(body.code).not.toContain("import math");
   });
 });

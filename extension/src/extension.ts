@@ -12,12 +12,35 @@ import { TutorMode, frameConstructExplanation } from "./pedagogy";
 import { buildProgressHtml } from "./progressPanel";
 import { OfflineQueue } from "./offlineQueue";
 import { StatusBar } from "./statusBar";
+import { focusText, resolveFocus } from "./focusScope";
 
 const HEALTH_RETRY_MS = 30_000;
 
 // Only used if the setting is missing entirely; package.json declares the same
 // value as the contributed default. Keep the two in step.
 const DEFAULT_BACKEND_URL = "https://edupeer-backend.onrender.com";
+
+/**
+ * The block around a position, ignoring any selection.
+ *
+ * `resolveFocus` ranks a selection above the enclosing symbol, which is right
+ * when the selection *is* the question. Here it is the answer's subject and
+ * the block around it is the context, so the selection must not win.
+ *
+ * Deliberately not `digestFor`, and not to be "unified" with it. This is the
+ * block's own verbatim text, for `/trace` and `/predict`: the spec authorises
+ * sending the block there, `getTrace` never numbers it, and a digest's elided
+ * bands would give the model a desk-check exercise with holes in it. The
+ * seeded `bug:` markers are left in for the same reason — a trace of code the
+ * student can see must be a trace of the code they can see. Everything that
+ * asks for a *hint* about a file goes through `digestFor`; this does not.
+ */
+async function blockAround(
+  doc: vscode.TextDocument,
+  at: vscode.Position
+): Promise<string> {
+  return focusText(doc, await resolveFocus(doc, new vscode.Selection(at, at)));
+}
 
 export async function activate(context: vscode.ExtensionContext) {
   const config = vscode.workspace.getConfiguration("edupeer");
@@ -154,7 +177,14 @@ export async function activate(context: vscode.ExtensionContext) {
 
   const askWithActiveFile = async (question: string, mode: TutorMode) => {
     const editor = vscode.window.activeTextEditor;
-    const code = editor?.document?.getText() ?? "";
+    // The block around the cursor, not the file: `askExternal` calls
+    // `sendFocus` before asking anything, which re-resolves its own digest
+    // from the live focus regardless of what `code` carries here — this only
+    // ever backs the local offline-tutor fallback (the webview's
+    // `externalAsk` handler in media/main.js ignores `code` outright, so
+    // there is no display use to preserve either), but it has no business
+    // holding the whole document on the way there.
+    const code = editor ? await blockAround(editor.document, editor.selection.active) : "";
     await vscode.commands.executeCommand("workbench.view.extension.edupeer-sidebar");
     await provider.askExternal(question, code, mode);
   };
@@ -213,7 +243,10 @@ export async function activate(context: vscode.ExtensionContext) {
         return;
       }
       await vscode.commands.executeCommand("workbench.view.extension.edupeer-sidebar");
-      provider.startPrediction(snippet, editor!.document.getText());
+      provider.startPrediction(
+        snippet,
+        await blockAround(editor!.document, editor!.selection.active)
+      );
     })
   );
 
@@ -224,14 +257,18 @@ export async function activate(context: vscode.ExtensionContext) {
         vscode.window.showInformationMessage("EduPeer: open a file first.");
         return;
       }
-      const snippet =
-        editor.document.getText(editor.selection).trim() || editor.document.getText().trim();
+      const block = await blockAround(editor.document, editor.selection.active);
+      // Tracing a whole file was never the intent; with no selection the
+      // block the cursor is in is what the student means. `block` is trimmed
+      // here same as the selection branch — a window fallback over a blank
+      // file is a line of spaces, not empty, and only the trim tells them apart.
+      const snippet = editor.document.getText(editor.selection).trim() || block.trim();
       if (!snippet) {
         vscode.window.showInformationMessage("EduPeer: there's nothing here to trace.");
         return;
       }
       await vscode.commands.executeCommand("workbench.view.extension.edupeer-sidebar");
-      await provider.startTrace(snippet, editor.document.getText());
+      await provider.startTrace(snippet, block);
     })
   );
 
@@ -251,7 +288,7 @@ export async function activate(context: vscode.ExtensionContext) {
           question
             ? `About these lines you flagged — "${question}"\n\n${snippet}`
             : `What is wrong with these lines?\n\n${snippet}`,
-          doc.getText()
+          await blockAround(doc, new vscode.Position(first, 0))
         );
       }
     )

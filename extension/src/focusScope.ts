@@ -93,7 +93,15 @@ function fromSelection(
     startLine: selection.start.line,
     endLine,
     label: "selection",
-    breadcrumb: `${fileNameOf(doc)} › selection`,
+    // The span is part of the name, the way `fromWindow` already names its
+    // own. A bare `demo.py › selection` identifies no block: it is the same
+    // string for every selection anyone ever drags in this file, and
+    // `inlineTutor` keys its per-block scan state on the breadcrumb. Two
+    // different selections then share one key, so flags earned on the first
+    // make the second — scanning clean, as a different block well might —
+    // read as flagged-to-clean, fire the reflection offer, and delete the
+    // `bug:` markers inside a block that was never flagged.
+    breadcrumb: `${fileNameOf(doc)} › selection ${selection.start.line + 1}-${endLine + 1}`,
     kind: "selection",
   };
 }

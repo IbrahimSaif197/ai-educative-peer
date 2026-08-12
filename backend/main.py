@@ -3,7 +3,7 @@ import asyncio
 import math
 import time
 from datetime import datetime, timezone
-from typing import Dict, List, Tuple
+from typing import Dict, List, Optional, Tuple
 
 from dotenv import load_dotenv
 
@@ -35,7 +35,7 @@ from models import (
 )
 from auth import get_current_uid, verify_token
 from cache import TtlCache
-from hinting_engine import build_engine, effective_mode
+from hinting_engine import build_engine, effective_mode, CodeView
 from firebase_service import FirebaseService
 from languages import normalize_language
 from progress import build_progress, pacing_summary, review_due_concepts
@@ -232,6 +232,20 @@ async def _pacing_for(req: HintRequest, uid: str) -> str:
     )
 
 
+def _view_for(req) -> Tuple[Optional[CodeView], Optional[tuple]]:
+    """The request's code view, and a hashable key for the cache.
+
+    Two different band sets over identical digest text describe different
+    lines, so the bands are part of the key. Without bands there is no view
+    and the engine falls back to whole-file numbering.
+    """
+    if not req.bands:
+        return None, None
+    bands = [b.model_dump() for b in req.bands]
+    key = tuple((b["start"], b["end"]) for b in bands)
+    return CodeView.of(req.code, bands, req.total_lines), key
+
+
 @app.post("/hint", response_model=HintResponse)
 async def hint(req: HintRequest, uid: str = Depends(rate_limited("hint"))) -> HintResponse:
     if not req.question.strip():
@@ -241,12 +255,17 @@ async def hint(req: HintRequest, uid: str = Depends(rate_limited("hint"))) -> Hi
     language = normalize_language(req.language)
     history = [turn.model_dump() for turn in req.history]
     pacing = await _pacing_for(req, uid)
+    # /hint is never cached (see SCAN_CACHE/LINE_HINT_CACHE above), so only
+    # the view itself is needed here - the second, cache-key half of
+    # `_view_for`'s return is for /scan and /line-hint to use.
+    view, _ = _view_for(req)
 
     try:
         hint_text, concept_tags = await asyncio.to_thread(
             engine.generate_hint,
             req.code, req.question, level, language, history, req.mode, pacing,
             req.edit_summary, req.focus.model_dump() if req.focus else None,
+            view=view,
         )
     except Exception as e:
         # The level was only peeked, never committed, so the student can retry
@@ -286,6 +305,9 @@ async def hint_stream(req: HintRequest, uid: str = Depends(rate_limited("hint"))
     language = normalize_language(req.language)
     history = [turn.model_dump() for turn in req.history]
     pacing = await _pacing_for(req, uid)
+    # Same reasoning as /hint: streaming is never cached, so only the view
+    # itself is needed here.
+    view, _ = _view_for(req)
 
     def sse(payload: dict) -> str:
         return f"data: {json.dumps(payload)}\n\n"
@@ -297,6 +319,7 @@ async def hint_stream(req: HintRequest, uid: str = Depends(rate_limited("hint"))
             for event in engine.stream_hint(
                 req.code, req.question, level, language, history, req.mode, pacing,
                 req.edit_summary, req.focus.model_dump() if req.focus else None,
+                view=view,
             ):
                 if event.get("type") == "done":
                     done = event
@@ -397,17 +420,25 @@ async def scan(req: ScanRequest, uid: str = Depends(rate_limited("inline"))) -> 
     if not req.code.strip():
         return ScanResponse(flags=[])
     language = normalize_language(req.language)
+    focus = req.focus.model_dump() if req.focus else None
+    view, bands_key = _view_for(req)
+    focus_key = (focus["start_line"], focus["end_line"]) if focus else None
     # uid is part of the key so one student's cached scan is never served to
     # another, even though the code hash alone would collide. The hash is the
     # exact one, not `code_fingerprint`: the cached flags carry absolute line
     # numbers, and a whitespace-insensitive key would serve them against a
-    # file whose lines have shifted.
-    key = (uid, language, raw_code_hash(req.code))
+    # file whose lines have shifted. bands_key is part of it for the same
+    # reason `_view_for` exists at all: two band sets can describe identical
+    # digest text but different editor lines, and serving one against the
+    # other puts a flag on the wrong function.
+    key = (uid, language, bands_key, focus_key, raw_code_hash(req.code))
     cached = SCAN_CACHE.get(key)
     if cached is not None:
         return ScanResponse(flags=[LineFlag(**f) for f in cached])
     try:
-        raw_flags = await asyncio.to_thread(engine.scan_code, req.code, language)
+        raw_flags = await asyncio.to_thread(
+            engine.scan_code, req.code, language, focus, view
+        )
     except Exception as e:
         raise HTTPException(status_code=502, detail=f"LLM error: {e}")
     SCAN_CACHE.set(key, raw_flags)
@@ -422,18 +453,22 @@ async def line_hint(
         return LineHintResponse(hint="", concept="general")
     language = normalize_language(req.language)
     focus = req.focus.model_dump() if req.focus else None
+    view, bands_key = _view_for(req)
     # Exact hash, for the same reason as /scan: the entry is keyed to a line
     # number, so whitespace that shifts lines must miss the cache. focus_key
     # is part of it too, so two different focus blocks on the same line don't
-    # collide and serve each other's cached answer.
+    # collide and serve each other's cached answer. bands_key joins them for
+    # the same reason it joins /scan's key: two band sets can describe
+    # identical digest text but different editor lines, and serving one
+    # against the other answers about the wrong line.
     focus_key = (focus["start_line"], focus["end_line"]) if focus else None
-    key = (uid, language, req.line, focus_key, raw_code_hash(req.code))
+    key = (uid, language, req.line, focus_key, bands_key, raw_code_hash(req.code))
     cached = LINE_HINT_CACHE.get(key)
     if cached is not None:
         return LineHintResponse(hint=cached[0], concept=cached[1])
     try:
         hint_text, concept = await asyncio.to_thread(
-            engine.generate_line_hint, req.code, req.line, language, focus
+            engine.generate_line_hint, req.code, req.line, language, focus, view
         )
     except Exception as e:
         raise HTTPException(status_code=502, detail=f"LLM error: {e}")

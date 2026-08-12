@@ -9,7 +9,8 @@ import {
 } from "./languages";
 import { localLineHint } from "./localTutor";
 import { resolveFocus } from "./focusScope";
-import { findBugMarkers, stripBugMarkers } from "./bugMarkers";
+import { findBugMarkers } from "./bugMarkers";
+import { digestFor } from "./documentDigest";
 
 import { codeFingerprint as fingerprintCode } from "./pedagogy";
 
@@ -177,6 +178,15 @@ export class InlineTutor {
       vscode.window.onDidChangeTextEditorSelection((e) => {
         if (!this.isSupported(e.textEditor.document)) return;
         this.scheduleLineHint(e.textEditor);
+        // Resting the cursor in a block is working on it. The fingerprint in
+        // `runScan` is per block, so a student scrolling through a file
+        // usually pays once per block rather than once per pause — with one
+        // exception, since the cursor anchor: in a block longer than the
+        // digest budget the digest itself moves with the cursor, so its
+        // fingerprint changes and an unchanged block can be scanned again.
+        // See the note at the anchor in `runScan` for why that is the price
+        // worth paying.
+        this.scheduleScan(e.textEditor.document);
         this.renderActiveLineDecoration(e.textEditor);
       })
     );
@@ -199,7 +209,6 @@ export class InlineTutor {
     this.disposables.push(
       vscode.window.onDidChangeActiveTextEditor((editor) => {
         if (editor && this.isSupported(editor.document)) {
-          this.scheduleScan(editor.document);
           this.renderActiveLineDecoration(editor);
         }
       })
@@ -283,18 +292,28 @@ export class InlineTutor {
     // ever visited inside it.
     this.disposables.push(
       vscode.workspace.onDidCloseTextDocument((doc) => {
-        const key = doc.uri.toString();
-        this.stores.delete(key);
-        this.scanFingerprints.delete(key);
-        this.inFlightFingerprints.delete(key);
-        this.lastFlagCounts.delete(key);
+        const prefix = doc.uri.toString();
+        this.stores.delete(prefix);
+        // The other three are keyed per block now (`${uri}#${focus.breadcrumb}`),
+        // so a bare-URI delete would leave every block's entry behind.
+        for (const map of [
+          this.scanFingerprints,
+          this.inFlightFingerprints,
+          this.lastFlagCounts as Map<string, unknown>,
+        ]) {
+          for (const k of [...map.keys()]) {
+            if (k === prefix || k.startsWith(`${prefix}#`)) map.delete(k);
+          }
+        }
         this.diagnostics.delete(doc.uri);
       })
     );
 
+    // Opening a file is not working on it. Nothing runs until the student
+    // lands somewhere — see the trigger table in the 2026-08-11 spec.
     const editor = vscode.window.activeTextEditor;
     if (editor && this.isSupported(editor.document)) {
-      this.scheduleScan(editor.document);
+      this.renderActiveLineDecoration(editor);
     }
   }
 
@@ -405,8 +424,14 @@ export class InlineTutor {
           ? active.selection
           : new vscode.Selection(at, at);
       const focus = await resolveFocus(doc, selection);
-      const code = stripBugMarkers(doc.getText(), doc.languageId);
-      const res = await this.api.getLineHint(code, line + 1, doc.languageId, {
+      // `line` is the anchor: the digest is built around the *block*, but the
+      // question asked of it is about the *cursor*, and nothing else
+      // guarantees the two overlap. A block longer than the digest budget
+      // keeps its head, so a cursor in its tail would be asked about out of
+      // code that was never sent — and the empty answer that comes back is
+      // rendered as "✓ Nothing to flag on this line".
+      const digest = digestFor(doc, focus, line);
+      const res = await this.api.getLineHint(digest, line + 1, doc.languageId, {
         start_line: focus.startLine + 1,
         end_line: focus.endLine + 1,
         label: focus.label,
@@ -522,12 +547,45 @@ export class InlineTutor {
   }
 
   private async runScan(doc: vscode.TextDocument, opts: { force?: boolean } = {}) {
+    const editor = vscode.window.activeTextEditor;
+    // No active editor showing this document means no cursor, and without a
+    // cursor there is no block to scan — "the code the student is working on"
+    // is defined by where they are. One consequence worth naming: an edit
+    // followed by a tab switch inside the 3.5s debounce silently drops the
+    // scheduled scan. That is bounded and arguably right (they left), and
+    // coming back to the tab and resting the cursor schedules a fresh one.
+    if (!editor || editor.document !== doc) return;
+    const focus = await resolveFocus(doc, editor.selection);
+    // Anchored on the cursor for the same reason `fetchLineHint` is: in a
+    // block longer than the digest budget the tail is dropped, so the review
+    // could otherwise never reach the line the student is on. What the anchor
+    // buys is exact — a flag can land where they are looking, which it
+    // previously could not — and no more than that. It does NOT make the
+    // verdict trustworthy for the rest of an oversized block: `setFlagsIn`
+    // below and `removeFixedBugMarkers`'s filter both act on the whole focus
+    // range, so a marker at line 250 of a 300-line class is still deletable
+    // by a scan that only ever saw lines 1-119 and the anchor. That hazard
+    // predates the anchor and is not closed by it.
+    //
+    // The cost: in such a block the digest moves with the cursor, so `fp`
+    // changes and an unchanged block can be rescanned. Worth paying, because
+    // a different part of the block is genuinely under review each time.
+    const digest = digestFor(doc, focus, editor.selection.active.line);
+    if (!digest.code.trim()) return;
+
+    // Keyed by block, not by document: a file is not one thing to scan any
+    // more, and a URI key would report the second block already scanned.
+    // `breadcrumb`, not `label`: `label` is the bare identifier ("run",
+    // "__init__") with no qualifier, so two same-named blocks in one file —
+    // two classes each with a `run` method — would collide on one key.
+    // `breadcrumb` is the qualified path ("demo.py › Stats › run") and is
+    // documented as display-only, never leaving the extension, so it is safe
+    // to key an in-memory map on even though it must never reach the wire.
+    const key = `${doc.uri.toString()}#${focus.breadcrumb}`;
     // Fingerprinted as well as sent, so removing a marker — which changes the
     // buffer but not the code under review — does not spend a scan re-reading
-    // an identical file.
-    const code = stripBugMarkers(doc.getText(), doc.languageId);
-    const fp = fingerprintCode(code);
-    const key = doc.uri.toString();
+    // an identical digest.
+    const fp = fingerprintCode(digest.code);
     if (!opts.force && this.scanFingerprints.get(key) === fp) return;
     // `inFlightFingerprints` de-dupes concurrent requests without claiming the
     // scan succeeded. Committing `scanFingerprints` up front meant a failed
@@ -536,17 +594,33 @@ export class InlineTutor {
     if (!opts.force && this.inFlightFingerprints.get(key) === fp) return;
     this.inFlightFingerprints.set(key, fp);
     try {
-      const res = await this.api.scanCode(code, doc.languageId);
+      const res = await this.api.scanCode(digest, doc.languageId, {
+        start_line: focus.startLine + 1,
+        end_line: focus.endLine + 1,
+        label: focus.label,
+      });
       this.scanFingerprints.set(key, fp);
       const store = this.storeFor(doc.uri);
-      store.setFlags(res.flags || []);
+      // The backend drops these too. Doing it here as well means a flag can
+      // only ever appear on the block the student is actually on.
+      const inFocus = (res.flags || []).filter(
+        (f) => f.line - 1 >= focus.startLine && f.line - 1 <= focus.endLine
+      );
+      store.setFlagsIn({ start: focus.startLine, end: focus.endLine }, inFocus);
       this.applyFlagsToDoc(doc);
       this.emitter.fire();
-      const editor = vscode.window.activeTextEditor;
-      if (editor && editor.document === doc) {
-        this.renderActiveLineDecoration(editor);
+      // Re-fetched and re-validated rather than trusting the `editor`
+      // captured above `await resolveFocus`/`await scanCode`: the student may
+      // have switched tabs while the scan was in flight, and painting onto
+      // that stale reference would clear the ghost text on the editor they
+      // are actually looking at (`renderActiveLineDecoration`'s own "clear
+      // every other visible editor" loop treats it as "other") while
+      // repainting one that is no longer active.
+      const activeEditor = vscode.window.activeTextEditor;
+      if (activeEditor && activeEditor.document === doc) {
+        this.renderActiveLineDecoration(activeEditor);
       }
-      this.maybeOfferReflection(doc, code, store.flags().length);
+      this.maybeOfferReflection(doc, key, focus, digest.code, inFocus.length);
     } catch (err) {
       if (err instanceof RateLimitError) {
         this.quietUntil = Date.now() + err.retryAfterSeconds * 1000;
@@ -568,13 +642,20 @@ export class InlineTutor {
    * body opens with `bug:`, and only on the flagged-to-clean transition. The
    * edit goes through a single `WorkspaceEdit`, so one Ctrl+Z puts it back.
    */
-  private async removeFixedBugMarkers(doc: vscode.TextDocument) {
+  private async removeFixedBugMarkers(
+    doc: vscode.TextDocument,
+    focus: { startLine: number; endLine: number }
+  ) {
     const enabled = vscode.workspace
       .getConfiguration("edupeer")
       .get<boolean>("removeFixedBugComments", true);
     if (!enabled) return;
 
-    const markers = findBugMarkers(doc.getText().split("\n"), doc.languageId);
+    const markers = findBugMarkers(doc.getText().split("\n"), doc.languageId).filter(
+      // Narrowed with the scan: this is the one place EduPeer writes into the
+      // student's code, and it may only speak for the block that went clean.
+      (m) => m.line >= focus.startLine && m.line <= focus.endLine
+    );
     if (!markers.length) return;
 
     const edit = new vscode.WorkspaceEdit();
@@ -589,22 +670,29 @@ export class InlineTutor {
     await vscode.workspace.applyEdit(edit);
   }
 
-  /** After a file goes from flagged to clean, offer a reflection quiz once. */
-  private maybeOfferReflection(doc: vscode.TextDocument, code: string, flagCount: number) {
-    const key = doc.uri.toString();
+  /** After a block goes from flagged to clean, offer a reflection quiz once. */
+  private maybeOfferReflection(
+    doc: vscode.TextDocument,
+    key: string,
+    focus: { startLine: number; endLine: number },
+    code: string,
+    flagCount: number
+  ) {
     const prev = this.lastFlagCounts.get(key) ?? 0;
     this.lastFlagCounts.set(key, flagCount);
     if (prev === 0 || flagCount > 0) return;
     // Ahead of the reflection gate on purpose: the markers describe code that
     // is already fixed whether or not this fingerprint has been quizzed.
-    void this.removeFixedBugMarkers(doc);
+    void this.removeFixedBugMarkers(doc, focus);
     this.cleanEmitter.fire();
     const fp = fingerprintCode(code);
     if (this.reflectOffered.has(fp)) return;
     this.reflectOffered.add(fp);
     void vscode.window
       .showInformationMessage(
-        "EduPeer: your file scans clean now. Want a quick reflection quiz on the fix?",
+        // "this block", not "your file": the gate above is per block, and a
+        // file with three functions can have two of them still flagged.
+        "EduPeer: this block scans clean now. Want a quick reflection quiz on the fix?",
         "Quiz me",
         "Not now"
       )

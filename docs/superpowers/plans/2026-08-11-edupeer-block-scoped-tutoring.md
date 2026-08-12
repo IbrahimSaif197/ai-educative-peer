@@ -392,14 +392,23 @@ Then add one entry per language, beside each existing `lensRegex`:
   python:     importRegex: /^\s*(import\s+\w|from\s+[\w.]+\s+import\b)/,
   javascript: importRegex: /^\s*(import\b|export\s+.*\bfrom\b|(const|let|var)\s+.*\brequire\s*\()/,
   typescript: importRegex: /^\s*(import\b|export\s+.*\bfrom\b|(const|let|var)\s+.*\brequire\s*\()/,
-  java:       importRegex: /^\s*(import|package)\s+[\w.*]+\s*;/,
+  java:       importRegex: /^\s*(import\s+(static\s+)?[\w.*]+\s*;|package\s+[\w.]+\s*;)/,
   csharp:     importRegex: /^\s*(using|namespace)\s+[\w.]+/,
-  c:          importRegex: /^\s*#\s*(include|define|pragma)\b/,
-  cpp:        importRegex: /^\s*(#\s*(include|define|pragma)\b|using\s+namespace\b)/,
-  go:         importRegex: /^\s*(import\b|package\s+\w|\s*"[\w./-]+"\s*$)/,
-  rust:       importRegex: /^\s*(use\s+\w|mod\s+\w|extern\s+crate\b)/,
+  c:          importRegex: /^\s*#\s*(include|define|pragma|ifndef|ifdef|endif)\b/,
+  cpp:        importRegex: /^\s*(#\s*(include|define|pragma|ifndef|ifdef|endif)\b|using\s+namespace\b)/,
+  go:         importRegex: /^\s*(import\b|package\s+\w|"[\w./-]+"\s*$|\)\s*$)/,
+  rust:       importRegex: /^\s*((pub\s+)?(use|mod)\s+\w|extern\s+crate\b)/,
   sql:        importRegex: /(?!)/,
 ```
+
+Five of these were widened during execution after review found the original
+table lost real header content. `#ifndef` guards made `headerEnd` return 0 for a
+canonical C header, so a C student's imports were dropped entirely; the same for
+Rust's `pub use` / `pub mod`. Java's `import static` and the closing `)` of a
+gofmt multi-import block fell through to the constant branch, where a later blank
+line ended the header early. The rule that settled it: the field's job is what
+its doc comment says — an import, an include, a package or namespace declaration
+— and a value that fails that job is a bug in the value.
 
 Write them as real object properties in each entry — the list above is shorthand for review, not source. SQL's `/(?!)/` is a pattern that cannot match anything, which is the honest answer for a language with no imports.
 

@@ -1,4 +1,12 @@
-import { ApiClient, AuthError, RateLimitError, TimeoutError, parseSseChunk } from "../apiClient";
+import {
+  ApiClient,
+  AuthError,
+  RateLimitError,
+  TimeoutError,
+  digestFields,
+  parseSseChunk,
+} from "../apiClient";
+import type { CodeDigest } from "../codeDigest";
 
 const BASE = "http://localhost:8000";
 
@@ -17,6 +25,18 @@ function makeTokens() {
   return {
     getIdToken: jest.fn(async (force?: boolean) => (force ? "fresh-token" : "stale-token")),
   };
+}
+
+/**
+ * Installs a stub that answers every request with 200 and an empty body,
+ * runs `thunk` against it, and hands back the JSON body of the request that
+ * stub recorded. The responses these tests exercise only care about what was
+ * sent, never about what comes back.
+ */
+async function captureBody(thunk: () => Promise<unknown>): Promise<any> {
+  const fetchMock = mockFetch(200, {});
+  await thunk();
+  return JSON.parse(fetchMock.mock.calls[0][1].body);
 }
 
 afterEach(() => {
@@ -101,16 +121,29 @@ describe("authenticated requests", () => {
     expect(await new ApiClient(BASE, makeTokens()).getBadges()).toEqual([]);
   });
 
-  it("scanCode posts code and language only", async () => {
+  it("scanCode posts the digest and language only", async () => {
     const fetchMock = mockFetch(200, { flags: [] });
-    await new ApiClient(BASE, makeTokens()).scanCode("x=1", "javascript");
-    expect(JSON.parse(fetchMock.mock.calls[0][1].body)).toEqual({ code: "x=1", language: "javascript" });
+    const digest: CodeDigest = { code: "x=1", bands: [{ start: 1, end: 1 }], totalLines: 1 };
+    await new ApiClient(BASE, makeTokens()).scanCode(digest, "javascript");
+    expect(JSON.parse(fetchMock.mock.calls[0][1].body)).toEqual({
+      code: "x=1",
+      bands: [{ start: 1, end: 1 }],
+      total_lines: 1,
+      language: "javascript",
+    });
   });
 
-  it("getLineHint posts code, line and language only", async () => {
+  it("getLineHint posts the digest, line and language only", async () => {
     const fetchMock = mockFetch(200, { hint: "h", concept: "general" });
-    await new ApiClient(BASE, makeTokens()).getLineHint("x=1", 3, "java");
-    expect(JSON.parse(fetchMock.mock.calls[0][1].body)).toEqual({ code: "x=1", line: 3, language: "java" });
+    const digest: CodeDigest = { code: "x=1", bands: [{ start: 1, end: 1 }], totalLines: 1 };
+    await new ApiClient(BASE, makeTokens()).getLineHint(digest, 3, "java");
+    expect(JSON.parse(fetchMock.mock.calls[0][1].body)).toEqual({
+      code: "x=1",
+      bands: [{ start: 1, end: 1 }],
+      total_lines: 1,
+      line: 3,
+      language: "java",
+    });
   });
 });
 
@@ -350,7 +383,8 @@ describe("rate limiting", () => {
   it("falls back to a sane wait when the header is missing", async () => {
     mockThrottled(undefined);
     const api = new ApiClient(BASE, makeTokens());
-    await api.scanCode("x=1").catch((err) => {
+    const digest: CodeDigest = { code: "x=1", bands: [{ start: 1, end: 1 }], totalLines: 1 };
+    await api.scanCode(digest).catch((err) => {
       expect((err as RateLimitError).retryAfterSeconds).toBe(30);
     });
     expect.assertions(1);
@@ -359,13 +393,15 @@ describe("rate limiting", () => {
   it("throws rather than silently degrading on /scan", async () => {
     mockThrottled("5");
     const api = new ApiClient(BASE, makeTokens());
-    await expect(api.scanCode("x=1")).rejects.toBeInstanceOf(RateLimitError);
+    const digest: CodeDigest = { code: "x=1", bands: [{ start: 1, end: 1 }], totalLines: 1 };
+    await expect(api.scanCode(digest)).rejects.toBeInstanceOf(RateLimitError);
   });
 
   it("throws rather than silently degrading on /line-hint", async () => {
     mockThrottled("5");
     const api = new ApiClient(BASE, makeTokens());
-    await expect(api.getLineHint("x=1", 1)).rejects.toBeInstanceOf(RateLimitError);
+    const digest: CodeDigest = { code: "x=1", bands: [{ start: 1, end: 1 }], totalLines: 1 };
+    await expect(api.getLineHint(digest, 1)).rejects.toBeInstanceOf(RateLimitError);
   });
 
   it("does not treat a 429 stream as a fallback-to-/hint case", async () => {
@@ -472,7 +508,8 @@ describe("getLineHint — focus", () => {
     (global as any).fetch = fetchMock;
 
     const api = new ApiClient(BASE, makeTokens());
-    await api.getLineHint("x = 1\ny = 2", 2, "python", {
+    const digest: CodeDigest = { code: "x = 1\ny = 2", bands: [{ start: 1, end: 2 }], totalLines: 2 };
+    await api.getLineHint(digest, 2, "python", {
       start_line: 1,
       end_line: 2,
       label: "main",
@@ -491,7 +528,8 @@ describe("getLineHint — focus", () => {
     (global as any).fetch = fetchMock;
 
     const api = new ApiClient(BASE, makeTokens());
-    await api.getLineHint("x = 1", 1, "python");
+    const digest: CodeDigest = { code: "x = 1", bands: [{ start: 1, end: 1 }], totalLines: 1 };
+    await api.getLineHint(digest, 1, "python");
 
     expect(JSON.parse(fetchMock.mock.calls[0][1].body)).not.toHaveProperty("focus");
   });
@@ -564,5 +602,52 @@ describe("cold start — the backend was asleep", () => {
     await api.getHint({ code: "x", question: "q" } as any);
     expect(seen).toEqual([]);
     expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+});
+
+const DIGEST: CodeDigest = {
+  code: "import math\ndef deep(n):",
+  bands: [
+    { start: 1, end: 1 },
+    { start: 173, end: 173 },
+  ],
+  totalLines: 241,
+};
+
+describe("digestFields", () => {
+  it("renames totalLines to the wire's snake_case and nothing else", () => {
+    expect(digestFields(DIGEST)).toEqual({
+      code: "import math\ndef deep(n):",
+      bands: [
+        { start: 1, end: 1 },
+        { start: 173, end: 173 },
+      ],
+      total_lines: 241,
+    });
+  });
+});
+
+describe("the inline endpoints send bands", () => {
+  const client = new ApiClient(BASE, makeTokens());
+
+  it("scanCode posts the digest and the focus", async () => {
+    const body = await captureBody(() =>
+      client.scanCode(DIGEST, "python", { start_line: 173, end_line: 174, label: "deep" })
+    );
+    expect(body.code).toBe(DIGEST.code);
+    expect(body.bands).toEqual(DIGEST.bands);
+    expect(body.total_lines).toBe(241);
+    expect(body.focus.label).toBe("deep");
+  });
+
+  it("scanCode omits the focus when there isn't one", async () => {
+    const body = await captureBody(() => client.scanCode(DIGEST, "python"));
+    expect(body).not.toHaveProperty("focus");
+  });
+
+  it("getLineHint posts the digest alongside the absolute line", async () => {
+    const body = await captureBody(() => client.getLineHint(DIGEST, 173, "python"));
+    expect(body.line).toBe(173);
+    expect(body.bands).toEqual(DIGEST.bands);
   });
 });

@@ -40,7 +40,7 @@ The **Get started with EduPeer** walkthrough opens automatically on first run.
 | `EduPeer: Open Tutor Panel` | Focus the chat sidebar |
 | `EduPeer: Analyse Selection` | Ask about the selected code |
 | `EduPeer: Nudge Current Line` | Hint for the line under the cursor |
-| `EduPeer: Scan File for Issues` | Flag suspicious lines |
+| `EduPeer: Scan This Block` | Flag suspicious lines |
 | `EduPeer: Explain This Error` | Work through an error message |
 | `EduPeer: Explain This Construct` | Explain the selected syntax |
 | `EduPeer: Predict the Output` | Commit to an answer, then check it |

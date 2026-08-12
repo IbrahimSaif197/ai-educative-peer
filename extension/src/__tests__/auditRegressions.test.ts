@@ -4,6 +4,8 @@
  * The suites next to this one are organised by module; this one is organised
  * by defect, so each block states the wrong behaviour it pins shut.
  */
+import * as fs from "fs";
+import * as path from "path";
 import * as vscode from "vscode";
 import { AttemptTracker, normalizeCode } from "../attemptTracker";
 import { EduPeerSidebarProvider } from "../sidebarProvider";
@@ -462,5 +464,174 @@ describe("a spaced-review exercise can be answered", () => {
     await h.send({ type: "startReview" });
     await h.send({ type: "reviewAnswer", answer: "my answer" });
     expect(h.api.streamHint.mock.calls[0][0].mode).toBe("review-exercise");
+  });
+});
+
+// ------------------------------------------------- the file stays on the machine
+
+describe("no source file hands raw document text to the network", () => {
+  const SRC = path.join(__dirname, "..");
+  /**
+   * Every top-level module that talks to the backend, discovered rather than
+   * hand-listed. A fixed array stops covering a new sender the moment
+   * someone adds one and forgets to update it here — this found
+   * `firebaseClient.ts` on the first run, which the hand-maintained list of
+   * three had never named. `apiClient.ts` itself is excluded: it is what
+   * the other files reference, not a sender, and the bare word `ApiClient`
+   * appears throughout its own class declaration.
+   */
+  const SENDERS = fs
+    .readdirSync(SRC)
+    .filter((name) => name.endsWith(".ts") && fs.statSync(path.join(SRC, name)).isFile())
+    .filter((name) => name !== "apiClient.ts")
+    .filter((name) => {
+      const source = fs.readFileSync(path.join(SRC, name), "utf8");
+      return /\bApiClient\b/.test(source) || /this\.api\./.test(source);
+    })
+    .sort();
+
+  /**
+   * A trailing `//` comment, stripped before it can matter. Left in, a
+   * comment can exempt a real offender (`doc.getText(); // eventually goes
+   * through buildDigest`) as easily as it can trip a false one — the first
+   * draft of this suite's own `askWithActiveFile` comment did exactly that
+   * by quoting `getText()`. Not preceded by `:`, so a `"https://..."`
+   * literal survives; that is the one `//` this codebase's source carries
+   * outside an actual comment (verified against every sender file).
+   */
+  function stripLineComment(line: string): string {
+    return line.replace(/(?<!:)\/\/.*/, "");
+  }
+
+  /**
+   * A file's lines, `\r\n` normalised to `\n` first. This repo checks out
+   * with CRLF endings, and a trailing `\r` survives `.split("\n")` on every
+   * line — which silently defeats a `$`-anchored strip like the one above
+   * (`.*` does not consume a line terminator, `\r` included, so the pattern
+   * can never reach `$`). Normalising once here means neither this file's
+   * own regexes nor a future one has to remember that.
+   */
+  function readLines(name: string): string[] {
+    return fs
+      .readFileSync(path.join(SRC, name), "utf8")
+      .replace(/\r\n/g, "\n")
+      .split("\n");
+  }
+
+  /**
+   * The one module that turns a `TextDocument` into the lines a digest is
+   * built from. Named once here so the assertions below are about a symbol
+   * rather than about the shape of an incantation.
+   */
+  const CHOKEPOINT = "documentDigest.ts";
+
+  /**
+   * The argument text of every `buildDigest(...)` call in `source`, taken by
+   * matching parentheses rather than by line. The call this exists to catch
+   * spans four lines, so a line-level scan would miss it — and a line-level
+   * scan is what the incantation-shaped guard this replaces was.
+   */
+  function buildDigestArguments(source: string): string[] {
+    const calls: string[] = [];
+    const pattern = /\bbuildDigest\s*\(/g;
+    let match: RegExpExecArray | null;
+    while ((match = pattern.exec(source))) {
+      let depth = 1;
+      let i = match.index + match[0].length;
+      for (; i < source.length && depth > 0; i++) {
+        if (source[i] === "(") depth++;
+        else if (source[i] === ")") depth--;
+      }
+      calls.push(source.slice(match.index + match[0].length, i - 1));
+    }
+    return calls;
+  }
+
+  it("keeps every document-to-digest conversion inside the one chokepoint", () => {
+    // What this guarantees: no file that can reach the network builds a
+    // digest out of a document itself. `digestFor` is the only door, so the
+    // strip-split-budget decision is made in one place and can be read in
+    // one place — which is what `digestFields` (where a digest becomes a
+    // payload) explicitly is not, since by then the choice of what to send
+    // has already been made.
+    //
+    // `buildDigest` on its own is not forbidden: `sidebarProvider`'s
+    // fallback branch builds a digest out of a review exercise or a trace
+    // answer, which is a string and was never a document. What is forbidden
+    // is a sender feeding a document's own text into one.
+    for (const name of SENDERS) {
+      const source = readLines(name).map(stripLineComment).join("\n");
+      const fromADocument = buildDigestArguments(source).filter((args) =>
+        /getText\s*\(/.test(args)
+      );
+      expect({ name, fromADocument }).toEqual({ name, fromADocument: [] });
+    }
+    // ...and the chokepoint really is one: it is where the pair lives.
+    const chokepoint = fs.readFileSync(path.join(SRC, CHOKEPOINT), "utf8");
+    expect(chokepoint).toContain("getText()");
+    expect(chokepoint).toContain("buildDigest(");
+    expect(chokepoint).toContain("stripBugMarkers(");
+  });
+
+  it("keeps the digest rules themselves free of the editor", () => {
+    // The chokepoint exists so that `codeDigest` can stay a pure module —
+    // raw lines in, a digest out, every test a fixture array. An import of
+    // `vscode` there would make the budget arithmetic testable only through
+    // a mocked editor.
+    const pure = fs.readFileSync(path.join(SRC, "codeDigest.ts"), "utf8");
+    expect(pure).not.toMatch(/from ["']vscode["']/);
+  });
+
+  it("flags a bare getText() not routed through the chokepoint or a marker call", () => {
+    // A line-level textual guard against the obvious regression — a
+    // `getText()` sitting in one of these files with nothing on the same line
+    // that accounts for it — not a data-flow proof, and a regex over source
+    // text cannot honestly be more than that. It has no way to see a value
+    // carried across lines or variables. Catching that shape is what the
+    // behavioural tests next to each call site are for (e.g.
+    // sidebarProvider.test.ts's "the conversation carries a digest, not the
+    // file"), not this scan.
+    //
+    // The allow-list is the three things a raw `getText()` may legitimately
+    // be: the panel's display copy, a marker search over the live buffer, and
+    // — inside the chokepoint only — the digest's own input.
+    for (const name of [...SENDERS, CHOKEPOINT]) {
+      const allowed =
+        name === CHOKEPOINT
+          ? /stripBugMarkers\(/
+          : /panelFullCode|findBugMarkers\(/;
+      const offenders = readLines(name)
+        .map((line, i) => [i + 1, stripLineComment(line)] as const)
+        .filter(([, line]) => /getText\(\)/.test(line))
+        .filter(([, line]) => !allowed.test(line));
+      expect({ name, offenders }).toEqual({ name, offenders: [] });
+    }
+  });
+
+  it("keeps the panel's whole-file copy out of every request", () => {
+    // `panelFullCode` legitimately reaches the webview through `this.post` —
+    // that is the "Whole file" toggle, and the webview runs inside the
+    // editor, so nothing posted to it has left the machine. The property
+    // that matters is narrower than "the string never appears": it must
+    // never be handed to `this.api.*`, the only door to the network. (A
+    // literal `code:\s*this\.panelFullCode` search also matches that
+    // legitimate `post` call one-for-one and fails unconditionally — it is
+    // not what is checked here.)
+    //
+    // Same-line only, like the scan above: `handleAsk`'s request object
+    // (sidebarProvider.ts, built for `streamHint`/`getHint`) spans several
+    // lines before the `this.api.` call that sends it, so a `panelFullCode`
+    // reference planted inside that object, rather than in the
+    // `this.post(...)` call it belongs to today, would slip past this
+    // one-line check. `sidebarProvider.test.ts`'s "the conversation carries
+    // a digest, not the file" tests already exercise that request body
+    // behaviourally and would catch it there.
+    const reachesApi = readLines("sidebarProvider.ts")
+      .map(stripLineComment)
+      .filter((line) => line.includes("panelFullCode") && line.includes("this.api."));
+    expect(reachesApi).toEqual([]);
+    expect(fs.readFileSync(path.join(SRC, "sidebarProvider.ts"), "utf8")).toContain(
+      "digestFields("
+    );
   });
 });

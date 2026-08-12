@@ -1,9 +1,11 @@
 import * as crypto from "crypto";
 import * as vscode from "vscode";
-import { ApiClient, AuthError, ChatTurn, RateLimitError } from "./apiClient";
+import { ApiClient, AuthError, ChatTurn, RateLimitError, digestFields } from "./apiClient";
 import { AttemptTracker, isAnswerRequest, isAttempt, nudgeForUnchangedCode } from "./attemptTracker";
 import { AuthManager } from "./authManager";
 import { stripBugMarkers } from "./bugMarkers";
+import { buildDigest, type CodeDigest } from "./codeDigest";
+import { digestFor } from "./documentDigest";
 import { FirebaseClient } from "./firebaseClient";
 import { FocusScope, focusText, resolveFocus } from "./focusScope";
 import { isSupportedLanguage, languageLabel } from "./languages";
@@ -98,6 +100,8 @@ export class EduPeerSidebarProvider implements vscode.WebviewViewProvider {
   }
   /** The block the student is working on; drives the panel and every ask. */
   private lastFocus?: FocusScope;
+  /** The digest for `lastFocus`, rebuilt whenever the focus block changes. */
+  private lastDigest?: CodeDigest;
   /**
    * The text of the block `threadKey` names, which attempt tracking diffs.
    *
@@ -110,8 +114,16 @@ export class EduPeerSidebarProvider implements vscode.WebviewViewProvider {
    * question against a rewrite that never happened.
    */
   private threadBlockCode = "";
-  /** The full document, still sent as `code` so the model keeps its context. */
-  private lastFullCode = "";
+  /**
+   * The full document text, for the webview's "Whole file" toggle only.
+   *
+   * The webview runs inside the editor, so nothing it renders crosses the
+   * network — that toggle is the one legitimate reason to hold the whole
+   * file in memory. `lastDigest` is what the wire actually sends; the name
+   * change from `lastFullCode` is what stops this field being reached for
+   * as a request payload again.
+   */
+  private panelFullCode = "";
   /** Suppresses a re-post when nothing the student can see has changed. */
   private lastFocusSignature = "";
   /** Last cursor line posted, 1-based. Suppresses repeat cursor messages. */
@@ -295,7 +307,7 @@ export class EduPeerSidebarProvider implements vscode.WebviewViewProvider {
           await this.sendFocus({ force: true });
           return;
         case "requestFullFile":
-          this.post({ type: "fullFile", code: this.lastFullCode });
+          this.post({ type: "fullFile", code: this.panelFullCode });
           return;
         case "signIn":
           await vscode.commands.executeCommand("edupeer.signIn");
@@ -623,17 +635,23 @@ export class EduPeerSidebarProvider implements vscode.WebviewViewProvider {
     }
 
     const aboutOpenFile = opts.aboutOpenFile !== false;
-    // The whole file, so a hint about one function still sees its imports and
-    // its callers. `focus` narrows attention; it does not replace context.
+    // The digest, so a hint about one function still sees its imports and
+    // what it can call — without the four hundred lines between them.
     //
-    // Stripped of any seeded `bug:` marker, which names the mistake outright:
-    // left in, it is the answer sitting in the prompt, and the tutor recites
-    // the comment instead of reading the code. The panel still shows the
-    // student their own file, comment and all — this is the wire only.
-    const requestCode = stripBugMarkers(
-      aboutOpenFile ? this.lastFullCode || code || "" : code || "",
-      this.lastLanguageId
-    );
+    // `lastDigest` was already stripped of any seeded `bug:` marker when
+    // `sendFocus` built it through `digestFor`. The fallback branch below is
+    // the one place a digest is built from something that is not a
+    // `TextDocument` at all — a review exercise, a prediction, a trace
+    // answer, none of which ever passes through `sendFocus` — so it goes to
+    // `buildDigest` directly and does its own stripping, at request time.
+    const digest =
+      aboutOpenFile && this.lastDigest
+        ? this.lastDigest
+        : buildDigest(
+            stripBugMarkers(code || "", this.lastLanguageId).split("\n"),
+            this.lastLanguageId,
+            { start: 0, end: Math.max(0, (code || "").split("\n").length - 1) }
+          );
     const attemptCode = aboutOpenFile ? this.threadBlockCode || code || "" : code || "";
 
     // The ladder rides the sticky thread key, so the transcript on screen and
@@ -671,7 +689,7 @@ export class EduPeerSidebarProvider implements vscode.WebviewViewProvider {
     this.post({ type: "loading", value: true });
     try {
       const request = {
-        code: requestCode,
+        ...digestFields(digest),
         question,
         hint_level: 1,
         // The ladder is keyed on the problem, not the bytes, so editing the
@@ -809,7 +827,13 @@ export class EduPeerSidebarProvider implements vscode.WebviewViewProvider {
     const editor = vscode.window.activeTextEditor;
     if (!editor) {
       this.lastFocus = undefined;
-      this.lastFullCode = "";
+      // Cleared with `lastFocus`, for the same reason: `handleAsk` reuses
+      // `lastDigest` whenever `aboutOpenFile` is true and it is set, and a
+      // stale digest left behind after the editor closed would answer the
+      // next such ask about a file that is no longer open, instead of
+      // falling back to whatever `code` that ask actually carries.
+      this.lastDigest = undefined;
+      this.panelFullCode = "";
       this.lastFocusSignature = "";
       this.lastCursorLine = 0;
       this.lastDocumentKey = "";
@@ -852,7 +876,12 @@ export class EduPeerSidebarProvider implements vscode.WebviewViewProvider {
     this.lastFocusSignature = signature;
 
     this.lastFocus = focus;
-    this.lastFullCode = doc.getText();
+    // Display only: the panel's "Whole file" toggle renders this, and the
+    // webview is in the editor. It must never become a request payload —
+    // `auditRegressions` asserts that it does not.
+    this.panelFullCode = doc.getText();
+    // No cursor line: the conversation is about the block, not about a line.
+    this.lastDigest = digestFor(doc, focus, undefined, this.lastLanguageId);
     // The ladder is per problem, and a different function is a different
     // problem — being stuck on `main` should not start at hint 3 because you
     // were stuck on `parse` a minute ago.

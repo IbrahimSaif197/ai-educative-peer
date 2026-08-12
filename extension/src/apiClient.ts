@@ -1,3 +1,5 @@
+import type { CodeBand, CodeDigest } from "./codeDigest";
+
 export interface ChatTurn {
   role: "student" | "tutor";
   content: string;
@@ -9,8 +11,12 @@ export interface TokenProvider {
 
 /**
  * The block inside `code` the student is working on, 1-based and inclusive.
- * `code` still carries the whole file — this narrows attention, it does not
- * replace context.
+ *
+ * `code` is a digest, not the file: the imports, the enclosing headers, one
+ * line per top-level definition, and this block. So the span is not merely
+ * advisory any more — it names the part of the digest the answer is about,
+ * and the backend scopes both its instruction and its flags to it. The
+ * numbers are absolute editor lines, the same coordinates `bands` uses.
  */
 export interface FocusRange {
   start_line: number;
@@ -39,6 +45,10 @@ export interface HintRequest {
   confidence?: number;
   /** The block the student is working on; omitted when it could not be resolved. */
   focus?: FocusRange;
+  /** Absolute line ranges `code` was lifted from. */
+  bands?: CodeBand[];
+  /** Lines in the real file, so an elision can say how much is missing. */
+  total_lines?: number;
 }
 
 /**
@@ -274,6 +284,26 @@ function timeoutSignal(ms: number): AbortSignal {
   const controller = new AbortController();
   setTimeout(() => controller.abort(), ms).unref?.();
   return controller.signal;
+}
+
+/**
+ * The three fields `scanCode` and `getLineHint` build their payload from.
+ *
+ * One function so there is one place a digest becomes those fields — but it
+ * is not the only door to the network. `getTrace` takes `code` as a plain
+ * string and never runs it through here, and `getHint`/`streamHint` just
+ * forward whatever `code` the caller already put on the request. So the
+ * property that makes "the file never leaves the machine" checkable rather
+ * than merely intended lives in the callers, not in this function —
+ * `auditRegressions` reads `sidebarProvider.ts`, `inlineTutor.ts` and
+ * `extension.ts` directly rather than trusting that they used this.
+ */
+export function digestFields(digest: CodeDigest): {
+  code: string;
+  bands: CodeBand[];
+  total_lines: number;
+} {
+  return { code: digest.code, bands: digest.bands, total_lines: digest.totalLines };
 }
 
 export class ApiClient {
@@ -579,8 +609,16 @@ export class ApiClient {
     return data.concepts ?? [];
   }
 
-  async scanCode(code: string, language = "python"): Promise<ScanResponse> {
-    const res = await this.authedJson("/scan", { code, language });
+  async scanCode(
+    digest: CodeDigest,
+    language = "python",
+    focus?: FocusRange
+  ): Promise<ScanResponse> {
+    const res = await this.authedJson("/scan", {
+      ...digestFields(digest),
+      language,
+      ...(focus ? { focus } : {}),
+    });
     if (res.status === 429) {
       throw rateLimitErrorFrom(res);
     }
@@ -591,13 +629,13 @@ export class ApiClient {
   }
 
   async getLineHint(
-    code: string,
+    digest: CodeDigest,
     line: number,
     language = "python",
     focus?: FocusRange
   ): Promise<LineHintResponse> {
     const res = await this.authedJson("/line-hint", {
-      code,
+      ...digestFields(digest),
       line,
       language,
       ...(focus ? { focus } : {}),
