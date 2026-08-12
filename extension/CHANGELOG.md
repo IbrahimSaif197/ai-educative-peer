@@ -1,5 +1,27 @@
 # Changelog
 
+## 1.6.0
+
+- EduPeer works on the block you are in. It used to read the whole file, so it
+  could put question marks on functions you had never touched — on files you
+  had only just opened, because it also ran on open and on every tab switch.
+  Nothing runs now until you land somewhere: rest the cursor in a function, or
+  type in it, and that function is what gets looked at.
+- Marks you have already earned stay where they are. Moving to another function
+  no longer clears the ones behind you.
+- Most of your file stays on your machine. What gets sent is your imports, the
+  class or function you are inside, the block you are working on and a few
+  lines either side — rather than the whole file, which went out on every
+  question, every hint and every scan.
+- Hints on long files stop guessing at your imports. Past about 120 lines the
+  tutor could not see the top of the file at all, so it would tell you an
+  import was missing when it was only out of frame.
+- `EduPeer: Trace This Code` now asks you to select the code you want traced.
+  What you trace is the one thing sent whole rather than trimmed, so it should
+  be your choice; it used to guess from wherever the cursor happened to be.
+- `EduPeer: Scan File for Issues` is called `EduPeer: Scan This Block`, which
+  is what it does.
+
 ## 1.5.1
 
 - The first question after a quiet spell no longer fails. The server sleeps
