@@ -29,7 +29,10 @@ name: Keep backend awake
 on:
   schedule:
     # Safety net only — the running job normally hands off before this fires.
-    - cron: "17 */4 * * *"
+    # Must stay wider than RUN_FOR_SECONDS below, or it is not a safety net: at
+    # */4 against a 5h35m run it fired first every time, and since the handoff
+    # was broken it was quietly doing the whole job on its own.
+    - cron: "17 */6 * * *"
   workflow_dispatch:
 
 # Never kill a live pinger to start another. A new run queues instead, and takes
@@ -99,3 +102,9 @@ jobs:
         run: gh workflow run keep-backend-awake.yml --ref "${{ github.ref_name }}"
         env:
           GH_TOKEN: ${{ github.token }}
+          # Without this the step has always failed with "fatal: not a git
+          # repository": there is no `actions/checkout` here — pinging a URL
+          # does not need the code — so `gh` had nothing to infer the repo
+          # from. Every run pinged happily for 5h35m and then went red on its
+          # last line, one failure email per run.
+          GH_REPO: ${{ github.repository }}
