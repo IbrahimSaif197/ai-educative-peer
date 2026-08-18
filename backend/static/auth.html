@@ -189,22 +189,34 @@
 
     .password { position: relative; }
 
-    .password input { padding-right: 62px; }
+    .password input { display: block; padding-right: 46px; }
 
     .reveal {
       position: absolute;
       right: 6px;
-      top: 6px;
+      top: 50%;
+      transform: translateY(-50%);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      width: 32px;
       height: 32px;
-      padding: 0 10px;
-      font-family: var(--mono);
-      font-size: 11px;
+      padding: 0;
       color: var(--muted);
       background: transparent;
       border: 1px solid transparent;
+      border-radius: 8px;
     }
 
     .reveal:hover { color: var(--ink); border-color: var(--line); }
+
+    .reveal svg { display: block; }
+
+    .reveal .eye-off { display: none; }
+
+    .reveal[aria-pressed="true"] .eye-on { display: none; }
+
+    .reveal[aria-pressed="true"] .eye-off { display: block; }
 
     .primary {
       width: 100%;
@@ -296,10 +308,22 @@
         <label for="email">Email</label>
         <input type="email" id="email" autocomplete="email" placeholder="you@school.edu" />
       </div>
-      <div class="field password">
+      <div class="field">
         <label for="password">Password</label>
-        <input type="password" id="password" autocomplete="current-password" placeholder="••••••••" />
-        <button type="button" class="reveal" id="reveal" aria-label="Show password">show</button>
+        <div class="password">
+          <input type="password" id="password" autocomplete="current-password" placeholder="••••••••" />
+          <button type="button" class="reveal" id="reveal" aria-label="Show password" aria-pressed="false" title="Show password">
+            <svg class="eye-on" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <path d="M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7-10-7-10-7Z" />
+              <circle cx="12" cy="12" r="3" />
+            </svg>
+            <svg class="eye-off" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <path d="M10.7 6.2A9.9 9.9 0 0 1 12 6c6.4 0 10 6 10 6a18.6 18.6 0 0 1-3.2 3.9M6.5 7.9A18.6 18.6 0 0 0 2 12s3.6 6 10 6a9.6 9.6 0 0 0 4-.8" />
+              <path d="M9.9 9.9a3 3 0 0 0 4.2 4.2" />
+              <path d="M3 3l18 18" />
+            </svg>
+          </button>
+        </div>
       </div>
       <button type="submit" class="primary" id="emailSubmit">Sign in</button>
     </form>
@@ -474,8 +498,10 @@
         const reveal = document.getElementById("reveal");
         const showing = field.type === "text";
         field.type = showing ? "password" : "text";
-        reveal.textContent = showing ? "show" : "hide";
-        reveal.setAttribute("aria-label", showing ? "Show password" : "Hide password");
+        const label = showing ? "Show password" : "Hide password";
+        reveal.setAttribute("aria-pressed", showing ? "false" : "true");
+        reveal.setAttribute("aria-label", label);
+        reveal.setAttribute("title", label);
       });
       document.getElementById("modeToggle").addEventListener("click", () => {
         createMode = !createMode;
