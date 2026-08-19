@@ -27,6 +27,37 @@ Treat every line-number citation in this document as **UNVERIFIED** until it
 is regenerated against this branch. This banner marks the damage; the
 sections below it were not refreshed.
 
+### Refreshed 2026-08-18 — these sections only
+
+Everything else below is as it was. Three areas were re-verified against the
+working tree and rewritten where they had become wrong:
+
+1. **`POST /reset`** — the endpoint's behaviour section, and "What a session
+   reset does". The four serial steps became two gathered ones plus the LLM
+   call, and the clear moved upstream of the summary so a failing summary can
+   no longer take the reset with it.
+2. **The Socratic system prompt** — the quoted prompt text, "What varies by
+   hint level", the rendered user message, the `hint` and `reflect` rows of the
+   mode table. The rung 1–3 rules were rewritten after a live evaluation
+   measured a 72.7% rung-3 failure rate against the rules as they stood; the
+   user message's closing line no longer points at a "STRICT RULES" section
+   this prompt has never had.
+3. **The panel message protocol** — the `loading`, `authState`, `resetDone`
+   and `reset` rows, plus the new `resetCleared`, `preferences`,
+   `requestPreferences`, `setPreference`, `showProgress`, `setGoal` and
+   `openSettings` messages that came with the account avatar and its
+   preferences popover.
+
+**For the extension half, prefer `docs/EXTENSION_REFERENCE.md`.** It was
+generated 2026-08-18 against the current tree and is verified; the
+extension-side sections here still carry pre-1.6.0 drift beyond the banner
+above — they describe an `activeCode` message that is now `focus`, a
+`confidence` field and depth stepper the composer no longer has, and an "I
+fixed it" button now called "Quiz me".
+
+The backend half of this document has no such replacement, which is why the
+`/reset` and prompt sections were refreshed here rather than left to rot.
+
 ---
 
 Generated for use as the sole source for Chapters 4, 5 and 6 of the Final Year
@@ -753,13 +784,26 @@ loop, so it commits the hint level and then calls `store.begin_session`,
 | `user_id` | string | The caller's uid |
 | `summary` | string | The three-bullet session note, or `""` |
 
-Behaviour: reads up to 10 recent interactions; if any exist, calls
+Behaviour (`backend/main.py:349-380`): the interactions read and the session
+wipe are gathered, not sequenced — they never depended on each other, and
+running them together takes a Firestore round trip out of the critical path.
+The profile cache entry is dropped. Then, only if there were interactions,
 `engine.summarize_session`; a failure there is caught, printed and turned into
-`summary = ""` (`backend/main.py:318-320`). Then `store.reset(uid)` and the
-profile cache entry is dropped.
+`summary = ""`, and the note is appended to the user document.
+
+The order matters and used to be the other way round. `store.reset` was the
+last of four serial steps, so a summary that raised took the reset down with
+it: the student pressed Reset, saw an error, and kept their hint levels. It is
+now upstream of the LLM call and cannot be reached by its failures
+(`test_the_session_is_cleared_even_when_the_summary_blows_up`).
+
+**What this endpoint is not on the critical path for:** the panel clearing.
+`resetSession` posts `resetCleared` to the webview *before* awaiting this call
+(§ the panel message protocol), so a slow or sleeping backend no longer holds
+the old transcript on screen. Only the summary arrives on this response.
 
 **Errors:** 401; 429 (`session` bucket). An LLM failure during summarisation
-does **not** fail the request.
+does **not** fail the request, and no longer skips the reset either.
 
 ### `GET /progress`
 
@@ -919,7 +963,7 @@ never spend its rung.
 
 | Mode | Trigger | Pedagogical purpose | Advances level? | Prohibitions in its prompt |
 | --- | --- | --- | --- | --- |
-| `hint` | Typing in the composer and pressing **Ask** (`extension/media/main.js:409-445`); also the default for external asks | The progressive 1→2→3→4 Socratic ladder. Rungs 1–3 run the Socratic prompt; rung 4 *is* the worked example, so the request goes out as `hint` and the response comes back `mode: "worked-example"` | **Yes**, subject to the attempt gate | "NEVER write working code or complete a function for the student"; "NEVER give the direct answer"; at level 3, "provide pseudocode only, never real {language} syntax" |
+| `hint` | Typing in the composer and pressing **Ask**; also the default for external asks | The progressive 1→2→3→4 Socratic ladder. Rungs 1–3 run the Socratic prompt; rung 4 *is* the worked example, so the request goes out as `hint` and the response comes back `mode: "worked-example"` | **Yes**, subject to the attempt gate | "NEVER write working code or complete a function for the student"; "NEVER give the direct answer"; at level 3, "give them the shape, never the answer [...] One hole, named in capitals, over the precise thing they must work out" |
 | `reflect` | The **I fixed it** button (`extension/media/main.js:387-391`); the `edupeer.reflectQuiz` command; the toast shown when a previously flagged file scans clean (`extension/src/inlineTutor.ts:400-419`) | Checks understanding of *why* a fix works, not that it works | No | "NEVER write working code" |
 | `translate` | The **Submit my translation** action row, offered only after a level-3 reply (`extension/media/main.js:509-517`) | Marks the student's own translation of pseudocode into real code | No | "Point out each mismatch as a question, never as corrected code"; "NEVER write working code or fix their code for them" |
 | `worked-example` | **Not a button.** Asking again at level 3 puts the ladder on rung 4, and `effective_mode` (`backend/hinting_engine.py:198-214`) swaps the `hint` prompt for this one. The response reports `mode: "worked-example"`; the client never sends it | A fully worked solution to a *different* problem exercising the same concept | It **is** level 4 — the ladder advanced to reach it | "The example must NOT solve the student's actual problem or reuse their variable names"; "Do NOT label what each step accomplishes - the student will do that" |
@@ -1020,15 +1064,31 @@ WHEN THEY ARE NOT YET RIGHT:
 - When their message asks YOU something, engage with what they asked before anything else.
   A question about a concept or a built-in gets a real answer; only the answer to their own
   bug stays withheld.
-- hint_level 1: one guiding question only
-- hint_level 2: name the specific line or concept, explain the concept briefly
-- hint_level 3: pseudocode only, never real {language} syntax
+
+THE LADDER. Each rung gives strictly more than the one below it, and no rung below 4
+finishes the job for the student:
+- hint_level 1: one guiding question only. Name no line number and no identifier that
+  belongs to the fix.
+- hint_level 2: name the specific line or concept, explain the concept briefly. [...] Do NOT
+  name the function, method, operator or value that would fix it, and never tell them to
+  swap one thing for another [...] ends the exercise two rungs early.
+- hint_level 3: give them the shape, never the answer. A skeleton with the answer punched
+  out of it is the goal [...] One hole, named in capitals, over the precise thing they must
+  work out [...] What is forbidden is naming what the hole hides, anywhere in the reply
+  [...] If you have written the answer, the hole was decoration.
 
 ALWAYS:
 - Keep responses under 150 words
 - Sound like a person, not a form. Close with a question only when you are actually waiting on
   them, and word it freshly every time. Never end with a stock sentence.
+- Never write "hint_level", or any other field name from these instructions, in your reply.
+  The student sees a rung number in the panel; these words are not theirs to read.
 ```
+
+Elided with `[...]` above; read `backend/hinting_engine.py:44-68` for the full
+text. Each clause of the rung-2 and rung-3 rules names a reply a live run
+produced before it existed, and `TestTheLadderRungsAreSpelledOut` in
+`backend/tests/test_hinting_engine.py` fails if any is trimmed away.
 
 Two branches, chosen by the model from the student's latest message. The
 `WHEN THEY ARE NOT YET RIGHT` branch carries the constraining lines (the two
@@ -1043,9 +1103,17 @@ itself was, separately, stuck at 1 for every Firestore-backed student.
 
 **What varies by hint level.** Nothing in the system prompt changes: all three
 level rules are always present. The level is communicated in the *user*
-message, whose first line is literally `hint_level: <n>`
-(`backend/hinting_engine.py:275`), and the message ends with "Respond according
-to the STRICT RULES for the given hint_level." (`backend/hinting_engine.py:279`).
+message, whose first line is literally `hint_level: <n>`, and the message ends
+with "Answer at the hint_level above, following THE LADDER. Do not name the
+rung or quote any field label back to the student."
+(`backend/hinting_engine.py:772-773`).
+
+That closing line used to read "Respond according to the STRICT RULES for the
+given hint_level" — pointing at a section this prompt has never had, and
+sitting immediately beside the one field label the student must not read. One
+measured reply opened *"At hint_level 3, here's the structure:"*. The rule
+against quoting it is now in both messages, because this is the one holding
+the label.
 The level is clamped to 1–`MAX_HINT_LEVEL` before use (`clamp_hint_level`,
 `backend/hinting_engine.py:190-196`). Only levels 1–3 ever reach this template:
 `effective_mode` sends level 4 to `WORKED_EXAMPLE_TEMPLATE` instead, which is
@@ -1072,7 +1140,7 @@ language: {display_name}
 {question}
 </student_message-{nonce}>
 
-Respond according to the STRICT RULES for the given hint_level.
+Answer at the hint_level above, following THE LADDER. Do not name the rung or quote any field label back to the student.
 ```
 
 `{nonce}` is a fresh 16-hex-character value per request (`secrets.token_hex(8)`,
@@ -1102,7 +1170,7 @@ What the student changed since the last hint:
 
 | Template | Line | Rule lines that constrain the model |
 | --- | --- | --- |
-| `REFLECT_TEMPLATE` | 39-49 | "- If the conversation does not yet contain your quiz question, ask exactly ONE short question about WHY their fix works (target the underlying concept)"; "- NEVER write working code"; "- Keep responses under 100 words" |
+| `REFLECT_TEMPLATE` | 78-93 | "- If the conversation does not yet contain your quiz question, ask exactly ONE short question about WHY their fix works (target the underlying concept)"; "- If the bug they believe they fixed is still there, say so plainly and ask what they expected their change to do. Do NOT write the correction, not even inside a question"; "- NEVER write working code"; "- Keep responses under 100 words" |
 | `TRANSLATE_TEMPLATE` | 52-61 | "- Give feedback ONLY on how faithfully their code translates the pseudocode"; "- Point out each mismatch as a question, never as corrected code"; "- NEVER write working code or fix their code for them"; "- Keep responses under 120 words" |
 | `WORKED_EXAMPLE_TEMPLATE` | 64-74 | "- Present the solution as a NUMBERED list of steps, each one line"; "- Do NOT label what each step accomplishes - the student will do that"; "- The example must NOT solve the student's actual problem or reuse their variable names"; "- End by asking the student to name the PURPOSE of each numbered step in their own words"; "- Keep responses under 200 words" |
 | `SUBGOAL_LABEL_TEMPLATE` | 77-86 | "- Judge each label on whether it names the step's PURPOSE, not its syntax"; "- Affirm labels that capture the goal; for vague ones (\"does a loop\"), ask what the loop is FOR"; "- Do NOT supply the correct labels yourself, and do NOT restate the example"; "- Keep responses under 150 words" |
@@ -1721,17 +1789,24 @@ offers (`extension/src/inlineTutor.ts:406-408`). It never reaches the backend.
 
 ### What a session reset does
 
-`POST /reset` (`backend/main.py:311-325`), in order:
+`POST /reset` (`backend/main.py:349-380`):
 
-1. Read up to 10 recent interactions.
-2. If any exist, generate a three-bullet summary; on failure the summary is
-   `""` and the request continues.
-3. If the summary is non-empty, append it to `session_summaries` (last 20 kept).
-4. `store.reset(uid)` — delete all `sessions` documents for the user and set
-   `sessions_meta.active = false`.
-5. Drop the user's profile-cache entry.
+1. **Together**, via `asyncio.gather`: read up to 10 recent interactions, and
+   `store.reset(uid)` — delete all `sessions` documents for the user and set
+   `sessions_meta.active = false`. Neither needs the other's result.
+2. Drop the user's profile-cache entry.
+3. If there were interactions, generate a three-bullet summary; on failure the
+   summary is `""` and the request continues.
+4. If the summary is non-empty, append it to `session_summaries` (last 20 kept).
 
-Client-side, `resetSession` (`extension/src/sidebarProvider.ts:192-211`) also
+Steps 1 and 3 used to run the other way round, four deep and strictly serial.
+That cost a round trip nobody needed, and put the reset itself downstream of an
+LLM call: a summary that raised took the clear down with it, so the student saw
+an error and kept their hint levels.
+
+Client-side, `resetSession` posts `loading: true` and `resetCleared` **before**
+it awaits any of the above, so the panel clears on the keypress rather than on
+the response — see the panel message protocol. It also
 clears: the conversation `history` array, `seenFingerprints` (so the
 explain-first gate fires again), any pending explain/predict/trace exercise,
 the whole `AttemptTracker`, the status bar level, and the persisted
@@ -2011,7 +2086,7 @@ and is only ever invoked programmatically by a Quick Fix
 | Activity bar container | id `edupeer-sidebar`, title "EduPeer", icon `media/icon.svg` | `package.json:19-27` |
 | Webview view | id `edupeer.sidebar`, name "EduPeer Tutor" | `package.json:28-36` |
 | Walkthrough | id `edupeer.gettingStarted`, four steps | `package.json:152-192` |
-| Configuration | four settings, see Section 4 | `package.json:193-218` |
+| Configuration | six settings: `backendUrl`, `inlineHints`, `lensMode`, `removeFixedBugComments`, `autoScan`, `debounceMs`. All but `backendUrl` are rendered as live controls in the preferences popover; that one it shows read-only and links out for | `package.json` `contributes.configuration` |
 
 The webview view is registered with `retainContextWhenHidden: true`
 (`extension/src/extension.ts:72`), so the panel keeps its DOM when hidden.
@@ -2034,12 +2109,14 @@ handled in the `switch` at `extension/media/main.js:466`.
 | `predictFirst` | `snippet` | `sidebarProvider.ts:252` | Shows the prediction prompt and switches the composer to `predict` mode (`main.js:545-555`) |
 | `explainFirst` | `prompt` | `sidebarProvider.ts:326` | Shows the explain-first gate with a "Skip and get my hint" action (`main.js:557-569`) |
 | `error` | `message` | `sidebarProvider.ts:498` | Renders an error-styled turn (`main.js:571-574`) |
-| `loading` | `value: boolean` | `sidebarProvider.ts:409`, `465` | Sets the webview's `isLoading` flag: toggles the thinking indicator and disables **Ask**, **I fixed it**, **Reset** and **Review** (`main.js:576-583`) |
+| `loading` | `value: boolean` | the ask paths, **and `resetSession`** | Sets the webview's `isLoading` flag: toggles the thinking indicator and disables **Ask**, **Quiz me**, **Reset** and **Review**. Reset was the one entry point that never sent it, so `isLoading` stayed false for the whole reset: the button was never disabled, its own `if (isLoading) return` guard never fired, and each extra click sent another `/reset` |
 | `offline` | `value: boolean` | `sidebarProvider.ts:75-77` | Toggles the offline banner (`main.js:585-587`) |
 | `badges` | `badges: string[]` | `sidebarProvider.ts:520` | Repaints the badge disclosure and its count (`main.js:589-591`) |
-| `authState` | `signedIn`, `label` | `sidebarProvider.ts:526-530` | Updates the account label and Sign in/out button (`main.js:593-598`) |
+| `authState` | `signedIn`, `label`, `email`, `initials` | `postAuthState` | Paints the account avatar (initials, or a coral pip when anonymous) and the preferences popover's identity block. The header's account label and Sign in/out button are gone — both live behind the avatar now |
+| `preferences` | `values{inlineHints, autoScan, lensMode, debounceMs, removeFixedBugComments}`, `backendUrl` | `postPreferences` | Repaints the popover's live controls. Sent on `ready`, on every `requestPreferences`, after every write, and on any `edupeer` configuration change — a toggle that disagrees with the editor it claims to control is worse than no toggle |
 | `reviewDue` | `concepts` | `sidebarProvider.ts:217` | Reveals the Review button (`main.js:600-602`) |
-| `resetDone` | `summary` | `sidebarProvider.ts:210` | Clears the transcript, resets composer/confidence/stepper, shows the summary if present (`main.js:604-619`) |
+| `resetCleared` | — | `resetSession`, **before** the network call | Clears the transcript, resets the composer, empties the avatar ring. The host has already dropped every thread by this point, so the panel no longer waits on `/reset` to say so |
+| `resetDone` | `summary` | `resetSession`, after the network call | Appends the "what you learned" note when the backend had one. Clears nothing |
 | `externalAsk` | `question`, `code` | `sidebarProvider.ts:186` | Repaints the code preview for a context-menu ask (`main.js:621-624`) |
 
 ### Messages: webview → extension
@@ -2058,7 +2135,11 @@ Sent via `vscode.postMessage(...)`, handled in the `switch` at
 | `traceAnswer` | `rows: string[][]` | `main.js:333` | `handleTraceAnswer` (`sidebarProvider.ts:129-131`) |
 | `reviewAnswer` | `answer` | `main.js:369` | `handleReviewAnswer` (`sidebarProvider.ts:132-134`) — marks the answer against the review exercise rather than the open file |
 | `startReview` | — | `main.js:415` | `startReview` (`sidebarProvider.ts:109-111`) |
-| `reset` | — | `main.js:405` | `resetSession` (`sidebarProvider.ts:135-137`) |
+| `reset` | — | the popover's confirm strip; the footer Reset routes into the same confirm rather than firing | `resetSession` |
+| `requestPreferences` | — | every popover open | Posts `preferences` |
+| `setPreference` | `key`, `value` | popover rows | Writes to `ConfigurationTarget.Global`, then re-posts `preferences`. Keys outside `WRITABLE_PREFERENCES` are dropped, `debounceMs` is floored at 600 and `lensMode` is checked against its two values — `update()` will otherwise create a setting no `package.json` declares, and the webview is the least trusted thing that talks to this class |
+| `showProgress` / `setGoal` | — | popover rows | Executes the matching command |
+| `openSettings` | — | popover row | Opens the Settings UI at `@ext:edupeer.edupeer`, for `backendUrl` — the one setting the popover shows but will not edit |
 | `refreshCode` | — | `main.js:407` | `sendActiveCode` (`sidebarProvider.ts:138-140`) |
 | `signIn` | — | `main.js:399` | Executes `edupeer.signIn` (`sidebarProvider.ts:135-137`) |
 | `signOut` | — | `main.js:399` | Executes `edupeer.signOut` (`sidebarProvider.ts:138-140`) |

@@ -50,3 +50,11 @@ serviceAccountKey.json
 
 # Coverage reports
 coverage/
+
+# Regenerated on every `eval_tutor.py` run; the baseline beside it is the
+# record worth keeping.
+backend/tests/eval_tutor_results.json
+backend/tests/eval_tutor_rates_*.json
+
+# Claude Design handoff bundles — re-downloadable exports, not source
+mockups-m1-m14-with-tokens-and-specs/

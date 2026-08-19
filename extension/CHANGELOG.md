@@ -1,5 +1,32 @@
 # Changelog
 
+## Unreleased
+
+- Your account and your settings now live behind one picture in the top-right
+  corner. Everything that changes how the tutor behaves is in there — whether
+  it marks up your editor, how long it waits before offering a hint, whether
+  the lightbulb sits on every function or only on flagged lines — and changing
+  one takes effect straight away. You no longer have to go looking in VS Code's
+  settings for any of it.
+- The ring around that picture is how deep you are into a hint. Four segments,
+  one per level, filled up to where you are. It empties when you start fresh.
+- **Reset is instant.** It used to sit there for as long as the server took —
+  which, if the server had gone to sleep, could be the best part of a minute —
+  with the old conversation still on screen and nothing to say it had heard
+  you. It now clears the moment you press it. The "what you learned" note still
+  comes from the server, so it arrives a second or two later, on its own.
+- Reset also asks first, and stops listening while it runs. Pressing it twice
+  used to send two of everything.
+- Hints stop giving the game away. At level 2 the tutor would sometimes name
+  the exact method that fixes your bug; at level 3, where it is meant to sketch
+  the shape in pseudocode, it would write out your corrected function instead.
+  Both now hold back and leave you the part that matters. Measured across
+  eleven languages.
+- Asked to quiz you on a fix you have not actually made yet, the tutor says so
+  rather than showing you the fix inside the question.
+- One reply began "At hint_level 3, here's the structure:". That is EduPeer's
+  own bookkeeping and was never yours to read.
+
 ## 1.6.0
 
 - EduPeer works on the block you are in. It used to read the whole file, so it

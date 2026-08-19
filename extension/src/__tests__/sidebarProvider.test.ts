@@ -3,6 +3,7 @@ import { EduPeerSidebarProvider } from "../sidebarProvider";
 import { AttemptTracker } from "../attemptTracker";
 import { AuthError, RateLimitError } from "../apiClient";
 import { formatTestFailureQuestion } from "../pedagogy";
+import { accountInitials } from "../sidebarProvider";
 
 const mock = vscode as any;
 
@@ -806,6 +807,142 @@ describe("session reset", () => {
     expect(latest(h.posted, "resetDone").summary).toBe("");
     expect(logged).toHaveBeenCalled();
     logged.mockRestore();
+  });
+
+  it("clears the panel before it waits on the backend", async () => {
+    // The whole point of the split. `/reset` is a Firestore read, an LLM
+    // summary and a batch delete, on a host that may be asleep — so the clear
+    // has to be posted before the call, not after it. Held open here by a
+    // promise the test resolves itself.
+    let release!: () => void;
+    const held = new Promise<void>((r) => (release = r));
+    const h = await build({
+      resetSession: jest.fn(async () => {
+        await held;
+        return "you practised loops";
+      }),
+    });
+    const done = h.send({ type: "reset" });
+
+    const types = h.posted.map((p: any) => p.type);
+    expect(types).toContain("resetCleared");
+    expect(types).not.toContain("resetDone");
+
+    release();
+    await done;
+    expect(latest(h.posted, "resetDone").summary).toBe("you practised loops");
+  });
+
+  it("disables the composer for the length of the reset", async () => {
+    const h = await build();
+    await h.send({ type: "reset" });
+    const loads = h.posted.filter((p: any) => p.type === "loading").map((p: any) => p.value);
+    expect(loads).toEqual([true, false]);
+  });
+
+  it("re-enables the composer when the reset fails", async () => {
+    // Without the `finally` this left the panel disabled with no spinner and
+    // no way back short of reloading the window.
+    const logged = jest.spyOn(console, "error").mockImplementation(() => undefined);
+    const h = await build({
+      resetSession: jest.fn(async () => {
+        throw new Error("ECONNREFUSED");
+      }),
+    });
+    await h.send({ type: "reset" });
+    const loads = h.posted.filter((p: any) => p.type === "loading").map((p: any) => p.value);
+    expect(loads[loads.length - 1]).toBe(false);
+    logged.mockRestore();
+  });
+});
+
+describe("account and preferences", () => {
+  beforeEach(() => mock.__reset());
+
+  it("posts the settings the popover renders", async () => {
+    const h = await build();
+    await h.send({ type: "requestPreferences" });
+    const msg = latest(h.posted, "preferences");
+    expect(msg.values).toEqual(
+      expect.objectContaining({
+        inlineHints: expect.any(Boolean),
+        autoScan: expect.any(Boolean),
+        lensMode: expect.any(String),
+        debounceMs: expect.any(Number),
+        removeFixedBugComments: expect.any(Boolean),
+      })
+    );
+    // The URL is shown but never edited here; a 268px popover is not a place
+    // to type one.
+    expect(msg.values.backendUrl).toBeUndefined();
+    expect(typeof msg.backendUrl).toBe("string");
+  });
+
+  it("writes a preference globally and echoes the result back", async () => {
+    const h = await build();
+    await h.send({ type: "setPreference", key: "autoScan", value: false });
+    const cfg = mock.workspace.getConfiguration("edupeer");
+    expect(cfg.update).toHaveBeenCalledWith("autoScan", false, mock.ConfigurationTarget.Global);
+    // Echoed rather than assumed: a workspace value can override the write.
+    expect(latest(h.posted, "preferences")).toBeDefined();
+  });
+
+  it("drops a key that is not one of ours", async () => {
+    // `update()` will happily create a setting no package.json declares, and
+    // the webview is the least trusted thing that talks to this class.
+    const h = await build();
+    await h.send({ type: "setPreference", key: "telemetry.enabled", value: false });
+    expect(mock.workspace.getConfiguration("edupeer").update).not.toHaveBeenCalled();
+  });
+
+  it("floors the hint delay rather than writing underneath the minimum", async () => {
+    const h = await build();
+    await h.send({ type: "setPreference", key: "debounceMs", value: 50 });
+    expect(mock.workspace.getConfiguration("edupeer").update).toHaveBeenCalledWith(
+      "debounceMs", 600, mock.ConfigurationTarget.Global
+    );
+  });
+
+  it("refuses a lens mode that is not one of the two", async () => {
+    const h = await build();
+    await h.send({ type: "setPreference", key: "lensMode", value: "everything" });
+    expect(mock.workspace.getConfiguration("edupeer").update).not.toHaveBeenCalled();
+  });
+
+  it("carries initials and the address for the avatar", async () => {
+    const h = await build();
+    await h.send({ type: "ready" });
+    const msg = latest(h.posted, "authState");
+    expect(msg).toHaveProperty("initials");
+    expect(msg).toHaveProperty("email");
+  });
+});
+
+describe("accountInitials", () => {
+  it("takes the first and last word of a name", () => {
+    expect(accountInitials("Ada Lovelace")).toBe("AL");
+    expect(accountInitials("Ibrahim Al Saif")).toBe("IS");
+  });
+
+  it("uses only the local part of an address", () => {
+    // "ahmed@karzo.com" as two words would give "AK" — initials for a domain
+    // the student does not think of as their name.
+    expect(accountInitials("ahmed@karzo.com")).toBe("A");
+    expect(accountInitials("ada.lovelace@uni.edu")).toBe("AL");
+  });
+
+  it("gives one letter for a single word", () => {
+    expect(accountInitials("ada")).toBe("A");
+  });
+
+  it("gives nothing rather than guessing", () => {
+    expect(accountInitials("")).toBe("");
+    expect(accountInitials("   ")).toBe("");
+    expect(accountInitials("!!!")).toBe("");
+  });
+
+  it("handles a non-latin name without dropping it", () => {
+    expect(accountInitials("Иван Петров")).toBe("ИП");
   });
 });
 

@@ -363,6 +363,33 @@ class TestProgressEndpoints:
         assert res.json()["summary"] == "- You practised loops"
         assert appended["s"] == "- You practised loops"
 
+    def test_the_session_is_cleared_even_when_the_summary_blows_up(self, client, monkeypatch):
+        """The clear no longer sits downstream of the note.
+
+        `store.reset` used to be the last of four serial steps, so a summary
+        that raised took the reset down with it: the student pressed Reset, saw
+        an error, and kept their old hint levels. The two are gathered now, so
+        the reset happens whatever the LLM does.
+        """
+        import main as app_main
+
+        cleared = []
+        monkeypatch.setattr(
+            app_main.firebase, "get_recent_interactions_sync",
+            lambda uid, limit=10: [{"question": "why loop?", "concept_tags": ["loops"],
+                                    "hint_level_used": 2}],
+        )
+        monkeypatch.setattr(app_main.store, "reset", lambda uid: cleared.append(uid))
+
+        def boom(_items):
+            raise RuntimeError("groq is down")
+
+        monkeypatch.setattr(app_main.engine, "summarize_session", boom)
+        res = client.post("/reset")
+        assert res.status_code == 200
+        assert res.json()["summary"] == ""
+        assert cleared, "the session was never cleared"
+
 
 class TestHintLanguageAndHistory:
     def test_language_field_accepted(self, client, _patch_groq_client):

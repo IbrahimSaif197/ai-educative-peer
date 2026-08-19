@@ -202,7 +202,8 @@ class TestMultiLanguage:
         engine.generate_hint("int x = 1;", "help", 1, language="java")
         messages = self._sent_messages(engine)
         assert "Java students" in messages[0]["content"]
-        assert "never real Java syntax" in messages[0]["content"]
+        # Templated in both halves of the prompt, not only the opening line.
+        assert "Java with the bug already corrected" in messages[0]["content"]
         assert "language: Java" in messages[-1]["content"]
 
     def test_alias_language_normalized(self):
@@ -1062,7 +1063,7 @@ class TestTheFourthRungIsTheWorkedExample:
         engine = self._engine()
         engine.generate_hint("x = 1", "still stuck", 3)
         system = self._system_message(engine)
-        assert "hint_level 3: pseudocode only" in system
+        assert "hint_level 3: give them the shape, never the answer" in system
         assert "WORKED EXAMPLE" not in system
 
     def test_streaming_gets_the_worked_example_prompt_too(self):
@@ -1072,6 +1073,113 @@ class TestTheFourthRungIsTheWorkedExample:
         engine.client.chat.completions.create.return_value = [chunk]
         list(engine.stream_hint("x = 1", "still stuck", 4))
         assert "WORKED EXAMPLE" in self._system_message(engine)
+
+
+class TestTheLadderRungsAreSpelledOut:
+    """The rung rules earn their words: each one was added for a measured leak.
+
+    `backend/tests/eval_tutor.py` runs the ladder against a live model over
+    eleven languages. Every assertion below names a reply that run produced
+    before the rule existed, so a future edit that trims the prompt back to
+    three terse bullets fails here rather than in front of a student.
+    """
+
+    def _engine(self, response_text: str = "ok"):
+        from hinting_engine import HintingEngine
+        engine = HintingEngine(api_key="test-key")
+        engine.client = _make_mock_client(response_text)
+        return engine
+
+    def _system_message(self, engine):
+        messages = engine.client.chat.completions.create.call_args.kwargs["messages"]
+        return messages[0]["content"]
+
+    def _user_message(self, engine):
+        messages = engine.client.chat.completions.create.call_args.kwargs["messages"]
+        return messages[-1]["content"]
+
+    def test_rung_two_may_not_name_the_fixing_construct(self):
+        # Measured: a Java level-2 reply read "The method you need is
+        # `equals()` ... replace `a == b` with the call to `equals()`" - the
+        # whole answer, two rungs early.
+        engine = self._engine()
+        engine.generate_hint("x = 1", "why?", 2, language="java")
+        system = self._system_message(engine)
+        assert "Do NOT name the function, method, operator" in system
+        assert "ends the exercise two rungs early" in system
+
+    def test_rung_three_asks_for_a_skeleton_not_for_prose(self):
+        # The rule used to read "pseudocode only, never real syntax", which is
+        # a proxy for what rung 3 wants rather than the thing itself: a
+        # skeleton with the answer removed leaves the student the work, and
+        # reads better than prose. What it must not do is name the answer.
+        engine = self._engine()
+        engine.generate_hint("x = 1", "still stuck", 3)
+        system = self._system_message(engine)
+        assert "give them the shape, never the answer" in system
+        assert "One hole, named in capitals" in system
+        assert "the hole covers the operator" in system
+
+    def test_rung_three_may_not_answer_its_own_placeholder(self):
+        # Every clause here is a measured reply. "change the first argument to
+        # START_HERE, so it begins at index 0" answered itself one comma later;
+        # "USE_THIS_KEYWORD is either let or const" narrowed it to two, one of
+        # which is obviously wrong for a counter; and a Rust reply announced
+        # "The syntax is:" over a fence containing the borrow operator that was
+        # the whole question.
+        engine = self._engine()
+        engine.generate_hint("x = 1", "still stuck", 3)
+        system = self._system_message(engine)
+        assert "naming what the hole hides, anywhere in the reply" in system
+        assert "shortlist to choose from" in system
+        assert "the hole was decoration" in system
+        assert 'never say "the syntax is"' in system
+        assert "with the bug already corrected" in system
+
+    def test_the_ladder_still_names_each_rung_by_its_wire_field(self):
+        # The user message labels the rung `hint_level: N`, so the system
+        # prompt has to use the same word or the two do not refer to each other.
+        engine = self._engine()
+        engine.generate_hint("x = 1", "still stuck", 3)
+        system = self._system_message(engine)
+        for n in (1, 2, 3):
+            assert f"hint_level {n}:" in system
+
+    def test_the_field_name_is_never_the_students_to_read(self):
+        # Measured: a reply opened "At hint_level 3, here's the structure:".
+        # The rule sits in both messages because the user message is the one
+        # holding the label the model echoed.
+        engine = self._engine()
+        engine.generate_hint("x = 1", "still stuck", 3)
+        assert 'Never write "hint_level"' in self._system_message(engine)
+        assert "Do not name the rung or quote any field label" in self._user_message(engine)
+
+    def test_the_user_message_points_at_a_heading_that_exists(self):
+        # It used to say "the STRICT RULES", a section this prompt never had.
+        engine = self._engine()
+        engine.generate_hint("x = 1", "still stuck", 2)
+        user = self._user_message(engine)
+        assert "STRICT RULES" not in user
+        assert "THE LADDER" in user
+        assert "THE LADDER" in self._system_message(engine)
+
+    def test_reflect_may_not_hand_over_the_fix_inside_a_question(self):
+        # Measured: asked to quiz a student whose fix was not in fact applied,
+        # reflect mode replied "Why does your loop start at
+        # `range(1, len(numbers))` instead of `range(0, len(numbers))`?" - the
+        # answer wearing a question mark.
+        engine = self._engine()
+        engine.generate_hint("x = 1", "quiz me", 2, mode="reflect")
+        system = self._system_message(engine)
+        assert "still there" in system
+        assert "not even inside a question" in system
+
+    def test_the_rung_rules_do_not_reach_the_off_ladder_modes(self):
+        # A translate or reflect prompt has its own rules; the ladder's
+        # placeholder talk would be nonsense there.
+        engine = self._engine()
+        engine.generate_hint("x = 1", "here is my version", 3, mode="translate")
+        assert "THE LADDER" not in self._system_message(engine)
 
 
 class TestAnswerMode:

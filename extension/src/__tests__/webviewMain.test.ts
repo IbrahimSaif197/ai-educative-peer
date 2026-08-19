@@ -559,8 +559,13 @@ describe("the composer", () => {
     expect(lastSent("askHint").mode).toBe("reflect");
   });
 
-  it("requests a reset", () => {
+  it("asks before it requests a reset", () => {
+    // Reset is destructive and sits a pixel from Ask. It opens the confirm in
+    // the account popover rather than firing, so there is one confirm and one
+    // destructive path however you get to it.
     (el("reset") as HTMLButtonElement).click();
+    expect(lastSent("reset")).toBeUndefined();
+    (el("resetGo") as HTMLButtonElement).click();
     expect(lastSent("reset")).toBeDefined();
   });
 });
@@ -673,18 +678,179 @@ describe("panel chrome", () => {
     expect(el("badgeCount").textContent).toBe("No badges yet");
   });
 
-  it("switches the auth button between sign in and sign out", () => {
-    post({ type: "authState", signedIn: true, label: "ada@uni.edu" });
-    expect(el("authBtn").textContent).toBe("Sign out");
-    expect(el("accountLabel").textContent).toBe("ada@uni.edu");
-    (el("authBtn") as HTMLButtonElement).click();
+  it("puts the account behind the avatar when signed in", () => {
+    post({
+      type: "authState", signedIn: true, label: "Ada Lovelace",
+      email: "ada@uni.edu", initials: "AL",
+    });
+    expect(el("accountInitials").textContent).toBe("AL");
+    expect((el("accountPip") as HTMLElement).hidden).toBe(true);
+    expect(el("popName").textContent).toBe("Ada Lovelace");
+    expect(el("popMail").textContent).toBe("ada@uni.edu");
+    // Sign out is in the popover; signing in is not offered to someone who is.
+    expect((el("popSignInWrap") as HTMLElement).hidden).toBe(true);
+    expect((el("signOutBtn") as HTMLElement).hidden).toBe(false);
+    (el("signOutBtn") as HTMLButtonElement).click();
     expect(lastSent("signOut")).toBeDefined();
   });
 
-  it("asks to sign in when signed out", () => {
+  it("lights the pip and offers sign-in when signed out", () => {
     post({ type: "authState", signedIn: false, label: "Not signed in" });
-    (el("authBtn") as HTMLButtonElement).click();
+    expect((el("accountPip") as HTMLElement).hidden).toBe(false);
+    expect(el("accountInitials").textContent).toBe("?");
+    expect((el("signOutBtn") as HTMLElement).hidden).toBe(true);
+    (el("signInBtn") as HTMLButtonElement).click();
     expect(lastSent("signIn")).toBeDefined();
+  });
+});
+
+describe("the preferences popover", () => {
+  const openPop = () => (el("accountBtn") as HTMLButtonElement).click();
+  const rowFor = (key: string) =>
+    document.querySelector(`[data-pref="${key}"]`) as HTMLButtonElement;
+  const prefs = (over: Record<string, unknown> = {}) =>
+    post({
+      type: "preferences",
+      values: {
+        inlineHints: true, autoScan: true, lensMode: "all",
+        debounceMs: 1800, removeFixedBugComments: true, ...over,
+      },
+      backendUrl: "https://edupeer-backend.onrender.com",
+    });
+
+  it("opens on the avatar and asks for fresh values", () => {
+    expect((el("prefsPop") as HTMLElement).hidden).toBe(true);
+    openPop();
+    expect((el("prefsPop") as HTMLElement).hidden).toBe(false);
+    expect(el("accountBtn").getAttribute("aria-expanded")).toBe("true");
+    // A setting can have changed in the Settings UI since this was painted.
+    expect(lastSent("requestPreferences")).toBeDefined();
+  });
+
+  it("focuses a row that is actually on screen", () => {
+    // Sign in is hidden by its wrapper, not by its own attribute, so a bare
+    // `:not([hidden])` sent focus into a display:none block and the menu came
+    // up with nothing focused at all.
+    post({
+      type: "authState", signedIn: true, label: "Ada Lovelace",
+      email: "ada@uni.edu", initials: "AL",
+    });
+    openPop();
+    expect(document.activeElement).not.toBe(el("signInBtn"));
+    expect((el("prefsPop") as HTMLElement).contains(document.activeElement)).toBe(true);
+  });
+
+  it("walks the rows with the arrow keys", () => {
+    post({ type: "authState", signedIn: true, label: "Ada", email: "a@b.c", initials: "A" });
+    openPop();
+    const first = document.activeElement;
+    el("prefsPop").dispatchEvent(
+      new KeyboardEvent("keydown", { key: "ArrowDown", bubbles: true })
+    );
+    expect(document.activeElement).not.toBe(first);
+    el("prefsPop").dispatchEvent(
+      new KeyboardEvent("keydown", { key: "ArrowUp", bubbles: true })
+    );
+    expect(document.activeElement).toBe(first);
+  });
+
+  it("closes on Escape and on a click outside", () => {
+    openPop();
+    document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" }));
+    expect((el("prefsPop") as HTMLElement).hidden).toBe(true);
+    openPop();
+    document.dispatchEvent(new MouseEvent("mousedown", { bubbles: true }));
+    expect((el("prefsPop") as HTMLElement).hidden).toBe(true);
+  });
+
+  it("renders the values the host posted", () => {
+    prefs({ inlineHints: false, lensMode: "flagged", debounceMs: 2200 });
+    expect(rowFor("inlineHints").getAttribute("aria-checked")).toBe("false");
+    expect(rowFor("inlineHints").querySelector(".tog")!.getAttribute("data-on")).toBe("false");
+    expect(rowFor("autoScan").getAttribute("aria-checked")).toBe("true");
+    const flagged = document.querySelector('#lensSeg [data-value="flagged"]')!;
+    expect(flagged.getAttribute("data-on")).toBe("true");
+    expect(el("debounceValue").textContent).toBe("2200 ms");
+    // The host's URL, stripped of a scheme nobody needs to read.
+    expect(el("popBackend").textContent).toBe("edupeer-backend.onrender.com");
+  });
+
+  it("writes a toggle back rather than flipping itself", () => {
+    // The row renders from what the host last posted. A workspace value can
+    // override the write, so the toggle must not assume it won.
+    prefs({ autoScan: true });
+    rowFor("autoScan").click();
+    expect(lastSent("setPreference")).toEqual(
+      expect.objectContaining({ key: "autoScan", value: false })
+    );
+    expect(rowFor("autoScan").getAttribute("aria-checked")).toBe("true");
+  });
+
+  it("cycles the lens mode between its two values", () => {
+    prefs({ lensMode: "all" });
+    rowFor("lensMode").click();
+    expect(lastSent("setPreference").value).toBe("flagged");
+    prefs({ lensMode: "flagged" });
+    rowFor("lensMode").click();
+    expect(lastSent("setPreference").value).toBe("all");
+  });
+
+  it("steps the hint delay and stops at the floor", () => {
+    prefs({ debounceMs: 1800 });
+    (el("debounceUp") as HTMLButtonElement).click();
+    expect(lastSent("setPreference")).toEqual(
+      expect.objectContaining({ key: "debounceMs", value: 2000 })
+    );
+    prefs({ debounceMs: 800 });
+    (el("debounceDown") as HTMLButtonElement).click();
+    expect(lastSent("setPreference").value).toBe(600);
+    prefs({ debounceMs: 600 });
+    expect((el("debounceDown") as HTMLButtonElement).disabled).toBe(true);
+  });
+
+  it("asks before it resets", () => {
+    openPop();
+    expect((el("resetConfirm") as HTMLElement).hidden).toBe(true);
+    (el("popReset") as HTMLButtonElement).click();
+    expect((el("resetConfirm") as HTMLElement).hidden).toBe(false);
+    // Opening the confirm is not the reset.
+    expect(lastSent("reset")).toBeUndefined();
+    (el("resetGo") as HTMLButtonElement).click();
+    expect(lastSent("reset")).toBeDefined();
+  });
+
+  it("backs out of the confirm without resetting", () => {
+    openPop();
+    (el("popReset") as HTMLButtonElement).click();
+    (el("resetCancel") as HTMLButtonElement).click();
+    expect((el("resetConfirm") as HTMLElement).hidden).toBe(true);
+    expect(lastSent("reset")).toBeUndefined();
+  });
+
+  it("routes the commands the panel does not own", () => {
+    openPop();
+    (el("popProgress") as HTMLButtonElement).click();
+    expect(lastSent("showProgress")).toBeDefined();
+    openPop();
+    (el("popGoal") as HTMLButtonElement).click();
+    expect(lastSent("setGoal")).toBeDefined();
+    openPop();
+    (el("popSettings") as HTMLButtonElement).click();
+    expect(lastSent("openSettings")).toBeDefined();
+  });
+
+  it("lights one arc per rung the student has spent", () => {
+    const lit = () => document.querySelectorAll(".avatar__arc.is-on").length;
+    expect(lit()).toBe(0);
+    post({ type: "hint", hint: "h", hint_level: 2, concept_tags: [], mode: "hint" });
+    expect(lit()).toBe(2);
+    post({ type: "hint", hint: "h", hint_level: 4, concept_tags: [], mode: "worked-example" });
+    expect(lit()).toBe(4);
+    // Off-ladder moves are not rungs and must not light one.
+    post({ type: "hint", hint: "h", hint_level: 1, concept_tags: [], mode: "explain-concept" });
+    expect(lit()).toBe(4);
+    post({ type: "resetCleared" });
+    expect(lit()).toBe(0);
   });
 
   it("reveals the review button and starts a review", () => {
@@ -709,19 +875,66 @@ describe("errors and reset", () => {
     expect(lastTurn().textContent).toContain("Backend error (500)");
   });
 
-  it("clears the transcript and shows the session summary", () => {
+  it("clears the transcript the moment the reset starts", () => {
+    // `resetCleared` is posted before the network call, not after it. The
+    // extension host has already dropped the threads by then, so waiting for
+    // the backend only left a transcript on screen that no longer existed.
     post({ type: "userMessage", text: "q" });
+    post({ type: "resetCleared" });
+    const texts = turns().map((t) => t.textContent);
+    expect(texts).toHaveLength(1);
+    expect(texts[0]).toContain("back at hint 1");
+  });
+
+  it("appends the session summary when it arrives", () => {
+    post({ type: "userMessage", text: "q" });
+    post({ type: "resetCleared" });
     post({ type: "resetDone", summary: "- you practised loops" });
     const texts = turns().map((t) => t.textContent);
     expect(texts).toHaveLength(2);
-    expect(texts[0]).toContain("you practised loops");
-    expect(texts[1]).toContain("back at hint 1");
+    expect(texts[0]).toContain("back at hint 1");
+    expect(texts[1]).toContain("you practised loops");
+  });
+
+  it("adds nothing when the backend had no summary to give", () => {
+    post({ type: "resetCleared" });
+    post({ type: "resetDone", summary: "" });
+    expect(turns()).toHaveLength(1);
+  });
+
+  it("leaves the transcript alone if resetDone lands without a clear", () => {
+    // A summary is an addendum, never a reason to wipe anything: the offline
+    // path answers `resetDone` with "" after a failure the queue will retry.
+    post({ type: "userMessage", text: "q" });
+    post({ type: "resetDone", summary: "" });
+    expect(turns()).toHaveLength(1);
   });
 
   it("resets the ladder", () => {
     post({ type: "hint", hint: "h", hint_level: 3, concept_tags: [], mode: "hint" });
-    post({ type: "resetDone", summary: "" });
+    post({ type: "resetCleared" });
     expect($(".ladder")).toBeNull();
+  });
+
+  it("disables Reset while the reset is in flight", () => {
+    // Reset was the one entry point that never sent `loading`, so the button
+    // stayed live and every extra click fired another full round trip.
+    post({ type: "loading", value: true });
+    expect((el("reset") as HTMLButtonElement).disabled).toBe(true);
+    (el("reset") as HTMLButtonElement).click();
+    expect(lastSent("reset")).toBeUndefined();
+    post({ type: "loading", value: false });
+    expect((el("reset") as HTMLButtonElement).disabled).toBe(false);
+  });
+
+  it("sends the footer Reset through the same confirm", () => {
+    // Otherwise the confirm is decorative: the footer button sits a pixel from
+    // Ask and used to fire on the first click.
+    (el("reset") as HTMLButtonElement).click();
+    expect(lastSent("reset")).toBeUndefined();
+    expect((el("resetConfirm") as HTMLElement).hidden).toBe(false);
+    (el("resetGo") as HTMLButtonElement).click();
+    expect(lastSent("reset")).toBeDefined();
   });
 });
 

@@ -172,6 +172,9 @@ body {
 .topbar {
   padding: var(--s4) var(--s5) var(--s3);
   border-bottom: 1px solid var(--line);
+  /* Anchors the preferences popover, which is positioned against the header
+     rather than the avatar so it can right-align to the panel edge. */
+  position: relative;
 }
 
 .topbar__row {
@@ -219,14 +222,339 @@ body {
   color: var(--ink);
 }
 
-.topbar__account {
+/* ------------------------------------------------- avatar and preferences */
+
+/* The ring is the hint ladder: four arcs, one per rung, lit to the depth this
+   student has spent. EduPeer's premise is that depth is earned, so the one
+   piece of chrome that is always on screen is the one that says how much has
+   been — and it gives the dots a scale, which "hint 4 ●●●●" never had. The
+   arc geometry: r=12, circumference 75.4, four segments of 16.42 with a 4px
+   gap, so each is offset by -20.42 from the last. Set in the markup, because
+   an arc that has to know its own index is clearer as four elements than as
+   one with a conic gradient. */
+.avatar {
+  position: relative;
+  width: 26px;
+  height: 26px;
+  flex: none;
+  padding: 0;
+  border: 0;
+  background: none;
+  cursor: pointer;
+  display: grid;
+  place-items: center;
+  border-radius: var(--radius-pill);
+  transition: transform var(--t-standard) var(--ease-signature);
+}
+
+.avatar:hover {
+  transform: scale(1.06);
+}
+
+.avatar__ring {
+  position: absolute;
+  inset: 0;
+  width: 26px;
+  height: 26px;
+  /* Starts the first arc at twelve o'clock rather than three. */
+  transform: rotate(-90deg);
+}
+
+.avatar__arc {
+  fill: none;
+  stroke: var(--line-soft);
+  stroke-width: 2;
+  stroke-dasharray: 16.42 65.26;
+  transition: stroke var(--t-standard) var(--ease-signature);
+}
+
+.avatar__arc.is-on {
+  stroke: var(--coral);
+}
+
+.avatar__face {
+  width: 18px;
+  height: 18px;
+  border-radius: var(--radius-pill);
+  background: var(--card-lit);
+  color: var(--ink);
+  font-family: var(--display);
+  font-weight: 700;
+  font-size: var(--t-micro);
+  letter-spacing: 0.02em;
+  display: grid;
+  place-items: center;
+}
+
+.avatar__face.is-anon {
+  color: var(--muted);
+}
+
+/* Signed out: the panel wants exactly one thing from this student, so exactly
+   one thing is lit — in the colour the Ask button owns. */
+.avatar__pip {
+  position: absolute;
+  right: -1px;
+  bottom: -1px;
+  width: 8px;
+  height: 8px;
+  border-radius: var(--radius-pill);
+  background: var(--coral);
+  border: 2px solid var(--ground);
+}
+
+.pop {
+  position: absolute;
+  top: calc(100% - var(--s2));
+  right: var(--s5);
+  width: 268px;
+  max-width: calc(100% - var(--s5) * 2);
+  z-index: 20;
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-lg);
+  box-shadow: 0 14px 34px rgba(0, 0, 0, 0.55);
+  overflow: hidden;
+  animation: pop-in var(--t-quick) var(--ease-signature) both;
+}
+
+@keyframes pop-in {
+  from {
+    opacity: 0;
+    transform: translateY(-4px);
+  }
+}
+
+.pop__id {
+  display: flex;
+  align-items: center;
+  gap: var(--s4);
+  padding: var(--s5);
+}
+
+.pop__idtext {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--s1);
+}
+
+.pop__name {
+  font-weight: 600;
+  font-size: var(--t-lead);
+  letter-spacing: -0.01em;
+}
+
+.pop__mail {
   font-family: var(--mono);
   font-size: var(--t-micro);
   color: var(--muted);
-  max-width: 11ch;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.pop__signin {
+  padding: 0 var(--s5) var(--s5);
+}
+
+.pop__group {
+  padding: var(--s3) 0;
+  border-top: 1px solid var(--line-soft);
+}
+
+.pop__title {
+  font-family: var(--mono);
+  font-size: var(--t-micro);
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--muted);
+  padding: var(--s3) var(--s5) var(--s2);
+}
+
+.row {
+  display: flex;
+  align-items: center;
+  gap: var(--s4);
+  width: 100%;
+  padding: var(--s4) var(--s5);
+  border: 0;
+  background: none;
+  color: var(--ink);
+  font-family: var(--sans);
+  font-size: var(--t-body);
+  text-align: left;
+  cursor: pointer;
+}
+
+.row:hover {
+  background: var(--card-lit);
+}
+
+.row--static {
+  cursor: default;
+}
+
+.row--static:hover {
+  background: none;
+}
+
+.row__label {
+  flex: 1;
+  min-width: 0;
+}
+
+.row__sub {
+  display: block;
+  font-size: var(--t-micro);
+  color: var(--muted);
+  margin-top: var(--s1);
+}
+
+.row__chev {
+  color: var(--muted);
+  font-size: var(--t-small);
+}
+
+.row--danger {
+  color: var(--danger);
+}
+
+.row--danger .row__chev {
+  color: var(--danger);
+}
+
+.row code {
+  font-family: var(--mono);
+  font-size: var(--t-micro);
+  color: var(--mint);
+}
+
+.tog {
+  width: 26px;
+  height: 15px;
+  flex: none;
+  border-radius: var(--radius-pill);
+  background: var(--card-lit);
+  border: 1px solid var(--line);
+  position: relative;
+  transition: background-color var(--t-quick) linear, border-color var(--t-quick) linear;
+}
+
+.tog i {
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 9px;
+  height: 9px;
+  border-radius: var(--radius-pill);
+  background: var(--muted);
+  transition: transform var(--t-standard) var(--ease-signature);
+}
+
+.tog[data-on="true"] {
+  background: var(--coral);
+  border-color: var(--coral);
+}
+
+.tog[data-on="true"] i {
+  background: var(--coral-ink);
+  transform: translateX(11px);
+}
+
+.seg {
+  display: inline-flex;
+  flex: none;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  overflow: hidden;
+}
+
+.seg span {
+  padding: var(--s1) var(--s4);
+  font-family: var(--mono);
+  font-size: var(--t-micro);
+  color: var(--muted);
+}
+
+.seg span[data-on="true"] {
+  background: var(--coral);
+  color: var(--coral-ink);
+}
+
+.step {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--s3);
+  flex: none;
+}
+
+.step b {
+  font-family: var(--mono);
+  font-size: var(--t-small);
+  font-weight: 400;
+  min-width: 52px;
+  text-align: right;
+}
+
+.step__btn {
+  width: 18px;
+  height: 18px;
+  display: grid;
+  place-items: center;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--muted);
+  font-size: var(--t-small);
+  line-height: 1;
+  cursor: pointer;
+}
+
+.step__btn:hover:not(:disabled) {
+  color: var(--ink);
+  border-color: var(--coral);
+}
+
+.step__btn:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+.confirm {
+  padding: var(--s4) var(--s5) var(--s5);
+  display: flex;
+  flex-direction: column;
+  gap: var(--s4);
+  background: var(--card-lit);
+  border-top: 1px solid var(--line-soft);
+}
+
+.confirm p {
+  margin: 0;
+  font-size: var(--t-small);
+  color: var(--muted);
+  line-height: 1.5;
+}
+
+.confirm strong {
+  color: var(--ink);
+}
+
+.confirm div {
+  display: flex;
+  gap: var(--s3);
+}
+
+.btn--danger {
+  background: transparent;
+  border-color: var(--danger);
+  color: var(--danger);
+}
+
+.btn--block {
+  width: 100%;
+  justify-content: center;
 }
 
 /* ----------------------------------------------------------------- badges */

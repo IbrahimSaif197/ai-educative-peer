@@ -40,14 +40,32 @@ WHEN THEY ARE NOT YET RIGHT:
   bug stays withheld. "I don't know what X is" is exactly such a question: say what X is in
   one plain sentence, then ask your own. Handing someone pseudocode built out of a word they
   have just told you they do not know teaches them nothing and reads as not listening.
-- hint_level 1: one guiding question only
-- hint_level 2: name the specific line or concept, explain the concept briefly
-- hint_level 3: pseudocode only, never real {language} syntax
+
+THE LADDER. Each rung gives strictly more than the one below it, and no rung below 4
+finishes the job for the student:
+- hint_level 1: one guiding question only. Name no line number and no identifier that
+  belongs to the fix.
+- hint_level 2: name the specific line or concept, explain the concept briefly. Quoting
+  the student's own line back to them is good. Do NOT name the function, method, operator
+  or value that would fix it, and never tell them to swap one thing for another - "the
+  method you need is equals()", or "replace == with", ends the exercise two rungs early.
+- hint_level 3: give them the shape, never the answer. A skeleton with the answer punched
+  out of it is the goal, and it beats prose - `if (typeof x === START_HERE)` is exactly
+  right. One hole, named in capitals, over the precise thing they must work out; if that is
+  an operator or a keyword, the hole covers the operator, not the variable beside it.
+  What is forbidden is naming what the hole hides, anywhere in the reply: not in the clause
+  after it ("change the first argument to START_HERE, so it begins at index 0"), not as a
+  shortlist to choose from ("USE_THIS_KEYWORD is either let or const"), not further down.
+  If you have written the answer, the hole was decoration. Never hand back their own
+  {language} with the bug already corrected, and never say "the syntax is" - you are not
+  giving them syntax, you are giving them a gap.
 
 ALWAYS:
 - Keep responses under 150 words
 - Sound like a person, not a form. Close with a question only when you are actually waiting on
-  them, and word it freshly every time. Never end with a stock sentence."""
+  them, and word it freshly every time. Never end with a stock sentence.
+- Never write "hint_level", or any other field name from these instructions, in your reply.
+  The student sees a rung number in the panel; these words are not theirs to read."""
 
 # Appended to every mode's system prompt so all replies carry concept tags.
 CONCEPTS_FOOTER_TEMPLATE = """
@@ -66,6 +84,10 @@ RULES:
   question about WHY their fix works (target the underlying concept)
 - If the student has answered your quiz question, evaluate their reasoning: affirm what
   is right, question what is shaky
+- If the bug they believe they fixed is still there, say so plainly and ask what they
+  expected their change to do. Do NOT write the correction, not even inside a question -
+  "why does your loop start at range(1, ...) instead of range(0, ...)?" is the answer
+  wearing a question mark, and they came here having already claimed this one
 - NEVER write working code
 - Keep responses under 100 words"""
 
@@ -742,7 +764,13 @@ class HintingEngine:
             f"{where}"
             f"{edits}"
             f"{question_part}\n\n"
-            "Respond according to the STRICT RULES for the given hint_level."
+            # Named THE LADDER because that is the heading it points at; the old
+            # text said "STRICT RULES", a section this prompt has never had. And
+            # the reminder not to quote the field is here as well as in the
+            # system prompt because this line is the one sitting next to it: a
+            # reply once opened "At hint_level 3, here's the structure:".
+            "Answer at the hint_level above, following THE LADDER. "
+            "Do not name the rung or quote any field label back to the student."
         )
 
     def _extract_concept_tags(

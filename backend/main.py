@@ -348,8 +348,26 @@ async def hint_stream(req: HintRequest, uid: str = Depends(rate_limited("hint"))
 
 @app.post("/reset")
 async def reset_session(uid: str = Depends(rate_limited("session"))):
+    """Clear the session, and hand back a "what you learned" note if there is one.
+
+    Four Firestore/LLM steps used to run one after another here, so pressing
+    Reset cost six-to-eight serial round trips on a free-tier box. Two of them
+    never depended on each other: reading the interactions to summarise, and
+    wiping the session docs. They now run together, which takes a whole
+    Firestore round trip out of the critical path.
+
+    What is left is the summary itself, and that is a real LLM call the student
+    does see. It stays awaited — the panel no longer waits on this response to
+    clear itself (see `resetSession` in the extension), so the note arriving a
+    second or two later costs nothing.
+    """
+    interactions, _ = await asyncio.gather(
+        asyncio.to_thread(firebase.get_recent_interactions_sync, uid, 10),
+        asyncio.to_thread(store.reset, uid),
+    )
+    _profile_cache.pop(uid, None)
+
     summary = ""
-    interactions = await asyncio.to_thread(firebase.get_recent_interactions_sync, uid, 10)
     if interactions:
         try:
             summary = await asyncio.to_thread(engine.summarize_session, interactions)
@@ -358,8 +376,6 @@ async def reset_session(uid: str = Depends(rate_limited("session"))):
             summary = ""
         if summary:
             await asyncio.to_thread(firebase.append_session_summary_sync, uid, summary)
-    await asyncio.to_thread(store.reset, uid)
-    _profile_cache.pop(uid, None)
     return {"status": "reset", "user_id": uid, "summary": summary}
 
 

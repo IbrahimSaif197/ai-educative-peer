@@ -16,8 +16,19 @@
   const badgesEl = el("badges");
   const badgeCountEl = el("badgeCount");
   const badgesWrapEl = el("badgesWrap");
-  const accountLabelEl = el("accountLabel");
-  const authBtn = el("authBtn");
+  const accountBtn = el("accountBtn");
+  const accountInitialsEl = el("accountInitials");
+  const accountPipEl = el("accountPip");
+  const prefsPop = el("prefsPop");
+  const popNameEl = el("popName");
+  const popMailEl = el("popMail");
+  const popSignInWrap = el("popSignInWrap");
+  const signInBtn = el("signInBtn");
+  const signOutBtn = el("signOutBtn");
+  const lensSegEl = el("lensSeg");
+  const debounceValueEl = el("debounceValue");
+  const popBackendEl = el("popBackend");
+  const resetConfirmEl = el("resetConfirm");
   const streakChipEl = el("streakChip");
   const streakDaysEl = el("streakDays");
   const reviewBtn = el("reviewBtn");
@@ -51,8 +62,21 @@
   /** Modes that occupy a rung on the hint ladder, so the card shows its depth. */
   const LADDER_MODES = new Set(["hint", "worked-example"]);
 
+  const MAX_LEVEL = 4;
+  /** Steps the "wait before hinting" stepper moves in, and its floor. Both are
+   *  re-applied in the extension host; these only keep the UI honest. */
+  const DEBOUNCE_STEP = 200;
+  const DEBOUNCE_MIN = 600;
+  const DEBOUNCE_MAX = 5000;
+
   let currentCode = "";
   let signedIn = false;
+  /** The rung the current thread has reached, mirrored onto the avatar ring.
+   *  It is the only always-visible readout of the thing EduPeer is about. */
+  let currentLevel = 0;
+  /** Last values posted by the host. The popover renders from these rather
+   *  than from its own DOM, so a setting changed elsewhere repaints it. */
+  let prefs = {};
   // What the next composer submission means.
   let composerMode = "hint";
   let expectReflectAnswer = false;
@@ -464,12 +488,181 @@
 
   resetBtn.addEventListener("click", () => {
     if (isLoading) return;
-    vscode.postMessage({ type: "reset" });
+    // Both ways in ask the same question. Reset is the one destructive control
+    // in the panel and it sits a pixel from Ask down here, so having the
+    // footer fire on the first click while the popover asked first would have
+    // made the confirm decorative.
+    if (!popoverOpen()) openPopover();
+    resetConfirmEl.hidden = false;
+    el("resetGo").focus();
   });
   refreshBtn.addEventListener("click", () => vscode.postMessage({ type: "refreshCode" }));
-  authBtn.addEventListener("click", () =>
-    vscode.postMessage({ type: signedIn ? "signOut" : "signIn" })
+  // ------------------------------------------------- account + preferences
+
+  /** Light the first `currentLevel` of the four arcs on the avatar. */
+  function paintRing() {
+    const arcs = accountBtn.querySelectorAll(".avatar__arc");
+    for (let i = 0; i < arcs.length; i++) {
+      arcs[i].classList.toggle("is-on", i < currentLevel);
+    }
+    const depth = currentLevel > 0 ? `, hint ${currentLevel} of ${MAX_LEVEL}` : "";
+    accountBtn.setAttribute(
+      "aria-label",
+      `${signedIn ? popNameEl.textContent : "Not signed in"} — account and preferences${depth}`
+    );
+  }
+
+  function setLevel(level) {
+    currentLevel = Math.max(0, Math.min(MAX_LEVEL, Number(level) || 0));
+    paintRing();
+  }
+
+  function popoverOpen() {
+    return !prefsPop.hidden;
+  }
+
+  /**
+   * The rows a keyboard can currently reach.
+   *
+   * `:not([hidden])` alone is not enough: Sign in is hidden by its wrapper
+   * rather than by its own attribute, so a signed-in student opening the
+   * popover would have focus sent to a button inside a `display:none` block —
+   * which browsers decline, leaving nothing focused and the arrow keys doing
+   * nothing.
+   */
+  function menuItems() {
+    return Array.from(prefsPop.querySelectorAll("button:not([hidden]):not(:disabled)")).filter(
+      (node) => !node.closest("[hidden]")
+    );
+  }
+
+  function openPopover() {
+    // Asked for fresh every time: a setting can have changed in the Settings
+    // UI or another window since this was last painted.
+    vscode.postMessage({ type: "requestPreferences" });
+    resetConfirmEl.hidden = true;
+    prefsPop.hidden = false;
+    accountBtn.setAttribute("aria-expanded", "true");
+    const first = menuItems()[0];
+    if (first) first.focus();
+  }
+
+  function closePopover(refocus) {
+    if (!popoverOpen()) return;
+    prefsPop.hidden = true;
+    resetConfirmEl.hidden = true;
+    accountBtn.setAttribute("aria-expanded", "false");
+    if (refocus) accountBtn.focus();
+  }
+
+  accountBtn.addEventListener("click", () => {
+    if (popoverOpen()) closePopover(false);
+    else openPopover();
+  });
+
+  document.addEventListener("keydown", (e) => {
+    if (e.key === "Escape" && popoverOpen()) {
+      e.preventDefault();
+      closePopover(true);
+    }
+  });
+
+  document.addEventListener("mousedown", (e) => {
+    if (!popoverOpen()) return;
+    if (prefsPop.contains(e.target) || accountBtn.contains(e.target)) return;
+    closePopover(false);
+  });
+
+  // Arrow keys walk the menu, as a menu is expected to.
+  prefsPop.addEventListener("keydown", (e) => {
+    if (e.key !== "ArrowDown" && e.key !== "ArrowUp") return;
+    const items = menuItems();
+    if (!items.length) return;
+    e.preventDefault();
+    const at = items.indexOf(document.activeElement);
+    const next = e.key === "ArrowDown" ? at + 1 : at - 1;
+    items[(next + items.length) % items.length].focus();
+  });
+
+  function setPref(key, value) {
+    vscode.postMessage({ type: "setPreference", key, value });
+  }
+
+  prefsPop.querySelectorAll("[data-pref]").forEach((row) => {
+    const key = row.getAttribute("data-pref");
+    row.addEventListener("click", () => {
+      if (key === "lensMode") {
+        setPref(key, prefs.lensMode === "all" ? "flagged" : "all");
+      } else {
+        setPref(key, !prefs[key]);
+      }
+    });
+  });
+
+  el("debounceDown").addEventListener("click", () =>
+    setPref("debounceMs", Math.max(DEBOUNCE_MIN, (prefs.debounceMs || 0) - DEBOUNCE_STEP))
   );
+  el("debounceUp").addEventListener("click", () =>
+    setPref("debounceMs", Math.min(DEBOUNCE_MAX, (prefs.debounceMs || 0) + DEBOUNCE_STEP))
+  );
+
+  signInBtn.addEventListener("click", () => {
+    closePopover(false);
+    vscode.postMessage({ type: "signIn" });
+  });
+  signOutBtn.addEventListener("click", () => {
+    closePopover(false);
+    vscode.postMessage({ type: "signOut" });
+  });
+  el("popProgress").addEventListener("click", () => {
+    closePopover(false);
+    vscode.postMessage({ type: "showProgress" });
+  });
+  el("popGoal").addEventListener("click", () => {
+    closePopover(false);
+    vscode.postMessage({ type: "setGoal" });
+  });
+  el("popSettings").addEventListener("click", () => {
+    closePopover(false);
+    vscode.postMessage({ type: "openSettings" });
+  });
+
+  // Reset asks first. It is the one destructive control in the panel, and it
+  // used to sit a pixel from the primary action with no confirm at all.
+  el("popReset").addEventListener("click", () => {
+    resetConfirmEl.hidden = false;
+    el("resetGo").focus();
+  });
+  el("resetCancel").addEventListener("click", () => {
+    resetConfirmEl.hidden = true;
+    el("popReset").focus();
+  });
+  el("resetGo").addEventListener("click", () => {
+    closePopover(false);
+    if (isLoading) return;
+    vscode.postMessage({ type: "reset" });
+  });
+
+  function renderPreferences(values, backendUrl) {
+    prefs = values || {};
+    prefsPop.querySelectorAll("[data-pref]").forEach((row) => {
+      const key = row.getAttribute("data-pref");
+      if (key === "lensMode") return;
+      const on = !!prefs[key];
+      row.setAttribute("aria-checked", String(on));
+      const tog = row.querySelector(".tog");
+      if (tog) tog.setAttribute("data-on", String(on));
+    });
+    const mode = prefs.lensMode === "flagged" ? "flagged" : "all";
+    lensSegEl.querySelectorAll("[data-value]").forEach((seg) => {
+      seg.setAttribute("data-on", String(seg.getAttribute("data-value") === mode));
+    });
+    const ms = Number(prefs.debounceMs) || DEBOUNCE_MIN;
+    debounceValueEl.textContent = `${ms} ms`;
+    el("debounceDown").disabled = ms <= DEBOUNCE_MIN;
+    el("debounceUp").disabled = ms >= DEBOUNCE_MAX;
+    popBackendEl.textContent = (backendUrl || "").replace(/^https?:\/\//, "");
+  }
   reviewBtn.addEventListener("click", () => {
     if (isLoading) return;
     reviewBtn.hidden = true;
@@ -483,6 +676,9 @@
     removeStreamingTurn();
     const mode = msg.mode || "hint";
     const level = Number(msg.hint_level) || 0;
+    // The ring follows the ladder, and only the ladder: a concept explanation
+    // or a prediction check is not a rung and must not light one.
+    if (LADDER_MODES.has(mode)) setLevel(level);
 
     addTurn({
       role: "tutor",
@@ -739,29 +935,56 @@
 
       case "authState":
         signedIn = !!msg.signedIn;
-        accountLabelEl.textContent = msg.label;
-        accountLabelEl.title = msg.label;
-        authBtn.textContent = signedIn ? "Sign out" : "Sign in";
+        popNameEl.textContent = signedIn ? msg.label : "Working anonymously";
+        popMailEl.textContent = signedIn
+          ? msg.email || msg.label
+          : "Your streak and badges live on this machine only.";
+        popMailEl.title = signedIn ? msg.email || msg.label : "";
+        accountInitialsEl.textContent = signedIn ? msg.initials || "?" : "?";
+        accountInitialsEl.classList.toggle("is-anon", !signedIn);
+        // The pip is the whole call to action for an anonymous student, now
+        // that the header no longer spends a button on it.
+        accountPipEl.hidden = signedIn;
+        popSignInWrap.hidden = signedIn;
+        signOutBtn.hidden = !signedIn;
+        paintRing();
         refreshPlaceholder();
+        break;
+
+      case "preferences":
+        renderPreferences(msg.values, msg.backendUrl);
         break;
 
       case "reviewDue":
         reviewBtn.hidden = false;
         break;
 
-      case "resetDone":
+      // The clear and the summary arrive separately now. The clear is local
+      // and instant; the summary is an LLM call the student is not waiting on.
+      case "resetCleared":
         turns = [];
         clearChat();
         setComposerMode("hint");
         expectReflectAnswer = false;
-        if (msg.summary) {
-          addTurn({ role: "tutor", text: msg.summary, eyebrow: "What you learned" });
-        }
+        expectReviewAnswer = false;
+        setLevel(0);
         addTurn({
           role: "tutor",
           text: "Session reset. We're back at hint 1.",
           eyebrow: "Fresh start",
         });
+        break;
+
+      case "resetDone":
+        // `resetCleared` already did the clearing. What is left is the note,
+        // and only when the backend had one to give. It lands after the fresh
+        // start line rather than before it, because that is the order the two
+        // actually happen in now — and because `addTurn` appends, so placing
+        // it earlier would put the DOM out of step with `turns`, which is what
+        // `restoreChat` replays.
+        if (msg.summary) {
+          addTurn({ role: "tutor", text: msg.summary, eyebrow: "What you learned" });
+        }
         break;
 
       case "externalAsk":

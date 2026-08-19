@@ -119,6 +119,8 @@ const DecorationRangeBehavior = {
 const OverviewRulerLane = { Left: 1, Center: 2, Right: 4, Full: 7 };
 const StatusBarAlignment = { Left: 1, Right: 2 };
 const ViewColumn = { One: 1, Two: 2, Three: 3 };
+// Real values from the VS Code API; `setPreference` writes Global.
+const ConfigurationTarget = { Global: 1, Workspace: 2, WorkspaceFolder: 3 };
 
 /** Real listener behaviour — several tests depend on events actually firing. */
 class EventEmitter<T> {
@@ -162,6 +164,8 @@ const __state = {
   /** Queued answers for showInputBox. */
   inputBoxAnswers: [] as Array<string | undefined>,
   configuration: {} as Record<string, any>,
+  /** One config object per section, so `update` assertions have a target. */
+  configurations: new Map<string, any>(),
   listeners: {
     activeEditor: [] as Array<(e: any) => void>,
     textDocument: [] as Array<(e: any) => void>,
@@ -247,11 +251,24 @@ const mockWindow = {
 // ----------------------------------------------------------------- workspace
 
 const workspace = {
-  getConfiguration: jest.fn((_section?: string) => ({
-    get: jest.fn((key: string, fallback: any) =>
-      key in __state.configuration ? __state.configuration[key] : fallback
-    ),
-  })),
+  // One object per section, not one per call: a test that asserts on `update`
+  // has to be looking at the same mock the code under test wrote to.
+  getConfiguration: jest.fn((section = "") => {
+    const existing = __state.configurations.get(section);
+    if (existing) return existing;
+    const cfg = {
+      get: jest.fn((key: string, fallback: any) =>
+        key in __state.configuration ? __state.configuration[key] : fallback
+      ),
+      update: jest.fn((key: string, value: any, _target?: any) => {
+        __state.configuration[key] = value;
+        return Promise.resolve();
+      }),
+      inspect: jest.fn(() => undefined),
+    };
+    __state.configurations.set(section, cfg);
+    return cfg;
+  }),
   onDidChangeTextDocument: jest.fn((fn: any) => push(__state.listeners.textDocument, fn)),
   onDidCloseTextDocument: jest.fn((fn: any) => push(__state.listeners.closeTextDocument, fn)),
   onDidChangeConfiguration: jest.fn((fn: any) => push(__state.listeners.configuration, fn)),
@@ -394,6 +411,7 @@ function __reset(): void {
   __state.infoMessageAnswers.length = 0;
   __state.inputBoxAnswers.length = 0;
   __state.configuration = {};
+  __state.configurations.clear();
   for (const key of Object.keys(__state.listeners) as Array<
     keyof typeof __state.listeners
   >) {
@@ -415,6 +433,7 @@ module.exports = {
   CodeAction,
   CodeActionKind,
   Diagnostic,
+  ConfigurationTarget,
   DiagnosticSeverity,
   WorkspaceEdit,
   SymbolKind,

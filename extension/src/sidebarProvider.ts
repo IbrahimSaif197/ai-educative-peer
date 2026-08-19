@@ -256,6 +256,7 @@ export class EduPeerSidebarProvider implements vscode.WebviewViewProvider {
       switch (msg.type) {
         case "ready":
           this.postAuthState();
+          this.postPreferences();
           // On the very first "ready" there is no thread yet: posting one
           // would create a permanent phantom "" entry in `threads` and send an
           // empty `restoreChat` that `sendFocus` immediately supersedes.
@@ -315,6 +316,28 @@ export class EduPeerSidebarProvider implements vscode.WebviewViewProvider {
         case "signOut":
           await vscode.commands.executeCommand("edupeer.signOut");
           return;
+        case "requestPreferences":
+          this.postPreferences();
+          return;
+        case "setPreference":
+          await this.setPreference(msg.key, msg.value);
+          // Echoed back rather than assumed: `update()` can be overridden by a
+          // workspace or folder value, in which case the effective setting is
+          // not what the student just clicked, and the toggle has to say so.
+          this.postPreferences();
+          return;
+        case "showProgress":
+          await vscode.commands.executeCommand("edupeer.showProgress");
+          return;
+        case "setGoal":
+          await vscode.commands.executeCommand("edupeer.setGoal");
+          return;
+        case "openSettings":
+          await vscode.commands.executeCommand(
+            "workbench.action.openSettings",
+            "@ext:edupeer.edupeer"
+          );
+          return;
       }
     });
 
@@ -336,6 +359,13 @@ export class EduPeerSidebarProvider implements vscode.WebviewViewProvider {
       this.auth.onDidChange(() => {
         this.postAuthState();
         void this.sendBadges();
+      }),
+      // A setting can change from the Settings UI, from another window, or
+      // from a workspace file landing under a global value. The popover shows
+      // toggles, and a toggle that disagrees with the editor it claims to
+      // control is worse than no toggle.
+      vscode.workspace.onDidChangeConfiguration((e) => {
+        if (e.affectsConfiguration("edupeer")) this.postPreferences();
       }),
     ];
 
@@ -387,13 +417,33 @@ export class EduPeerSidebarProvider implements vscode.WebviewViewProvider {
     this.pendingReview = undefined;
     this.attempts.clear();
     this.levelEmitter.fire(0);
+
+    // The panel clears now, not when the backend answers. Everything above
+    // this line has already happened in the extension host, so the transcript
+    // on screen is describing a session that no longer exists — and it used to
+    // keep describing it for as long as `/reset` took, which is a Firestore
+    // read, an LLM summary and a batch delete away, on a free-tier box that
+    // may be asleep. The student pressed a button that clears things; it
+    // clears things.
+    //
+    // `loading` goes with it. Reset was the one entry point that never sent
+    // it, so `isLoading` stayed false in the webview, the button was never
+    // disabled, and its own `if (isLoading) return` guard never fired: every
+    // impatient second click started another full round trip.
+    this.post({ type: "loading", value: true });
+    this.post({ type: "resetCleared" });
+
     let summary = "";
     try {
       summary = await this.api.resetSession();
     } catch (err) {
       console.error("reset failed; queuing for when the backend returns", err);
       await this.queue?.enqueue({ kind: "reset" });
+    } finally {
+      this.post({ type: "loading", value: false });
     }
+    // Only the summary is left to deliver. It is the one part of a reset that
+    // genuinely needs the server, and the one part nothing is waiting on.
     this.post({ type: "resetDone", summary });
   }
 
@@ -969,11 +1019,63 @@ export class EduPeerSidebarProvider implements vscode.WebviewViewProvider {
   private postAuthState(): void {
     const s = this.auth.getSession();
     const signedIn = !!s && !s.isAnonymous;
+    const label = signedIn ? (s!.displayName || s!.email || s!.uid) : "Not signed in";
     this.post({
       type: "authState",
       signedIn,
-      label: signedIn ? (s!.displayName || s!.email || s!.uid) : "Not signed in",
+      label,
+      // The header no longer has room to spell an address out, so the avatar
+      // carries initials and the popover carries the address itself.
+      email: signedIn ? (s!.email ?? "") : "",
+      initials: signedIn ? accountInitials(label) : "",
     });
+  }
+
+  /**
+   * Mirror the settings the popover renders as live controls.
+   *
+   * Only the four the panel can sensibly own. `backendUrl` is deliberately
+   * absent: it is a URL, and a 268px popover is not where anyone should be
+   * typing one — the popover links out to the Settings UI for it instead.
+   */
+  private postPreferences(): void {
+    const cfg = vscode.workspace.getConfiguration("edupeer");
+    this.post({
+      type: "preferences",
+      values: {
+        inlineHints: cfg.get<boolean>("inlineHints", true),
+        autoScan: cfg.get<boolean>("autoScan", true),
+        lensMode: cfg.get<string>("lensMode", "all"),
+        debounceMs: cfg.get<number>("debounceMs", 1800),
+        removeFixedBugComments: cfg.get<boolean>("removeFixedBugComments", true),
+      },
+      backendUrl: cfg.get<string>("backendUrl", ""),
+    });
+  }
+
+  /**
+   * Apply one preference from the popover.
+   *
+   * Written to Global rather than Workspace: a student's tolerance for inline
+   * hints is a property of the student, not of the folder they happen to have
+   * open. Unknown keys are dropped rather than written — the webview is the
+   * least trusted thing that talks to this class, and `update()` will happily
+   * create a setting that no `package.json` declares.
+   */
+  private async setPreference(key: unknown, value: unknown): Promise<void> {
+    if (typeof key !== "string" || !WRITABLE_PREFERENCES.has(key)) return;
+    if (key === "debounceMs") {
+      const n = Number(value);
+      // Floored to match the `minimum` in package.json and the second floor
+      // inlineTutor applies; a popover stepper should not be the one way to
+      // get underneath both.
+      if (!Number.isFinite(n)) return;
+      value = Math.max(MIN_DEBOUNCE_MS, Math.round(n));
+    }
+    if (key === "lensMode" && value !== "all" && value !== "flagged") return;
+    await vscode.workspace
+      .getConfiguration("edupeer")
+      .update(key, value, vscode.ConfigurationTarget.Global);
   }
 
   /**
@@ -1033,8 +1135,87 @@ export class EduPeerSidebarProvider implements vscode.WebviewViewProvider {
       </span>
       <span id="streakChip" class="streak" hidden><span aria-hidden="true">🔥</span><span id="streakDays">0</span></span>
       <span class="topbar__spacer"></span>
-      <span id="accountLabel" class="topbar__account" title="Signed-in account">Not signed in</span>
-      <button id="authBtn" class="btn btn--ghost btn--sm">Sign in</button>
+      <button id="accountBtn" class="avatar" aria-haspopup="dialog" aria-expanded="false"
+              aria-controls="prefsPop" title="Account and preferences">
+        <svg class="avatar__ring" viewBox="0 0 26 26" aria-hidden="true" focusable="false">
+          <circle class="avatar__arc" cx="13" cy="13" r="12" stroke-dashoffset="0"></circle>
+          <circle class="avatar__arc" cx="13" cy="13" r="12" stroke-dashoffset="-20.42"></circle>
+          <circle class="avatar__arc" cx="13" cy="13" r="12" stroke-dashoffset="-40.84"></circle>
+          <circle class="avatar__arc" cx="13" cy="13" r="12" stroke-dashoffset="-61.26"></circle>
+        </svg>
+        <span class="avatar__face" id="accountInitials" aria-hidden="true">?</span>
+        <span class="avatar__pip" id="accountPip" aria-hidden="true"></span>
+      </button>
+    </div>
+
+    <div class="pop" id="prefsPop" role="dialog" aria-label="Account and preferences" hidden>
+      <div class="pop__id">
+        <span class="pop__idtext">
+          <span class="pop__name" id="popName">Working anonymously</span>
+          <span class="pop__mail" id="popMail">Your streak and badges live on this machine only.</span>
+        </span>
+      </div>
+      <div class="pop__signin" id="popSignInWrap">
+        <button id="signInBtn" class="btn btn--primary btn--block">Sign in to keep your progress</button>
+      </div>
+
+      <div class="pop__group" role="group" aria-label="How the tutor behaves">
+        <div class="pop__title">How the tutor behaves</div>
+        <button class="row" role="switch" aria-checked="true" data-pref="inlineHints">
+          <span class="row__label">Hints in the editor
+            <span class="row__sub">Lightbulbs, underlines and ghost text</span>
+          </span>
+          <span class="tog" aria-hidden="true"><i></i></span>
+        </button>
+        <button class="row" role="switch" aria-checked="true" data-pref="autoScan">
+          <span class="row__label">Scan the block as I type
+            <span class="row__sub">Flags suspicious lines without being asked</span>
+          </span>
+          <span class="tog" aria-hidden="true"><i></i></span>
+        </button>
+        <button class="row" data-pref="lensMode">
+          <span class="row__label">Show “Ask EduPeer” on</span>
+          <span class="seg" id="lensSeg" aria-hidden="true">
+            <span data-value="all">every line</span><span data-value="flagged">flagged</span>
+          </span>
+        </button>
+        <div class="row row--static">
+          <span class="row__label" id="debounceLabel">Wait before hinting</span>
+          <span class="step">
+            <button class="step__btn" id="debounceDown" aria-label="Wait less before hinting">−</button>
+            <b id="debounceValue">1800 ms</b>
+            <button class="step__btn" id="debounceUp" aria-label="Wait longer before hinting">+</button>
+          </span>
+        </div>
+        <button class="row" role="switch" aria-checked="true" data-pref="removeFixedBugComments">
+          <span class="row__label">Delete <code>bug:</code> comments once fixed
+            <span class="row__sub">The only edit EduPeer makes to your file</span>
+          </span>
+          <span class="tog" aria-hidden="true"><i></i></span>
+        </button>
+      </div>
+
+      <div class="pop__group">
+        <button class="row" id="popProgress"><span class="row__label">My progress</span><span class="row__chev" aria-hidden="true">›</span></button>
+        <button class="row" id="popGoal"><span class="row__label">Set a learning goal</span><span class="row__chev" aria-hidden="true">›</span></button>
+        <button class="row" id="popSettings">
+          <span class="row__label">Where EduPeer connects<span class="row__sub" id="popBackend"></span></span>
+          <span class="row__chev" aria-hidden="true">↗</span>
+        </button>
+      </div>
+
+      <div class="pop__group">
+        <button class="row row--danger" id="popReset"><span class="row__label">Start a fresh session</span><span class="row__chev" aria-hidden="true">›</span></button>
+        <button class="row" id="signOutBtn" hidden><span class="row__label">Sign out</span></button>
+      </div>
+
+      <div class="confirm" id="resetConfirm" hidden>
+        <p><strong>Start a fresh session?</strong> This clears every conversation and takes you back to hint 1. Your badges and streak stay.</p>
+        <div>
+          <button class="btn btn--danger btn--sm" id="resetGo">Start fresh</button>
+          <button class="btn btn--ghost btn--sm" id="resetCancel">Keep going</button>
+        </div>
+      </div>
     </div>
     <details class="badges" id="badgesWrap">
       <summary class="badges__summary">
@@ -1087,4 +1268,40 @@ export class EduPeerSidebarProvider implements vscode.WebviewViewProvider {
 
 function getNonce(): string {
   return crypto.randomBytes(24).toString("base64");
+}
+
+/** The settings the popover may write. Anything else the webview asks for is
+ *  dropped — `update()` creates undeclared keys without complaint. */
+const WRITABLE_PREFERENCES = new Set([
+  "inlineHints",
+  "autoScan",
+  "lensMode",
+  "debounceMs",
+  "removeFixedBugComments",
+]);
+
+/** Matches the `minimum` in package.json and inlineTutor's own floor. */
+const MIN_DEBOUNCE_MS = 600;
+
+/**
+ * One or two letters for the avatar.
+ *
+ * Two initials when the label reads like a name, one when it is an address or
+ * a bare uid. Deliberately not clever about it: a student called "de la Cruz"
+ * getting "DL" is a smaller failure than a regex that returns nothing at all,
+ * and the full label is one hover away in the popover.
+ */
+export function accountInitials(label: string): string {
+  const trimmed = (label || "").trim();
+  if (!trimmed) return "";
+  // An address has no meaningful second word — "ahmed@karzo.com" would give
+  // "AK", initials for a domain the student does not think of as their name.
+  const source = trimmed.includes("@") ? trimmed.split("@")[0] : trimmed;
+  const parts = source.split(/[\s._-]+/).filter(Boolean);
+  const letters = parts
+    .map((p) => p.match(/[\p{L}\p{N}]/u)?.[0] ?? "")
+    .filter(Boolean);
+  if (!letters.length) return "";
+  return (letters.length > 1 ? letters[0] + letters[letters.length - 1] : letters[0])
+    .toLocaleUpperCase();
 }
