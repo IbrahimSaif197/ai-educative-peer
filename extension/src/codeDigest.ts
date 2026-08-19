@@ -247,7 +247,7 @@ export function buildDigest(
   // block longer than the budget keeps its head and drops its tail — and the
   // cursor can be in the tail. `generate_line_hint` then finds no line to
   // answer about, returns an empty hint, and the lens renders that as
-  // "✓ Nothing to flag on this line": the tutor reassuring the student about
+  // "EduPeer — nothing to flag here": the tutor reassuring the student about
   // a line it was never shown. One line of budget buys the guarantee that
   // whatever else the digest drops, the line being asked about is in it.
   if (cursorLine !== undefined) {

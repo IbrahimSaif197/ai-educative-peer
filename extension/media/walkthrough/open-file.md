@@ -6,5 +6,6 @@ def average(numbers):
     return total / len(numbers)
 ```
 
-EduPeer reads whatever file you have open and flags the lines worth a second
-look. It will not rewrite this function for you.
+Rest your cursor in a function and EduPeer looks at that function — not the
+whole file, and not until you land somewhere. It flags the lines worth a
+second look. It will not rewrite this one for you.

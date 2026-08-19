@@ -204,7 +204,7 @@
           {
             "id": "edupeer.step.openFile",
             "title": "Open something you're stuck on",
-            "description": "EduPeer reads the file you're editing. Open any Python, JavaScript, TypeScript, Java, C, C++, C#, Go, Rust or SQL file — the demos folder has a buggy sample for each.\n[Open the tutor panel](command:edupeer.activate)",
+            "description": "EduPeer reads the block your cursor is in, not the whole file. Open any Python, JavaScript, TypeScript, Java, C, C++, C#, Go, Rust or SQL file — the demos folder has a buggy sample for each — and rest the cursor inside a function.\n[Open the tutor panel](command:edupeer.activate)",
             "media": {
               "markdown": "media/walkthrough/open-file.md"
             }

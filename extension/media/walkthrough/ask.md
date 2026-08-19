@@ -1,6 +1,6 @@
 **You** — it crashes on the last number and I don't know why
 
-**EduPeer** — Hint 1
+**EduPeer** — Asking · rung 1 of 4 · next costs an attempt
 
 > What is the largest index `numbers[i]` can reach here, and how many items
 > does the list actually hold?

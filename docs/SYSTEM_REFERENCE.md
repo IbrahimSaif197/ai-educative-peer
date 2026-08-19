@@ -2072,6 +2072,33 @@ abort once `REQUEST_TIMEOUT_MS` elapses (rethrown as `TimeoutError`,
 
 ## 14. Extension reference
 
+> **Superseded. Read `docs/EXTENSION_REFERENCE.md` instead.**
+>
+> That document was generated 2026-08-18 against the working tree and
+> refreshed 2026-08-19 for the panel redesign; this section predates both and
+> is wrong in ways that are easy to act on by mistake. `§21.1` of the newer
+> document enumerates the differences, but the ones that bite:
+>
+> - It lists **fifteen commands**; there are eighteen. `deepenLine`,
+>   `dismissLine` and `pickDefinition` are missing.
+> - It titles `edupeer.scanFile` **"EduPeer: Scan File for Issues"**. It is
+>   "EduPeer: Scan This Block", and since 1.6.0 it scans the block the cursor
+>   is in rather than the file.
+> - Its extension→webview table lists **`activeCode`**, which no longer
+>   exists — it is `focus`, and carries a digest rather than the file. The
+>   table is missing `focus`, `cursor`, `fullFile`, `authTrouble`, `streak`,
+>   `scanClean` and everything the 1.7.0 redesign added.
+> - It describes a **composer-level depth stepper**. There has not been one
+>   since the depth moved onto the card it describes; in 1.7.0 that became a
+>   four-bar rung meter.
+> - Its counts (16 source modules, 3,843 source lines, 21 test files, 5,307
+>   test lines, 89.45% statements) are all superseded: 22 / 6,855 / 26 /
+>   12,230 / 91.00%.
+>
+> It is kept rather than deleted because the backend half of this document has
+> no replacement, and cutting a section out of the middle would renumber every
+> cross-reference into it.
+
 ### Activation
 
 `"activationEvents": ["onStartupFinished"]` (`extension/package.json:14-16`).

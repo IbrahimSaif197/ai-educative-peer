@@ -1297,7 +1297,7 @@ export class EduPeerSidebarProvider implements vscode.WebviewViewProvider {
     <div class="mode" id="modeStrip">
       <span class="mode__arrow" aria-hidden="true">↳</span>
       <span class="mode__label" id="modeLabel">sent as a question</span>
-      <button class="mode__exit" id="modeExit" hidden>back to a question ✕</button>
+      <button class="mode__exit" id="modeExit" hidden>back to a question <span aria-hidden="true">✕</span></button>
     </div>
     <label class="visually-hidden" for="input">Your question</label>
     <textarea id="input" rows="3" aria-describedby="modeLabel" placeholder="What's going wrong?"></textarea>
@@ -1327,7 +1327,12 @@ export class EduPeerSidebarProvider implements vscode.WebviewViewProvider {
   <div class="sheet" id="badgesSheet" role="dialog" aria-label="Badges" hidden>
     <div class="sheet__head">
       <span class="sheet__title">Badges</span>
-      <button class="sheet__close" id="badgesClose" aria-label="Close badges">✕</button>
+      <button class="sheet__close" id="badgesClose" aria-label="Close badges">
+        <svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true" focusable="false"
+             fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round">
+          <path d="M4 4l8 8M12 4l-8 8" />
+        </svg>
+      </button>
     </div>
     <div class="badges__list" id="badges" role="list"></div>
   </div>

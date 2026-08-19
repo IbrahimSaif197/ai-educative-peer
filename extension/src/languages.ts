@@ -8,7 +8,7 @@ export interface LanguageInfo {
   label: string;
   /**
    * Matches "definition-like" lines (functions/classes) that get a
-   * standing "💡 Get a hint" CodeLens.
+   * standing "EduPeer — ask about this line" CodeLens.
    */
   lensRegex: RegExp;
   /**

@@ -1891,9 +1891,14 @@ textarea::placeholder {
   padding: 0;
   background: none;
   border: 0;
-  font: inherit;
   color: var(--muted);
   cursor: pointer;
+  display: grid;
+  place-items: center;
+}
+
+.sheet__close:hover {
+  color: var(--ink);
 }
 
 /* ----------------------------------------------------------------- signin */

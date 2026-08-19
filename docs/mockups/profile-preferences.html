@@ -237,6 +237,22 @@ body{
 </style>
 </head>
 <body>
+<div style="max-width:920px;margin:24px auto 0;padding:14px 16px;border:1px dashed #FFC46B;
+            background:rgba(255,196,107,.07);border-radius:12px;color:#F2EFFA;
+            font-family:Geist,system-ui,sans-serif;font-size:13px;line-height:1.55">
+  <strong style="color:#FFC46B">Superseded — kept for the reasoning, not the pixels.</strong>
+  This proposed the avatar and preferences popover, and both shipped. The panel
+  was then rebuilt around it in 1.7.0: the radii went 3/6/10 → 4/8/12, a third
+  divider value and a four-step rung ramp arrived, the lens control's "every
+  line" became "top 8", and the whole layer gained light and high-contrast
+  skins. So the note below that its tokens are "lifted verbatim from
+  <code>extension/media/style.css</code>" is no longer true.
+  For the panel as it actually ships, run
+  <code>python docs/mockups/make-preview.py</code> and open
+  <code>docs/mockups/panel-preview.html</code> — that one takes its markup from
+  <code>getHtml()</code> and points at the real stylesheet, so it cannot drift
+  without failing loudly.
+</div>
 <div class="sheet">
 
   <div class="masthead">

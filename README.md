@@ -113,12 +113,24 @@ set to `16`.
 | `edupeer.showProgress`          | Progress dashboard: badges, streak, concepts, session notes.       |
 | `edupeer.setGoal`               | Set (or clear) a free-text learning goal that biases the tutor.    |
 | `edupeer.nudgeLine`             | Hint on the line under the cursor (`Ctrl+Alt+H` / `Cmd+Alt+H`).    |
-| `edupeer.scanFile`              | Scan the open file and flag suspicious lines in the Problems panel.|
+| `edupeer.scanFile`              | Scan the block the cursor is in and flag suspicious lines in the Problems panel. Titled "EduPeer: Scan This Block". |
 
 `Ctrl+Alt+H` (`Cmd+Alt+H` on macOS) is the fastest path to a hint; the same
-command is on the editor right-click menu. One further command,
-`edupeer.discussLines`, is deliberately hidden from the command palette — it is
-reachable only from the Quick Fix on an EduPeer diagnostic.
+command is on the editor right-click menu.
+
+Four further commands are hidden from the command palette because each takes
+arguments and is only reachable from the thing that uses it:
+
+| Command | Reached from |
+| --- | --- |
+| `edupeer.discussLines` | the Quick Fix on an EduPeer diagnostic, and from `deepenLine` |
+| `edupeer.deepenLine` | the "Go deeper" CodeLens beside an answered line |
+| `edupeer.dismissLine` | the "Dismiss" CodeLens beside it |
+| `edupeer.pickDefinition` | the file-level CodeLens on line 1, shown only when a file has more definitions than the eight the gutter carries |
+
+`extension.test.ts` pins the whole set: a new command has to be declared in
+`package.json`, registered, and added to `EXPECTED_COMMANDS`, or the suite
+says so.
 
 A status bar entry shows the current hint depth, your streak and whether a
 review is waiting; click it to open the panel. EduPeer's own diagnostics also
@@ -127,22 +139,39 @@ offer Quick Fix actions ("nudge me on this line", "explain this line"), and a
 
 ## How hinting works
 
-Each call to `POST /hint` advances the hint level (1 → 2 → 3 → 4) for the same
-user and problem within a session. The ladder is keyed on the file you are
-working in, not on a hash of its contents, so editing your code deepens the
-hint instead of restarting it. Reset the session to start over at level 1.
+Each call to `POST /hint` advances the rung (1 → 2 → 3 → 4) for the same user
+and problem within a session. The ladder is keyed on the **block** you are
+working in — the enclosing function or class, sticky so that drifting between
+two functions does not shuffle you between two conversations — and not on a
+hash of the code, so editing deepens the hint instead of restarting it. Reset
+the session to start over at rung 1.
 
-- **Level 1** — one guiding question.
-- **Level 2** — points out the specific line/concept and briefly explains it.
-- **Level 3** — pseudocode only, never real code in the student's language.
-- **Level 4** — a fully worked example of the same concept on a *different*
-  problem. You reach it by asking again at level 3; there is no button for it,
-  because a worked example is the last rung of the ladder rather than a
-  shortcut past it. The response comes back with `mode: "worked-example"`.
+- **Rung 1** — one guiding question. No line number, and no identifier that
+  belongs to the fix.
+- **Rung 2** — names the specific line or concept and explains it briefly.
+  Quoting your own line back at you is fair; naming the method that fixes it
+  is not.
+- **Rung 3** — the shape of the fix with the answer punched out of it. A
+  skeleton with one hole, named in capitals, over the precise thing you have to
+  work out: `if (typeof x === START_HERE)`. What it must not do is name what
+  the hole hides anywhere else in the reply.
+- **Rung 4** — a fully worked example of the same concept on a *clearly
+  different* problem. You reach it by asking again at rung 3; there is no
+  button for it, because a worked example is the last rung of the ladder
+  rather than a shortcut past it. The response comes back with
+  `mode: "worked-example"`.
 
-Levels 1–3 close with a question whenever the tutor is genuinely waiting on
-you, worded freshly each time rather than as a stock sentence. Level 4 closes
-by asking you to name what each numbered step accomplishes.
+Rung 3 used to be specified as "pseudocode only, never real code in the
+student's language". That was a proxy for the goal rather than the goal, and a
+live evaluation across eleven languages measured it leaking the answer 72.7% of
+the time. Rewriting it as "give them the shape, never the answer" brought that
+to 18.2%, with rung 2 falling from 21.2% to 9.1% and no change in latency. The
+harness is `backend/tests/eval_tutor.py`; it makes live calls and is not part
+of the pytest suite.
+
+Rungs 1–3 close with a question whenever the tutor is genuinely waiting on you,
+worded freshly each time rather than as a stock sentence. Rung 4 closes by
+asking you to name what each numbered step accomplishes.
 
 The tutor also remembers the recent conversation: the sidebar sends the last
 few student/tutor turns with each question, so follow-ups like "I tried that
@@ -163,13 +192,18 @@ extension tracks the code each hint was given against:
 This targets hint abuse, the well-documented habit of bottoming out a tutor's
 hints to reach the answer without engaging.
 
-### Confidence and calibration
+### Confidence and calibration — removed
 
-Before asking, you can optionally rate how sure you are (*No idea* / *Some
-idea* / *Pretty sure*). EduPeer compares that against how much help you
-actually needed and reports the match on your dashboard. Novices are
-systematically overconfident, and this is the feedback loop that fixes it.
-Ratings are optional and nothing is recorded when you skip them.
+**This feature no longer exists.** The self-rating control (*No idea* / *Some
+idea* / *Pretty sure*) was removed in 1.4.0 and the dashboard has had no
+calibration section since. What survives is vestigial and named as such in
+`docs/EXTENSION_REFERENCE.md` §20: `HintRequest.confidence` is still declared
+in `apiClient.ts` and `backend/models.py` and is never set by anything, and
+`ProgressReport.calibration` is still declared and never rendered.
+
+The section is kept here rather than deleted because the field is still on the
+wire, and a reader who finds it deserves to know it is dead rather than
+undocumented.
 
 ## Accounts and sign-in
 
@@ -213,6 +247,39 @@ merge into whoever signs in next would hand one student's work to another.
    shows, and paste the client ID/secret into Firebase.
 3. **Project settings → Your apps:** add a Web app and copy its `apiKey` and
    `authDomain` into `.env` as `FIREBASE_WEB_API_KEY` / `FIREBASE_AUTH_DOMAIN`.
+
+## The panel
+
+The sidebar was rebuilt in 1.7.0 against a design deck. The parts worth knowing
+if you are reading the code:
+
+- **Four skins.** VS Code puts one of `vscode-light`, `vscode-high-contrast` or
+  `vscode-high-contrast-light` on the webview's `<body>`, and the token layer at
+  the top of `media/style.css` re-points itself from it. Nothing below that
+  block is skin-aware, so a colour is changed in exactly one place. Before this
+  the panel was dark in every theme, which was a deliberate 1.3.0 decision and
+  a real accessibility cost.
+- **Cards are drawn by stance, not by mode.** Fifteen tutor modes map onto four
+  families — ask, show, tell, withhold — through a `FAMILY` table in
+  `media/main.js`. A new mode inherits a treatment instead of inventing one, and
+  a test asserts every one of the fifteen lands on exactly one family class.
+- **Hint depth is four bars of increasing height**, not four dots. The next bar
+  is outlined rather than filled because it costs an attempt; the fourth is
+  dashed mint until reached because rung 4 differs in kind. The same ramp lights
+  the avatar ring and the dashboard.
+- **One `COMPOSER` table** drives the strip label, the placeholder and the
+  button verb for all seven composer modes together, so they cannot drift. Every
+  non-default mode says how your next message will be read, and Escape leaves it.
+- **No emoji anywhere**, in the panel or the CodeLens column. Every lens title
+  begins with the word EduPeer and the state is carried by the verb — asks,
+  notes, is thinking, can't. A screen reader reading "light bulb" is reading
+  something the words already say.
+- **Reduced motion loses nothing.** Anything whose only signal was movement has
+  a named static replacement rather than a duration collapsed to `0.01ms`.
+
+`docs/EXTENSION_REFERENCE.md` §10–12 is the detailed version, and
+`docs/mockups/make-preview.py` renders the panel's real markup against its real
+stylesheet in a browser for a paint check.
 
 ## Language support
 
@@ -319,9 +386,12 @@ guards parsing). Per-concept stats feed:
   learned" note.
 
 The dashboard renders as inline SVG with no chart library and no network: a
-hint-depth distribution, a 14-day activity strip, per-concept mastery bars and
-your confidence calibration. Colours come from VS Code's chart tokens and every
-series is labelled in text, so it reads correctly in any theme.
+rung distribution, a 14-day activity strip and per-concept mastery bars. Its
+CSP has no `script-src` at all, and geometry lives in element attributes
+rather than style attributes so it runs under that. It uses the panel's own
+tokens and the same four-value rung ramp as the card meter — so the two look
+like one product — and follows the workbench theme through the same four
+skins. Every series is labelled in text; hue never carries meaning alone.
 
 ## Streaming, offline behaviour and quota
 
