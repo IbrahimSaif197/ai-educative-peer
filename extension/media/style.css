@@ -867,6 +867,8 @@ body {
 
 .ctx__chev {
   margin-left: auto;
+  display: inline-grid;
+  place-items: center;
   transition: transform var(--t-quick) linear;
 }
 
@@ -1496,6 +1498,8 @@ input[type="text"].trace__cell {
 
 .mode__arrow {
   flex: none;
+  display: inline-grid;
+  place-items: center;
 }
 
 .mode__label {

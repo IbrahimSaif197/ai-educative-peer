@@ -1260,7 +1260,12 @@ export class EduPeerSidebarProvider implements vscode.WebviewViewProvider {
         <span class="ctx__symbol" id="ctxSymbol"></span>
         <span id="focusRange" class="ctx__range"></span>
         <span id="langChip" class="chip" hidden></span>
-        <span class="ctx__chev" aria-hidden="true">⌄</span>
+        <span class="ctx__chev" aria-hidden="true">
+          <svg viewBox="0 0 16 16" width="12" height="12" fill="none" stroke="currentColor"
+               stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" focusable="false">
+            <path d="M4 6.5L8 10.5L12 6.5" />
+          </svg>
+        </span>
       </button>
       <button id="ctxOpen" class="btn btn--ghost btn--sm">Open a file</button>
       <button id="reviewBtn" class="btn btn--accent btn--sm" hidden title="A spaced-review exercise is ready">Review</button>
@@ -1288,14 +1293,19 @@ export class EduPeerSidebarProvider implements vscode.WebviewViewProvider {
          way out. It is always rendered, including in the default mode, because
          it is teaching a mechanic the student has to be able to trust. -->
     <div class="mode" id="modeStrip">
-      <span class="mode__arrow" aria-hidden="true">↳</span>
+      <span class="mode__arrow" aria-hidden="true">
+        <svg viewBox="0 0 16 16" width="12" height="12" fill="none" stroke="currentColor"
+             stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" focusable="false">
+          <path d="M4 3v5.5h7" /><path d="M8.5 6l2.5 2.5L8.5 11" />
+        </svg>
+      </span>
       <span class="mode__label" id="modeLabel">sent as a question</span>
       <button class="mode__exit" id="modeExit" hidden>back to a question <span aria-hidden="true">✕</span></button>
     </div>
     <label class="visually-hidden" for="input">Your question</label>
     <textarea id="input" rows="3" aria-describedby="modeLabel" placeholder="What's going wrong?"></textarea>
     <div class="composer__actions">
-      <button id="send" class="btn btn--primary">Ask<span class="btn__hint">↵</span></button>
+      <button id="send" class="btn btn--primary">Ask<span class="btn__hint" aria-hidden="true">↵</span></button>
       <button id="quiz" class="btn btn--ghost" title="Answer one question about why your fix works">Quiz me</button>
       <button id="reset" class="btn btn--ghost" title="Clear the conversation and start at hint 1">Reset</button>
     </div>
@@ -1312,7 +1322,7 @@ export class EduPeerSidebarProvider implements vscode.WebviewViewProvider {
       <span id="badgeCount">No badges yet</span>
     </button>
     <span class="topbar__spacer"></span>
-    <button class="ledger__link" id="ledgerProgress">progress ›</button>
+    <button class="ledger__link" id="ledgerProgress">progress <span aria-hidden="true">›</span></button>
   </footer>
 
   <!-- Over the chat, not pushing it down: opening the badge list must not

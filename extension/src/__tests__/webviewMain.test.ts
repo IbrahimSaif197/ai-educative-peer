@@ -1616,6 +1616,52 @@ describe("webview — the stylesheet and the DOM agree on class names", () => {
 /**
  * The parts of the accessibility spec that are structure rather than styling.
  */
+/**
+ * No control announces a glyph.
+ *
+ * The emoji left the panel in 1.7.0 because a screen reader reads them out and
+ * they carry nothing the words do not. The same argument applies to the
+ * typographic marks that replaced them: a button reading "progress ›" is
+ * announced with the angle quote on the end. The popover rows had this right
+ * from the start; the ledger link did not, which is what this catches.
+ *
+ * Marks are fine — they just have to be in an aria-hidden wrapper, where the
+ * accessible name never reaches them.
+ */
+describe("webview — no control reads a decorative mark aloud", () => {
+  // Everything outside plain ASCII, minus the marks that are genuinely part
+  // of a sentence rather than furniture.
+  const DECORATIVE = /[^ -]/u;
+  const PROSE = /[‘’“”–—…]/gu;
+
+  it("keeps every glyph out of an accessible name", () => {
+    const offenders: string[] = [];
+    for (const control of $$("button, [role='switch'], a")) {
+      // The accessible name is the label when there is one, else the text —
+      // and aria-hidden subtrees contribute to neither.
+      const labelled = control.getAttribute("aria-label");
+      let name = labelled ?? "";
+      if (!labelled) {
+        const copy = control.cloneNode(true) as HTMLElement;
+        copy.querySelectorAll("[aria-hidden='true']").forEach((n) => n.remove());
+        name = copy.textContent ?? "";
+      }
+      const bare = name.replace(PROSE, "");
+      if (DECORATIVE.test(bare)) {
+        offenders.push(`${control.id || control.className}: ${JSON.stringify(name.trim())}`);
+      }
+    }
+    expect(offenders).toEqual([]);
+  });
+
+  it("still shows the marks, just not to a screen reader", () => {
+    // The fix must be an aria-hidden wrapper, not deletion: the chevron on a
+    // row that opens something is doing real visual work.
+    expect(el("ledgerProgress").textContent).toContain("›");
+    expect(el("ledgerProgress").querySelector("[aria-hidden='true']")).not.toBeNull();
+  });
+});
+
 describe("webview — the trace grid is a real table", () => {
   function trace() {
     post({

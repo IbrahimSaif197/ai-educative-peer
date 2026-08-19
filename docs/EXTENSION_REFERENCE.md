@@ -1778,9 +1778,27 @@ Facts about the current tree, not recommendations.
     trap landed 2026-08-19; the "2 of 3 rows correct" announcement did not,
     because nothing produces that count — `trace-check` comes back as prose
     from the model, and deriving a number client-side would be inventing one.
-    Still open: **§2's "eleven inline SVGs"** (the panel ships two, the avatar
-    ring and the sheet close; the rest of its marks are typographic, not
-    emoji), and **C3's stale-context state** (the dot goes amber after an
+    **§2's "eleven inline SVGs"** is not being chased, and the reason is worth
+    recording. The deck asserts the count and never enumerates it. Counting
+    the distinct icon *jobs* the panel actually has gives about eight
+    — chevron-right, chevron-down, close, minus, plus, external-link,
+    corner-down-right, return — and reaching eleven would mean iconifying
+    things that are currently words: Refresh, Whole file, Review, Quiz me. At
+    320px those words fit, and replacing them with glyphs would cost clarity
+    rather than buy any.
+
+    What the deck's *reasons* do justify was done on 2026-08-19. Its case
+    against emoji is three-part: a screen reader reads them, they are tofu in
+    some Linux workbench font stacks, and they date a screenshot. Applied to
+    the typographic marks that replaced them, only the first two bite, and
+    only in specific places — so the panel now carries four inline SVGs (the
+    avatar ring, the sheet close, and the two marks outside the block a
+    minimal font stack can be relied on for: `⌄` and `↳`), and every
+    remaining mark sits in an `aria-hidden` wrapper. `webviewMain.test.ts`'s
+    "no control reads a decorative mark aloud" holds that line; it found the
+    Ask button announcing "Ask↵" on its first run.
+
+    Still open: **C3's stale-context state** (the dot goes amber after an
     external edit) — which needs a host-side file-watcher signal that the
     message protocol does not carry.
 15. **The redesign's own preview is a paint check, not a render.**

@@ -18,6 +18,13 @@
 - **Dragged wide, lines stop running the full width.** Past about 420px the
   text settles to a comfortable measure; the extra width goes to the language
   chip and the spelled-out ledger instead of to longer lines.
+- **Three bits of decoration stopped being read aloud.** The Ask button
+  announced itself as "Ask, return-arrow"; the progress link in the footer
+  read out the chevron on the end of it. Those marks are still there to look
+  at — they are just no longer part of what a screen reader says.
+- **Two marks that show as empty boxes on some Linux setups** — the arrow on
+  the composer strip and the chevron on the file row — are drawn properly now
+  instead of relying on a font having them.
 - **Dragged into the bottom dock, the panel goes two-column** — conversation
   on the left, everything else on the right — rather than stacking three
   horizontal bands into a strip too short for any of them.
