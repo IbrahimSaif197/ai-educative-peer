@@ -31,12 +31,79 @@
   const resetConfirmEl = el("resetConfirm");
   const streakChipEl = el("streakChip");
   const streakDaysEl = el("streakDays");
+  const ledgerSepEl = el("ledgerSep");
+  const ledgerProgressEl = el("ledgerProgress");
+  const badgesSheetEl = el("badgesSheet");
+  const badgesCloseEl = el("badgesClose");
   const reviewBtn = el("reviewBtn");
   const offlineBannerEl = el("offlineBanner");
   const authBannerEl = el("authBanner");
+  const offlineRetryEl = el("offlineRetry");
+  const authFixEl = el("authFix");
+  const ctxDotEl = el("ctxDot");
+  const ctxSepEl = el("ctxSep");
+  const ctxSymbolEl = el("ctxSymbol");
+  const ctxCodeEl = el("ctxCode");
+  const ctxMoreEl = el("ctxMore");
+  const ctxOpenEl = el("ctxOpen");
+  const composerEl = document.querySelector(".composer");
+  const modeStripEl = el("modeStrip");
+  const modeLabelEl = el("modeLabel");
+  const modeExitEl = el("modeExit");
+  const modeStatusEl = el("modeStatus");
 
-  const DEFAULT_PLACEHOLDER = "Describe your error or ask a question…";
   const MAX_PREVIEW_LINES = 200;
+
+  /**
+   * Everything that changes with the composer mode, in one table.
+   *
+   * The strip label, the placeholder and the button verb used to be passed
+   * separately at each of eleven call sites, which is how the placeholder
+   * came to say "describe your error" while the mode was `translate`. They
+   * cannot drift now because they are one row.
+   *
+   * `tone` defaults to "show": in every mode except the default the student
+   * is producing material rather than asking for it, which is why those modes
+   * wear mint rather than coral.
+   */
+  const COMPOSER = {
+    hint: {
+      strip: "sent as a question",
+      verb: "Ask",
+      ph: "What's going wrong?",
+      tone: "ask",
+    },
+    translate: {
+      strip: "read as a translation",
+      verb: "Submit translation",
+      ph: "Write the pseudocode from rung 3 as real code…",
+    },
+    explain: {
+      strip: "read as your explanation",
+      verb: "Submit",
+      ph: "Say what you think this code does…",
+    },
+    predict: {
+      strip: "read as a prediction",
+      verb: "Submit prediction",
+      ph: "What do you expect this to print?",
+    },
+    reflect: {
+      strip: "read as a quiz answer",
+      verb: "Submit answer",
+      ph: "Answer the question above…",
+    },
+    "subgoal-label": {
+      strip: "read as step labels",
+      verb: "Submit labels",
+      ph: "What does each numbered step accomplish?",
+    },
+    review: {
+      strip: "read as review work",
+      verb: "Submit review",
+      ph: "Write your code and what you expect it to do…",
+    },
+  };
 
   /** Eyebrow text per tutor move: what the tutor is doing, in two words. */
   const MODE_LABEL = {
@@ -110,6 +177,10 @@
   const DEBOUNCE_MAX = 5000;
 
   let currentCode = "";
+  /** The symbol the context strip is currently naming, for the empty state. */
+  let focusSymbol = "";
+  /** Sign-in is failing. Outlives the banner, on the avatar pip. */
+  let authBroken = false;
   let signedIn = false;
   /** The rung the current thread has reached, mirrored onto the avatar ring.
    *  It is the only always-visible readout of the thing EduPeer is about. */
@@ -152,14 +223,68 @@
     wrap.className = "empty";
     const title = document.createElement("strong");
     title.textContent = "Stuck on something?";
-    wrap.appendChild(title);
-    wrap.appendChild(
-      document.createTextNode(
-        "Open a file and tell me what's going wrong. I ask questions rather than hand over answers, " +
-          "so you keep the part where you work it out."
-      )
-    );
+    const head = document.createElement("div");
+    head.className = "empty__head";
+    head.appendChild(title);
+    const sub = document.createElement("p");
+    sub.className = "empty__sub";
+    sub.textContent = focusSymbol
+      ? `I'm looking at ${focusSymbol}. Tell me what's going wrong.`
+      : "Tell me what's going wrong. I answer with a question, so you keep the part where you work it out.";
+    head.appendChild(sub);
+    wrap.appendChild(head);
+
+    // The contract, stated before it is experienced. A student who does not
+    // know the tutor answers questions with questions reads the first reply
+    // as a failure rather than as the mechanic.
+    const rules = document.createElement("ol");
+    rules.className = "empty__rules";
+    for (const text of [
+      "You get a question back, never working code.",
+      "Four rungs of depth. Each one is spent by trying, not by asking twice.",
+      "Rung four is a worked example \u2014 the deepest help there is.",
+    ]) {
+      const rule = document.createElement("li");
+      rule.textContent = text;
+      rules.appendChild(rule);
+    }
+    wrap.appendChild(rules);
+    wrap.appendChild(buildStarters());
+
     chatEl.appendChild(wrap);
+  }
+
+  /**
+   * Three ways in, so the student picks a move instead of guessing a sentence.
+   *
+   * Each chip runs what its command already runs. The first has no command
+   * because the composer *is* the affordance for it: pasting an error is the
+   * panel's default mode, and the chip just puts the cursor there.
+   */
+  function buildStarters() {
+    const starts = document.createElement("div");
+    starts.className = "empty__starts";
+    const label = document.createElement("div");
+    label.className = "empty__label";
+    label.textContent = "Start with";
+    starts.appendChild(label);
+
+    const row = document.createElement("div");
+    row.className = "empty__chips";
+    const chips = [
+      ["Paste an error", () => { setComposerMode("hint"); inputEl.focus(); }],
+      ["Predict the output", () => vscode.postMessage({ type: "startPredict" })],
+      ["Trace it by hand", () => vscode.postMessage({ type: "startTrace" })],
+    ];
+    for (const [text, onClick] of chips) {
+      const chip = document.createElement("button");
+      chip.className = "chip chip--action";
+      chip.textContent = text;
+      chip.addEventListener("click", onClick);
+      row.appendChild(chip);
+    }
+    starts.appendChild(row);
+    return starts;
   }
 
   /** Remove whichever placeholder is showing — the empty state or the sign-in card. */
@@ -188,6 +313,9 @@
     wrap.appendChild(title);
     wrap.appendChild(sub);
     wrap.appendChild(button);
+    // The chips stay: what a signed-out student can do is unchanged, and
+    // hiding them would make signing in look like a precondition for asking.
+    wrap.appendChild(buildStarters());
     chatEl.appendChild(wrap);
   }
 
@@ -390,26 +518,71 @@
 
   // ---------------------------------------------------------------- badges
 
+  /**
+   * The badge count in the ledger, and the sheet behind it.
+   *
+   * The count is always on screen, including at zero. As a collapsed
+   * <details> above a tutor that had not spoken yet, it was the first thing
+   * in reading order and visible none of the time; here it is the last thing
+   * and visible all of it. The list opens over the chat rather than pushing
+   * it down, so opening it never moves the conversation being read.
+   */
   function renderBadges(list) {
     while (badgesEl.firstChild) badgesEl.removeChild(badgesEl.firstChild);
     const items = list || [];
     badgeCountEl.textContent = items.length
       ? `${items.length} badge${items.length === 1 ? "" : "s"}`
       : "No badges yet";
-    badgesWrapEl.hidden = items.length === 0;
+    badgesWrapEl.disabled = items.length === 0;
+    badgesWrapEl.setAttribute(
+      "aria-label",
+      items.length
+        ? `${items.length} badge${items.length === 1 ? "" : "s"}, collapsed \u2014 expand to list them`
+        : "No badges yet"
+    );
+    if (!items.length) closeBadges();
     for (const name of items) {
       const badge = document.createElement("span");
       badge.className = "badge";
+      badge.setAttribute("role", "listitem");
       badge.textContent = name;
       badgesEl.appendChild(badge);
     }
   }
 
+  function openBadges() {
+    badgesSheetEl.hidden = false;
+    badgesWrapEl.setAttribute("aria-expanded", "true");
+    badgesCloseEl.focus();
+  }
+
+  function closeBadges() {
+    if (badgesSheetEl.hidden) return;
+    badgesSheetEl.hidden = true;
+    badgesWrapEl.setAttribute("aria-expanded", "false");
+  }
+
+  badgesWrapEl.addEventListener("click", () => {
+    if (badgesSheetEl.hidden) openBadges();
+    else {
+      closeBadges();
+      badgesWrapEl.focus();
+    }
+  });
+
+  badgesCloseEl.addEventListener("click", () => {
+    closeBadges();
+    badgesWrapEl.focus();
+  });
+
+  ledgerProgressEl.addEventListener("click", () =>
+    vscode.postMessage({ type: "showProgress" })
+  );
+
   // ----------------------------------------------------------- code preview
 
   const focusRangeEl = el("focusRange");
   const scopeToggleEl = el("scopeToggle");
-  const scopeRowEl = el("scopeRow");
 
   /** The block every ask is about, whatever the preview happens to show. */
   let focusCode = "";
@@ -420,10 +593,11 @@
   function renderLines(code, firstLine, markLine) {
     while (codeEl.firstChild) codeEl.removeChild(codeEl.firstChild);
     if (!code) {
-      const line = document.createElement("span");
-      line.className = "ln ln--empty";
-      line.textContent = "No file open";
-      codeEl.appendChild(line);
+      // Nothing here says "no file open" any more: the context strip says it
+      // once, in the component that can also offer to fix it. This one was
+      // the second of the two, inside a disclosure that is closed and
+      // disabled whenever it would have applied.
+      ctxMoreEl.textContent = "";
       return;
     }
     const lines = code.split("\n");
@@ -442,12 +616,11 @@
       row.appendChild(body);
       codeEl.appendChild(row);
     });
-    if (lines.length > shown.length) {
-      const more = document.createElement("span");
-      more.className = "ln ln--empty";
-      more.textContent = `… ${lines.length - shown.length} more lines`;
-      codeEl.appendChild(more);
-    }
+    // The 200-line cap is a fact about the preview, not a line of code, so it
+    // reads in the disclosure's footer beside the controls that act on it,
+    // rather than as a fake last line of the file.
+    const over = lines.length - shown.length;
+    ctxMoreEl.textContent = over > 0 ? `${over} more lines` : "";
   }
 
   scopeToggleEl.addEventListener("click", () => {
@@ -461,15 +634,57 @@
     }
   });
 
+  // The whole row is the disclosure. It starts closed: the editor is eight
+  // pixels away, so a second copy of the same code does not earn 18vh of a
+  // 320px panel by default. What the row does earn is the one thing the
+  // editor cannot answer - which block EduPeer is actually looking at.
   collapseBtn.addEventListener("click", () => {
-    const collapsed = !codeEl.hidden;
-    codeEl.hidden = collapsed;
-    // The scope row (range + "Whole file" toggle) describes the preview, so
-    // it has nothing to act on once the preview itself is hidden.
-    scopeRowEl.hidden = collapsed;
-    collapseBtn.textContent = collapsed ? "Show" : "Hide";
-    collapseBtn.setAttribute("aria-expanded", String(!collapsed));
+    setCtxOpen(ctxCodeEl.hidden);
   });
+
+  function setCtxOpen(open) {
+    ctxCodeEl.hidden = !open;
+    collapseBtn.setAttribute("aria-expanded", String(open));
+  }
+
+  ctxOpenEl.addEventListener("click", () => vscode.postMessage({ type: "openFile" }));
+
+  /**
+   * Paint the context row from a focus message.
+   *
+   * The breadcrumb arrives as one string ("demo.py \u203a last_index"), but its
+   * two halves truncate in opposite orders: the symbol is what the ask is
+   * about, so it is the last thing to go, and one ellipsised string would
+   * drop it first.
+   */
+  function paintContext(msg) {
+    const hasFile = !!(msg.fileName || msg.breadcrumb);
+    const crumb = msg.breadcrumb || (msg.fileName ? msg.fileName.split(/[\\/]/).pop() : "");
+    const [file, ...rest] = crumb.split(" \u203a ");
+    const symbol = rest.join(" \u203a ");
+
+    fileNameEl.textContent = hasFile ? file : "no file open";
+    fileNameEl.title = msg.fileName || "";
+    ctxSymbolEl.textContent = symbol;
+    ctxSepEl.hidden = !symbol;
+    focusSymbol = symbol;
+    ctxDotEl.classList.toggle("is-live", hasFile);
+    // Nothing to disclose, and nothing to say about a file that is not there:
+    // the strip states it once, in one component, and offers the fix. The
+    // panel used to say it twice, in two.
+    collapseBtn.disabled = !hasFile;
+    ctxOpenEl.hidden = hasFile;
+    if (!hasFile) setCtxOpen(false);
+
+    focusRangeEl.textContent =
+      msg.startLine && msg.endLine
+        ? msg.startLine === msg.endLine
+          ? `${msg.startLine}`
+          : `${msg.startLine}\u2013${msg.endLine}`
+        : "";
+    langChipEl.textContent = msg.language || "";
+    langChipEl.hidden = !msg.language;
+  }
 
   // ---------------------------------------------------------- trace exercise
 
@@ -547,9 +762,48 @@
 
   // -------------------------------------------------------------- composer
 
-  function setComposerMode(mode, placeholder) {
+  /**
+   * Put the composer into a mode, and say so.
+   *
+   * One argument: the strip, the placeholder and the verb all come from the
+   * COMPOSER row, so a call site cannot supply a placeholder that disagrees
+   * with the mode it is setting.
+   */
+  function setComposerMode(mode) {
+    const spec = COMPOSER[mode] || COMPOSER.hint;
+    const changed = composerMode !== mode;
     composerMode = mode;
-    inputEl.placeholder = placeholder || DEFAULT_PLACEHOLDER;
+
+    inputEl.placeholder = spec.ph;
+    modeLabelEl.textContent = spec.strip;
+    sendBtn.firstChild.textContent = spec.verb;
+
+    const producing = (spec.tone || "show") === "show";
+    modeStripEl.classList.toggle("is-show", producing);
+    // On the composer rather than on <body>: the two elements this recolours
+    // are both inside it, and a class on <body> outlives a webview re-init.
+    composerEl.classList.toggle("is-producing", producing);
+    // The way out only exists when there is something to leave.
+    modeExitEl.hidden = !producing;
+    // Quiz me asks a fresh question, which is not what a student halfway
+    // through answering one wants offered.
+    quizBtn.hidden = producing;
+
+    // Announced as a status rather than by moving focus: entering a mode is
+    // news, not an interruption. The strip is also the textarea's
+    // aria-describedby, so tabbing into the field repeats it in context.
+    if (changed) {
+      modeStatusEl.textContent = producing
+        ? `Your next message will be ${spec.strip.replace(/^read as /, "read as ")}.`
+        : "Your next message will be sent as a question.";
+    }
+  }
+
+  /** Leave whatever mode the composer is in, without submitting. */
+  function exitComposerMode() {
+    if (composerMode === "hint") return;
+    setComposerMode("hint");
+    inputEl.focus();
   }
 
   function send() {
@@ -618,6 +872,16 @@
     el("resetGo").focus();
   });
   refreshBtn.addEventListener("click", () => vscode.postMessage({ type: "refreshCode" }));
+  modeExitEl.addEventListener("click", exitComposerMode);
+
+  // Each banner carries a destination, because a banner that only states a
+  // problem leaves the student with nowhere to go. Offline retries by
+  // re-reading the file, which is the cheapest round-trip the panel has; a
+  // broken sign-in sends them to the thing that fixes it.
+  offlineRetryEl.addEventListener("click", () =>
+    vscode.postMessage({ type: "refreshCode" })
+  );
+  authFixEl.addEventListener("click", () => vscode.postMessage({ type: "signIn" }));
   // ------------------------------------------------- account + preferences
 
   /** Light the first `currentLevel` of the four arcs on the avatar. */
@@ -631,6 +895,16 @@
       "aria-label",
       `${signedIn ? popNameEl.textContent : "Not signed in"} — account and preferences${depth}`
     );
+  }
+
+  /**
+   * The dot on the avatar: the whole call to action for an anonymous student,
+   * now that the header no longer spends a button on it, and the thing that
+   * outlives a dismissed auth banner.
+   */
+  function paintPip() {
+    accountPipEl.hidden = signedIn && !authBroken;
+    accountPipEl.classList.toggle("is-danger", authBroken);
   }
 
   function setLevel(level) {
@@ -681,10 +955,25 @@
     else openPopover();
   });
 
+  // Escape closes whatever is open, innermost first: the popover, then the
+  // badge sheet, then the composer mode. Only one per press, so a student in
+  // a translation mode with the popover open does not lose both at once.
   document.addEventListener("keydown", (e) => {
-    if (e.key === "Escape" && popoverOpen()) {
+    if (e.key !== "Escape") return;
+    if (popoverOpen()) {
       e.preventDefault();
       closePopover(true);
+      return;
+    }
+    if (!badgesSheetEl.hidden) {
+      e.preventDefault();
+      closeBadges();
+      badgesWrapEl.focus();
+      return;
+    }
+    if (composerMode !== "hint") {
+      e.preventDefault();
+      exitComposerMode();
     }
   });
 
@@ -824,7 +1113,7 @@
         {
           label: "Submit my translation",
           onClick: () =>
-            setComposerMode("translate", "Paste your code translation of the pseudocode…"),
+            setComposerMode("translate"),
         },
       ]);
     }
@@ -834,14 +1123,14 @@
         {
           label: "Label the steps",
           onClick: () =>
-            setComposerMode("subgoal-label", "What does each numbered step accomplish?"),
+            setComposerMode("subgoal-label"),
         },
       ]);
     }
 
     if (mode === "reflect" && expectReflectAnswer) {
       expectReflectAnswer = false;
-      setComposerMode("reflect", "Type your answer to the quiz question…");
+      setComposerMode("reflect");
     }
 
     // A review exercise asks the student to write code and predict its
@@ -849,7 +1138,7 @@
     // was submitted as a fresh Socratic question about the open file.
     if (mode === "review-exercise" && expectReviewAnswer) {
       expectReviewAnswer = false;
-      setComposerMode("review", "Write your code and what you expect it to do…");
+      setComposerMode("review");
     }
   }
 
@@ -893,17 +1182,23 @@
         scopeToggleEl.textContent = "Whole file";
         scopeToggleEl.hidden = !msg.totalLines;
         renderLines(focusCode, focusStartLine, cursorLine);
-        fileNameEl.textContent =
-          msg.breadcrumb || (msg.fileName ? msg.fileName.split(/[\\/]/).pop() : "No active file");
-        fileNameEl.title = msg.fileName || "";
-        focusRangeEl.textContent =
-          msg.startLine && msg.endLine
-            ? msg.startLine === msg.endLine
-              ? `line ${msg.startLine}`
-              : `lines ${msg.startLine}–${msg.endLine}`
-            : "";
-        langChipEl.textContent = msg.language || "";
-        langChipEl.hidden = !msg.language;
+        {
+          // The empty state names the block when there is one, so a student
+          // who has not asked yet can see where the panel is pointed. Only
+          // when the block actually changes, though: `focus` arrives on every
+          // cursor move, and rebuilding the placeholder each time would
+          // replay its entrance animation while they were typing.
+          const wasSymbol = focusSymbol;
+          paintContext(msg);
+          // Re-render the empty state only if it is already the one showing.
+          // Which placeholder belongs on screen is authState's call, and
+          // `focus` can arrive before any authState has — going through
+          // refreshPlaceholder() here would show the signed-out card to a
+          // student whose sign-in simply had not been reported yet.
+          if (focusSymbol !== wasSymbol && chatEl.querySelector(".empty")) {
+            showEmptyState();
+          }
+        }
         break;
 
       case "cursor": {
@@ -993,7 +1288,7 @@
             "\n```",
           eyebrow: "Predict the output",
         });
-        setComposerMode("predict", "Type your prediction…");
+        setComposerMode("predict");
         break;
 
       case "explainFirst":
@@ -1007,7 +1302,7 @@
             },
           },
         ]);
-        setComposerMode("explain", "Type what you think the code does…");
+        setComposerMode("explain");
         break;
 
       case "error":
@@ -1030,6 +1325,11 @@
 
       case "authTrouble":
         authBannerEl.hidden = !msg.value;
+        // The pip is the part that survives the banner being dismissed: a
+        // student who closes the banner has not fixed anything, and the way
+        // to fix it is behind the avatar.
+        authBroken = !!msg.value;
+        paintPip();
         break;
 
       case "streak": {
@@ -1037,6 +1337,9 @@
         streakDaysEl.textContent = String(days);
         streakChipEl.setAttribute("aria-label", `${days} day practice streak`);
         streakChipEl.hidden = days <= 0;
+        // The separator belongs to the streak, not to the row: with no streak
+        // the ledger would otherwise open on a bare middle dot.
+        ledgerSepEl.hidden = days <= 0;
         break;
       }
 
@@ -1058,9 +1361,7 @@
         popMailEl.title = signedIn ? msg.email || msg.label : "";
         accountInitialsEl.textContent = signedIn ? msg.initials || "?" : "?";
         accountInitialsEl.classList.toggle("is-anon", !signedIn);
-        // The pip is the whole call to action for an anonymous student, now
-        // that the header no longer spends a button on it.
-        accountPipEl.hidden = signedIn;
+        paintPip();
         popSignInWrap.hidden = signedIn;
         signOutBtn.hidden = !signedIn;
         paintRing();

@@ -101,8 +101,13 @@ describe("startup", () => {
     expect($(".empty")!.textContent).toContain("Stuck on something?");
   });
 
-  it("renders a placeholder when no file is open", () => {
-    expect(el("codeSnippet").textContent).toContain("No file open");
+  it("says there is no file once, in the component that can fix it", () => {
+    // Two components used to say it: the strip and the preview inside it.
+    // The preview is closed and disabled whenever it would apply, so the
+    // second copy was never anything but duplication.
+    expect(el("fileName").textContent).toBe("no file open");
+    expect(el("codeSnippet").textContent).toBe("");
+    expect((el("ctxOpen") as HTMLElement).hidden).toBe(false);
   });
 
   it("shows no rung meter until a hint arrives", () => {
@@ -333,18 +338,26 @@ describe("the code preview", () => {
       language: "Python",
       totalLines: 260,
     });
-    expect($$("#codeSnippet .ln")).toHaveLength(201);
-    expect(el("codeSnippet").textContent).toContain("60 more lines");
+    // 200 real lines, and nothing pretending to be a 201st.
+    expect($$("#codeSnippet .ln")).toHaveLength(200);
+    // The cap is a fact about the preview, not a line of the file, so it
+    // reads in the disclosure's footer rather than as a fake last line.
+    expect(el("ctxMore").textContent).toBe("60 more lines");
+    expect(el("codeSnippet").textContent).not.toContain("more lines");
   });
 
-  it("collapses and restores on the toggle", () => {
+  it("opens and closes the preview on the context row", () => {
     const button = el("collapseCode") as HTMLButtonElement;
+    // Closed by default: the editor is eight pixels away, so a second copy of
+    // the same code does not get 18vh of a 320px panel for free.
+    expect((el("ctxCode") as HTMLElement).hidden).toBe(true);
+    expect(button.getAttribute("aria-expanded")).toBe("false");
     button.click();
-    expect((el("codeSnippet") as HTMLElement).hidden).toBe(true);
-    expect(button.textContent).toBe("Show");
+    expect((el("ctxCode") as HTMLElement).hidden).toBe(false);
+    expect(button.getAttribute("aria-expanded")).toBe("true");
     button.click();
-    expect((el("codeSnippet") as HTMLElement).hidden).toBe(false);
-    expect(button.textContent).toBe("Hide");
+    expect((el("ctxCode") as HTMLElement).hidden).toBe(true);
+    expect(button.getAttribute("aria-expanded")).toBe("false");
   });
 });
 
@@ -719,10 +732,33 @@ describe("panel chrome", () => {
     expect(el("badgeCount").textContent).toBe("1 badge");
   });
 
-  it("hides the disclosure when there are no badges", () => {
+  it("keeps the badge count on screen at zero, with nothing to open", () => {
     post({ type: "badges", badges: [] });
-    expect((el("badgesWrap") as HTMLElement).hidden).toBe(true);
+    // The count is always visible now. As a collapsed <details> above a tutor
+    // that had not spoken yet it was first in reading order and visible none
+    // of the time; in the ledger it is last and visible always.
+    expect((el("badgesWrap") as HTMLElement).hidden).toBe(false);
+    expect((el("badgesWrap") as HTMLButtonElement).disabled).toBe(true);
     expect(el("badgeCount").textContent).toBe("No badges yet");
+  });
+
+  it("opens the badge list as a sheet over the chat", () => {
+    post({ type: "badges", badges: ["first fix", "traced a loop"] });
+    const button = el("badgesWrap") as HTMLButtonElement;
+    expect(button.disabled).toBe(false);
+    expect((el("badgesSheet") as HTMLElement).hidden).toBe(true);
+
+    button.click();
+    expect((el("badgesSheet") as HTMLElement).hidden).toBe(false);
+    expect(button.getAttribute("aria-expanded")).toBe("true");
+    expect($$("#badges .badge").map((b) => b.textContent)).toEqual([
+      "first fix",
+      "traced a loop",
+    ]);
+
+    (el("badgesClose") as HTMLButtonElement).click();
+    expect((el("badgesSheet") as HTMLElement).hidden).toBe(true);
+    expect(button.getAttribute("aria-expanded")).toBe("false");
   });
 
   it("puts the account behind the avatar when signed in", () => {
@@ -1164,8 +1200,13 @@ describe("webview — focus panel", () => {
 
     const gutters = $$(".ln__no").map((n) => n.textContent);
     expect(gutters).toEqual(["12", "13"]);
-    expect(el("fileName").textContent).toBe("demo.py › f");
-    expect(el("focusRange").textContent).toBe("lines 12–13");
+    // File and symbol are separate elements, because they truncate in
+    // opposite orders: the symbol is what the ask is about, so it is the last
+    // thing on the row to go, and one ellipsised breadcrumb drops it first.
+    expect(el("fileName").textContent).toBe("demo.py");
+    expect(el("ctxSymbol").textContent).toBe("f");
+    expect((el("ctxSep") as HTMLElement).hidden).toBe(false);
+    expect(el("focusRange").textContent).toBe("12–13");
   });
 
   it("marks the cursor's line", () => {
@@ -1241,10 +1282,19 @@ describe("webview — focus panel", () => {
     // startLine/endLine/cursorLine/breadcrumb are absent, not zero.
     post({ type: "focus", focusCode: "", fileName: "", language: "", totalLines: 0 });
 
-    expect(el("codeSnippet").textContent).toContain("No file open");
-    expect(el("fileName").textContent).toBe("No active file");
+    // The panel used to say "no file" twice, in two components. It says it
+    // once now, in the one that can offer the fix.
+    expect(el("fileName").textContent).toBe("no file open");
+    expect(el("ctxSymbol").textContent).toBe("");
+    expect((el("ctxSep") as HTMLElement).hidden).toBe(true);
     expect(el("focusRange").textContent).toBe("");
     expect((el("scopeToggle") as HTMLElement).hidden).toBe(true);
+    // Nothing to disclose, and a way out offered instead.
+    expect((el("collapseCode") as HTMLButtonElement).disabled).toBe(true);
+    expect((el("ctxOpen") as HTMLElement).hidden).toBe(false);
+
+    (el("ctxOpen") as HTMLButtonElement).click();
+    expect(lastSent("openFile")).toBeDefined();
   });
 
   it("collapses the whole-file toggle when a new focus block arrives", () => {
@@ -1332,7 +1382,7 @@ describe("webview — focus panel", () => {
     expect($$(".ln__no").map((n) => n.textContent)).toEqual(["7"]);
   });
 
-  it("hides the scope row along with the code preview when collapsed", () => {
+  it("keeps the preview's own controls inside the preview", () => {
     post({
       type: "focus",
       focusCode: "a",
@@ -1343,11 +1393,18 @@ describe("webview — focus panel", () => {
       language: "Python",
       totalLines: 80,
     });
+    // Whole-file, refresh and the line cap all act on the preview, so they
+    // live inside the disclosure and go away with it rather than needing to
+    // be hidden separately.
+    expect(el("scopeRow").closest("#ctxCode")).not.toBeNull();
+    expect(el("scopeToggle").closest("#ctxCode")).not.toBeNull();
+    expect(el("refreshCode").closest("#ctxCode")).not.toBeNull();
+
     const button = el("collapseCode") as HTMLButtonElement;
     button.click();
-    expect((el("scopeRow") as HTMLElement).hidden).toBe(true);
+    expect((el("ctxCode") as HTMLElement).hidden).toBe(false);
     button.click();
-    expect((el("scopeRow") as HTMLElement).hidden).toBe(false);
+    expect((el("ctxCode") as HTMLElement).hidden).toBe(true);
   });
 });
 
@@ -1415,6 +1472,223 @@ describe("webview — signed-out state", () => {
  * lands unstyled, and a mode in two families is drawn twice. Both are caught
  * here rather than by looking at one card at a time.
  */
+/**
+ * The composer's seven modes.
+ *
+ * Strip, placeholder and verb used to be passed separately at eleven call
+ * sites, which is how the placeholder came to say "describe your error" while
+ * the mode was `translate`. One table now drives all three, so the test that
+ * matters is that they agree — and that the way out actually works, since a
+ * mode the student cannot leave silently reinterprets their next question.
+ */
+describe("webview — the composer says how it will read you", () => {
+  const MODES = [
+    ["hint", "sent as a question", "Ask", "What's going wrong?"],
+    ["translate", "read as a translation", "Submit translation",
+      "Write the pseudocode from rung 3 as real code…"],
+    ["explain", "read as your explanation", "Submit",
+      "Say what you think this code does…"],
+    ["predict", "read as a prediction", "Submit prediction",
+      "What do you expect this to print?"],
+    ["reflect", "read as a quiz answer", "Submit answer",
+      "Answer the question above…"],
+    ["subgoal-label", "read as step labels", "Submit labels",
+      "What does each numbered step accomplish?"],
+    ["review", "read as review work", "Submit review",
+      "Write your code and what you expect it to do…"],
+  ];
+
+  /** Drive the panel into `mode` the way the tutor actually does. */
+  function enter(mode: string) {
+    switch (mode) {
+      case "hint":
+        return;
+      case "translate":
+        post({ type: "hint", hint: "h", hint_level: 3, concept_tags: [], mode: "hint" });
+        ($$(".actions button")[0] as HTMLButtonElement).click();
+        return;
+      case "subgoal-label":
+        post({ type: "hint", hint: "h", hint_level: 4, concept_tags: [], mode: "worked-example" });
+        ($$(".actions button")[0] as HTMLButtonElement).click();
+        return;
+      case "explain":
+        post({ type: "explainFirst", prompt: "What do you think this does?" });
+        return;
+      case "predict":
+        post({ type: "predictFirst", prompt: "What does this print?" });
+        return;
+      case "reflect":
+        // The quiz button is what arms the panel to expect an answer.
+        (el("quiz") as HTMLButtonElement).click();
+        post({ type: "hint", hint: "why?", hint_level: 0, concept_tags: [], mode: "reflect" });
+        return;
+      case "review":
+        post({ type: "reviewDue", concepts: ["loops"] });
+        (el("reviewBtn") as HTMLButtonElement).click();
+        post({ type: "hint", hint: "write one", hint_level: 0, concept_tags: [], mode: "review-exercise" });
+        return;
+    }
+  }
+
+  for (const [mode, strip, verb, placeholder] of MODES) {
+    it(`agrees with itself in ${mode} mode`, () => {
+      enter(mode);
+
+      expect(el("modeLabel").textContent).toBe(strip);
+      expect((el("input") as HTMLTextAreaElement).placeholder).toBe(placeholder);
+      expect(el("send").firstChild!.textContent).toBe(verb);
+    });
+  }
+
+  it("goes mint in every mode where the student is producing, not asking", () => {
+    expect($(".composer")!.classList.contains("is-producing")).toBe(false);
+    expect((el("modeExit") as HTMLElement).hidden).toBe(true);
+
+    enter("translate");
+    expect($(".composer")!.classList.contains("is-producing")).toBe(true);
+    expect(el("modeStrip").classList.contains("is-show")).toBe(true);
+    expect((el("modeExit") as HTMLElement).hidden).toBe(false);
+    // Asking a fresh quiz question is not what someone halfway through
+    // answering one wants offered.
+    expect((el("quiz") as HTMLElement).hidden).toBe(true);
+  });
+
+  it("leaves the mode on the way out, and means it", () => {
+    enter("translate");
+    (el("modeExit") as HTMLButtonElement).click();
+
+    expect(el("modeLabel").textContent).toBe("sent as a question");
+    expect((el("input") as HTMLTextAreaElement).placeholder).toBe("What's going wrong?");
+    expect($(".composer")!.classList.contains("is-producing")).toBe(false);
+
+    // The real test of leaving: what the host receives next.
+    (el("input") as HTMLTextAreaElement).value = "why is it empty?";
+    (el("send") as HTMLButtonElement).click();
+    expect(lastSent("askHint")).toBeDefined();
+  });
+
+  it("leaves the mode on Escape too", () => {
+    enter("translate");
+    document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+
+    expect(el("modeLabel").textContent).toBe("sent as a question");
+    expect($(".composer")!.classList.contains("is-producing")).toBe(false);
+  });
+
+  it("announces the mode as a status rather than moving focus", () => {
+    enter("translate");
+    expect(el("modeStatus").textContent).toContain("read as a translation");
+    expect(el("modeStatus").getAttribute("aria-live")).toBe("polite");
+    // The strip is also the field's description, so tabbing in repeats it in
+    // context instead of relying on the announcement having been heard.
+    expect(el("input").getAttribute("aria-describedby")).toBe("modeLabel");
+  });
+});
+
+/**
+ * Two banner tiers, each with somewhere to go.
+ *
+ * A banner that only states a problem leaves the student holding it. The
+ * important one is the pip: it outlives the banner, because dismissing a
+ * message about a broken sign-in does not sign anyone in.
+ */
+describe("webview — banners carry a destination", () => {
+  it("retries the connection from the offline banner", () => {
+    post({ type: "offline", value: true });
+    expect((el("offlineBanner") as HTMLElement).hidden).toBe(false);
+
+    (el("offlineRetry") as HTMLButtonElement).click();
+    expect(lastSent("refreshCode")).toBeDefined();
+  });
+
+  it("sends a broken sign-in somewhere it can be fixed", () => {
+    post({ type: "authTrouble", value: true });
+    expect((el("authBanner") as HTMLElement).hidden).toBe(false);
+    expect(el("authBanner").classList.contains("banner--danger")).toBe(true);
+
+    (el("authFix") as HTMLButtonElement).click();
+    expect(lastSent("signIn")).toBeDefined();
+  });
+
+  it("keeps the pip on the avatar after the auth banner goes", () => {
+    post({ type: "authState", signedIn: true, label: "Ada", email: "a@u.edu", initials: "A" });
+    expect((el("accountPip") as HTMLElement).hidden).toBe(true);
+
+    post({ type: "authTrouble", value: true });
+    expect((el("accountPip") as HTMLElement).hidden).toBe(false);
+    expect(el("accountPip").classList.contains("is-danger")).toBe(true);
+
+    // The banner is transient; the problem is not.
+    post({ type: "offline", value: false });
+    expect((el("accountPip") as HTMLElement).hidden).toBe(false);
+
+    post({ type: "authTrouble", value: false });
+    expect((el("accountPip") as HTMLElement).hidden).toBe(true);
+  });
+
+  it("stacks both in one announcement rather than two", () => {
+    expect(el("banners").getAttribute("role")).toBe("status");
+    expect(el("banners").getAttribute("aria-live")).toBe("polite");
+    expect(el("offlineBanner").parentElement).toBe(el("banners"));
+    expect(el("authBanner").parentElement).toBe(el("banners"));
+  });
+});
+
+/**
+ * The empty state teaches the contract.
+ *
+ * A student who does not know the tutor answers questions with questions
+ * reads their first reply as a failure rather than as the mechanic.
+ */
+describe("webview — the empty state does the teaching", () => {
+  it("states the three rules", () => {
+    const rules = $$(".empty__rules li").map((r) => r.textContent);
+    expect(rules).toHaveLength(3);
+    expect(rules[0]).toContain("never working code");
+    expect(rules[1]).toContain("Four rungs");
+    expect(rules[2]).toContain("worked example");
+  });
+
+  it("offers three ways in instead of a blank field", () => {
+    const chips = $$(".empty__chips .chip--action");
+    expect(chips.map((c) => c.textContent)).toEqual([
+      "Paste an error",
+      "Predict the output",
+      "Trace it by hand",
+    ]);
+
+    (chips[1] as HTMLButtonElement).click();
+    expect(lastSent("startPredict")).toBeDefined();
+    (chips[2] as HTMLButtonElement).click();
+    expect(lastSent("startTrace")).toBeDefined();
+  });
+
+  it("names the block it is looking at once there is one", () => {
+    post({
+      type: "focus",
+      focusCode: "def f():\n    pass",
+      breadcrumb: "demo.py › f",
+      startLine: 1,
+      endLine: 2,
+      cursorLine: 1,
+      fileName: "/tmp/demo.py",
+      language: "Python",
+      totalLines: 2,
+    });
+
+    expect($(".empty__sub")!.textContent).toBe("I'm looking at f. Tell me what's going wrong.");
+  });
+
+  it("keeps the starters for a signed-out student", () => {
+    post({ type: "authState", signedIn: false });
+
+    // Signing in is not a precondition for asking, and hiding the chips would
+    // suggest it was.
+    expect($(".signin")).not.toBeNull();
+    expect($$(".signin .chip--action")).toHaveLength(3);
+  });
+});
+
 describe("webview — every mode lands in exactly one card family", () => {
   const FAMILIES = ["turn--ask", "turn--show", "turn--tell", "turn--withhold"];
 
@@ -1568,15 +1842,23 @@ describe("webview — streak chip", () => {
     expect(el("streakChip").hidden).toBe(true);
   });
 
-  it("keeps the flame decorative and the count as the chip's real content", () => {
+  it("says the word rather than drawing a flame", () => {
     post({ type: "streak", days: 6 });
 
+    // The emoji is gone with the rest of them. A screen reader saying "fire
+    // 6" is not a streak, and the glyph is tofu in some Linux workbench font
+    // stacks, so the word carries it instead.
     const chip = el("streakChip");
-    const flame = chip.firstElementChild as HTMLElement;
-    const count = el("streakDays");
-    expect(flame.getAttribute("aria-hidden")).toBe("true");
-    expect(count.textContent).toBe("6");
-    expect(count.hasAttribute("aria-hidden")).toBe(false);
+    expect(chip.textContent).toBe("streak 6");
+    expect(el("streakDays").textContent).toBe("6");
+    expect(chip.querySelector("[aria-hidden]")).toBeNull();
+  });
+
+  it("shows the separator only when there is a streak beside it", () => {
+    post({ type: "streak", days: 0 });
+    expect((el("ledgerSep") as HTMLElement).hidden).toBe(true);
+    post({ type: "streak", days: 2 });
+    expect((el("ledgerSep") as HTMLElement).hidden).toBe(false);
   });
 
   // Without this, a screen reader concatenates the chip's children and reads

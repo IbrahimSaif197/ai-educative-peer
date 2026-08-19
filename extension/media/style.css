@@ -65,6 +65,8 @@
   --withhold: var(--warn);    /* D — holding the ladder         */
   /* Family D is a wash, not a card fill, so it never reads as teaching. */
   --withhold-wash: rgba(255, 196, 107, 0.07);
+  /* The danger banner's fill. Same 7-12% logic as the withhold wash. */
+  --danger-wash: rgba(255, 142, 122, 0.12);
   --error: var(--danger);
   --concept: #A99BE8;         /* concept tags. 5.4:1 on --card  */
 
@@ -155,6 +157,7 @@ body.vscode-light {
   --mint-ink: #FFFFFF;
   --warn: #8A5A00;
   --withhold-wash: rgba(138, 90, 0, 0.07);
+  --danger-wash: rgba(179, 48, 26, 0.1);
   --danger: #B3301A;
   --concept: #6D5BC4;
   --rung-1: #F2A08A;
@@ -182,8 +185,9 @@ body.vscode-high-contrast {
   --mint: #8FF3E5;
   --mint-ink: #000000;
   --warn: #FFD98A;
-  /* No fills in high contrast: the dashed border is the whole signal. */
+  /* No fills in high contrast: the border is the whole signal. */
   --withhold-wash: transparent;
+  --danger-wash: transparent;
   --danger: #FFA694;
   --concept: #C9BCFF;
   --rung-1: #FFD2C4;
@@ -213,6 +217,7 @@ body.vscode-high-contrast-light {
   --mint-ink: #FFFFFF;
   --warn: #5C3C00;
   --withhold-wash: transparent;
+  --danger-wash: transparent;
   --danger: #8A2210;
   --concept: #4A38A0;
   --rung-1: #E08A6E;
@@ -294,10 +299,40 @@ body {
   }
 }
 
+/* Two tiers, and they are different in kind rather than in degree. Amber is
+   transient and will fix itself; danger will not, and needs the student. */
 .banner--warn {
-  background: rgba(204, 167, 0, 0.14);
+  background: var(--withhold-wash);
   color: var(--ink);
   border-bottom: 1px solid var(--warn);
+}
+
+.banner--danger {
+  background: var(--danger-wash);
+  color: var(--ink);
+  border-bottom: 1px solid var(--danger);
+}
+
+.banner__text {
+  flex: 1;
+  min-width: 0;
+}
+
+.banner__action {
+  flex: none;
+  padding: 0;
+  background: none;
+  border: 0;
+  font-family: var(--mono);
+  font-size: var(--t-micro);
+  color: var(--warn);
+  cursor: pointer;
+  text-decoration: underline;
+  white-space: nowrap;
+}
+
+.banner--danger .banner__action {
+  color: var(--danger);
 }
 
 .banner__dot {
@@ -307,6 +342,14 @@ body {
   border-radius: 50%;
   background: var(--warn);
   animation: pulse 1.8s ease-in-out infinite;
+}
+
+/* Shape carries the tier as well as hue: a circle is something happening to
+   you, a square is something waiting on you. */
+.banner__dot--square {
+  border-radius: 1px;
+  background: var(--danger);
+  animation: none;
 }
 
 /* ----------------------------------------------------------------- topbar */
@@ -349,19 +392,6 @@ body {
 .brand__name {
   font-weight: 600;
   letter-spacing: 0.01em;
-}
-
-.streak {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--s2);
-  padding: var(--s1) var(--s3);
-  border-radius: var(--radius-pill);
-  background: var(--card-lit);
-  font-family: var(--display);
-  font-size: var(--t-small);
-  font-weight: 700;
-  color: var(--ink);
 }
 
 /* ------------------------------------------------- avatar and preferences */
@@ -705,34 +735,6 @@ body {
 
 /* ----------------------------------------------------------------- badges */
 
-.badges {
-  margin-top: var(--s2);
-}
-
-.badges__summary {
-  font-family: var(--mono);
-  font-size: var(--t-micro);
-  color: var(--muted);
-  cursor: pointer;
-  list-style: none;
-  padding: var(--s1) 0;
-}
-
-.badges__summary::-webkit-details-marker {
-  display: none;
-}
-
-.badges__summary::before {
-  content: "▸";
-  display: inline-block;
-  margin-right: var(--s3);
-  transition: transform 120ms ease;
-}
-
-.badges[open] .badges__summary::before {
-  transform: rotate(90deg);
-}
-
 .badges__list {
   display: flex;
   flex-wrap: wrap;
@@ -749,35 +751,123 @@ body {
   color: var(--ink);
 }
 
-/* --------------------------------------------------------------- filecard */
+/* ---------------------------------------------------------- context strip
 
-.filecard {
+   One row that answers "what is EduPeer looking at". The preview it used to
+   show by default is a disclosure now: the editor is eight pixels away, and
+   a second copy of the same code was spending 18vh of a 320px panel to
+   repeat it. The row never wraps and never exceeds 30px. */
+
+.ctx {
   border-bottom: 1px solid var(--line-soft);
-  padding: var(--s3) var(--s5) var(--s4);
-  display: flex;
-  flex-direction: column;
-  gap: var(--s3);
   flex: none;
 }
 
-.filecard__head {
+.ctx__bar {
   display: flex;
   align-items: center;
   gap: var(--s3);
-  min-height: 20px;
+  padding: 0 var(--s5);
+  min-height: 30px;
 }
 
-/* The focus breadcrumb's symbol name — one of the three places the spec puts
-   the display face (with the empty state and the hint-card headers). */
-.filecard__name {
-  font-family: var(--display);
-  font-weight: 700;
+.ctx__row {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: var(--s3);
+  height: 30px;
+  padding: 0;
+  background: none;
+  border: 0;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.ctx__row:disabled {
+  cursor: default;
+}
+
+/* Geometry, not hue: a circle is live, and the same shape unfilled is not. */
+.ctx__dot {
+  width: 5px;
+  height: 5px;
+  flex: none;
+  border-radius: 50%;
+  background: var(--line-soft);
+}
+
+.ctx__dot.is-live {
+  background: var(--show);
+}
+
+.ctx__file,
+.ctx__symbol,
+.ctx__range,
+.ctx__sep,
+.ctx__chev {
+  font-family: var(--mono);
   font-size: var(--t-micro);
   color: var(--muted);
+  white-space: nowrap;
+}
+
+/* The file name gives way before the symbol does. The symbol is what the ask
+   is about, so it is the last thing on this row to go — which is only
+   possible because the two are separate elements. A single ellipsised
+   breadcrumb would have truncated them in exactly the wrong order. */
+.ctx__file {
+  color: var(--ink);
   overflow: hidden;
   text-overflow: ellipsis;
-  white-space: nowrap;
-  max-width: 16ch;
+  min-width: 0;
+  flex: 0 1 auto;
+}
+
+.ctx__symbol {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
+  flex: 0 100 auto;
+}
+
+.ctx__row:disabled .ctx__chev {
+  visibility: hidden;
+}
+
+.ctx__chev {
+  margin-left: auto;
+  transition: transform var(--t-quick) linear;
+}
+
+.ctx__row[aria-expanded="true"] .ctx__chev {
+  transform: rotate(180deg);
+}
+
+.ctx__code {
+  padding: 0 var(--s5) var(--s4);
+}
+
+.ctx__foot {
+  display: flex;
+  align-items: center;
+  gap: var(--s3);
+  padding-top: var(--s3);
+  font-family: var(--mono);
+  font-size: var(--t-micro);
+  color: var(--muted);
+}
+
+/* Below 420px the range and the language chip are the first things to go:
+   they are context about the context, and the row must not wrap. */
+@media (max-width: 419px) {
+  .ctx__range,
+  .ctx .chip {
+    display: none;
+  }
 }
 
 .chip {
@@ -790,7 +880,7 @@ body {
   white-space: nowrap;
 }
 
-.filecard__code {
+.ctx__pre {
   margin: 0;
   padding: var(--s3) var(--s4);
   max-height: 18vh;
@@ -804,18 +894,6 @@ body {
   white-space: pre;
 }
 
-.filecard__scope {
-  display: flex;
-  align-items: center;
-  gap: var(--s3);
-  padding: 0 var(--s5) var(--s3);
-}
-
-.filecard__range {
-  font-family: var(--mono);
-  font-size: var(--t-micro);
-  color: var(--muted);
-}
 
 /* Line numbers are real DOM content now (`.ln__no`), not a CSS counter, so
    the preview's gutter always matches the editor's. */
@@ -911,6 +989,94 @@ body {
   font-size: var(--t-small);
   line-height: 1.6;
   animation: turn-in 300ms var(--ease-signature) 80ms both;
+}
+
+.empty__head {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s4);
+}
+
+.empty__sub {
+  margin: 0;
+  text-wrap: pretty;
+}
+
+/* The contract, stated before it is experienced. A student who does not know
+   the tutor answers questions with questions reads their first reply as a
+   failure rather than as the mechanic. */
+.empty__rules {
+  margin: var(--s6) 0;
+  padding: var(--s5) 0;
+  list-style: none;
+  counter-reset: rule;
+  border-top: 1px solid var(--line-soft);
+  border-bottom: 1px solid var(--line-soft);
+  display: flex;
+  flex-direction: column;
+  gap: var(--s3);
+}
+
+.empty__rules li {
+  display: flex;
+  gap: var(--s4);
+  color: var(--ink);
+  line-height: 1.5;
+  counter-increment: rule;
+}
+
+.empty__rules li::before {
+  content: counter(rule, decimal-leading-zero);
+  flex: none;
+  font-family: var(--mono);
+  font-size: var(--t-micro);
+  color: var(--ask);
+  padding-top: 2px;
+}
+
+/* Under 200px tall there is room for the contract or for the composer it is
+   pointing at, and the composer wins. The first rule is the one that would
+   otherwise surprise them. */
+@media (max-height: 199px) {
+  .empty__rules li:not(:first-child) {
+    display: none;
+  }
+}
+
+.empty__starts {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s4);
+}
+
+.empty__label {
+  font-family: var(--mono);
+  font-size: var(--t-micro);
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.empty__chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--s3);
+}
+
+/* An operable chip, as against the language label in the context strip. */
+.chip--action {
+  padding: var(--s2) var(--s4);
+  border-radius: var(--radius-pill);
+  background: none;
+  color: var(--ink);
+  font-family: var(--sans);
+  font-size: var(--t-small);
+  cursor: pointer;
+}
+
+.chip--action:hover {
+  border-color: var(--ask);
+  color: var(--ask);
 }
 
 .empty strong,
@@ -1280,6 +1446,70 @@ input[type="text"].trace__cell {
 
 /* --------------------------------------------------------------- composer */
 
+/* ------------------------------------------------------------ mode strip
+
+   What the next submission will be read as, and the way back out. Always
+   rendered, including in the default mode: it is teaching a mechanic, and a
+   control that only appears once you are already inside the thing it
+   explains has explained nothing. */
+
+.mode {
+  display: flex;
+  align-items: center;
+  gap: var(--s3);
+  font-family: var(--mono);
+  font-size: var(--t-micro);
+  color: var(--muted);
+  min-height: 16px;
+}
+
+.mode__arrow {
+  flex: none;
+}
+
+.mode__label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* In every mode but the default the student is producing material rather
+   than asking for it, so the strip, the field and the primary button all go
+   mint together. */
+.mode.is-show {
+  color: var(--show);
+}
+
+.mode__exit {
+  margin-left: auto;
+  flex: none;
+  padding: 0;
+  background: none;
+  border: 0;
+  font: inherit;
+  color: var(--muted);
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.mode__exit:hover {
+  color: var(--ink);
+}
+
+.composer.is-producing textarea {
+  border-color: var(--show);
+}
+
+.composer.is-producing .btn--primary {
+  background: var(--show);
+  color: var(--mint-ink);
+}
+
+.composer.is-producing .btn--primary .btn__hint {
+  color: var(--mint-ink);
+  opacity: 0.6;
+}
+
 .composer {
   flex: none;
   border-top: 1px solid var(--line-soft);
@@ -1527,6 +1757,100 @@ textarea::placeholder {
      is a resting box-shadow rather than a keyframe, so the amber bracket is
      already on screen without anything having to move. That was the point of
      making it a bracket instead of a nudge. */
+}
+
+/* ----------------------------------------------------------------- ledger
+
+   Where gamification belongs: 28px under the composer. Last in reading order
+   rather than first — it should not be the first thing a student meets from
+   a tutor that has not spoken yet — but permanently visible, which the
+   collapsed <details> in the top bar never was. */
+
+.ledger {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: var(--s4);
+  height: 28px;
+  padding: 0 var(--s5);
+  border-top: 1px solid var(--line-soft);
+  font-family: var(--mono);
+  font-size: var(--t-micro);
+  color: var(--muted);
+  background: var(--ground);
+}
+
+/* The one number that should pop on a clean scan, and it is on screen to be
+   seen. No flame: a screen reader saying "fire 3" is not a streak, and the
+   glyph renders as tofu in some Linux workbench font stacks. */
+.ledger__streak {
+  color: var(--coral);
+  flex: none;
+}
+
+.ledger__badges,
+.ledger__link {
+  padding: 0;
+  background: none;
+  border: 0;
+  font: inherit;
+  color: var(--muted);
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.ledger__badges:disabled {
+  cursor: default;
+}
+
+.ledger__badges:hover:not(:disabled),
+.ledger__link:hover {
+  color: var(--ink);
+}
+
+/* ------------------------------------------------------------ badge sheet
+
+   Over the chat, not above it: opening the list must not move the
+   conversation the student is in the middle of reading. */
+
+.sheet {
+  position: absolute;
+  left: var(--s5);
+  right: var(--s5);
+  bottom: 28px;
+  z-index: 8;
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--e3);
+  padding: var(--s5);
+  max-height: 50vh;
+  overflow-y: auto;
+  animation: turn-in var(--t-standard) var(--ease-signature) both;
+}
+
+.sheet__head {
+  display: flex;
+  align-items: center;
+  gap: var(--s4);
+  margin-bottom: var(--s4);
+}
+
+.sheet__title {
+  font-family: var(--display);
+  font-weight: 700;
+  font-size: var(--t-title);
+  color: var(--ink);
+}
+
+.sheet__close {
+  margin-left: auto;
+  padding: 0;
+  background: none;
+  border: 0;
+  font: inherit;
+  color: var(--muted);
+  cursor: pointer;
 }
 
 /* ----------------------------------------------------------------- signin */

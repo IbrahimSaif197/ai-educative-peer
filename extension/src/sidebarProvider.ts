@@ -338,6 +338,19 @@ export class EduPeerSidebarProvider implements vscode.WebviewViewProvider {
             "@ext:edupeer.edupeer"
           );
           return;
+        // The empty state's starter chips, and the context strip's way out of
+        // having no file. Each is its own named case rather than one message
+        // carrying a command id: the set of commands the panel can reach then
+        // stays a property of this file, not of whatever the webview sends.
+        case "startPredict":
+          await vscode.commands.executeCommand("edupeer.predictOutput");
+          return;
+        case "startTrace":
+          await vscode.commands.executeCommand("edupeer.traceCode");
+          return;
+        case "openFile":
+          await vscode.commands.executeCommand("workbench.action.quickOpen");
+          return;
       }
     });
 
@@ -1117,14 +1130,22 @@ export class EduPeerSidebarProvider implements vscode.WebviewViewProvider {
   <title>EduPeer</title>
 </head>
 <body>
-  <div id="offlineBanner" class="banner banner--warn" hidden>
-    <span class="banner__dot" aria-hidden="true"></span>
-    <span>Backend unreachable — retrying. Nudges are local for now.</span>
-  </div>
+  <!-- Two tiers, stacked in severity order and never merged: offline is
+       amber and transient, a broken sign-in is danger and needs the student
+       to do something. One role="status" wrapper, so two arriving at once is
+       one announcement rather than two interruptions. -->
+  <div class="banners" id="banners" role="status" aria-live="polite">
+    <div id="offlineBanner" class="banner banner--warn" hidden>
+      <span class="banner__dot" aria-hidden="true"></span>
+      <span class="banner__text">Can't reach the tutor server. Retrying — hints are local for now.</span>
+      <button class="banner__action" id="offlineRetry">Retry</button>
+    </div>
 
-  <div id="authBanner" class="banner banner--warn" hidden>
-    <span class="banner__dot" aria-hidden="true"></span>
-    <span>Can't sign in — the tutor server is up, but Firebase auth is refusing. Nudges are local for now.</span>
+    <div id="authBanner" class="banner banner--danger" hidden>
+      <span class="banner__dot banner__dot--square" aria-hidden="true"></span>
+      <span class="banner__text">Your sign-in is broken. Your streak and badges won't save until you sign in again.</span>
+      <button class="banner__action" id="authFix">Fix it</button>
+    </div>
   </div>
 
   <header class="topbar">
@@ -1133,7 +1154,6 @@ export class EduPeerSidebarProvider implements vscode.WebviewViewProvider {
         <span class="brand__mark" aria-hidden="true"></span>
         <span class="brand__name">EduPeer</span>
       </span>
-      <span id="streakChip" class="streak" hidden><span aria-hidden="true">🔥</span><span id="streakDays">0</span></span>
       <span class="topbar__spacer"></span>
       <button id="accountBtn" class="avatar" aria-haspopup="dialog" aria-expanded="false"
               aria-controls="prefsPop" title="Account and preferences">
@@ -1217,29 +1237,37 @@ export class EduPeerSidebarProvider implements vscode.WebviewViewProvider {
         </div>
       </div>
     </div>
-    <details class="badges" id="badgesWrap">
-      <summary class="badges__summary">
-        <span id="badgeCount">No badges yet</span>
-      </summary>
-      <div class="badges__list" id="badges"></div>
-    </details>
   </header>
 
-  <section class="filecard">
-    <div class="filecard__head">
-      <span class="filecard__name" id="fileName">No active file</span>
-      <span id="langChip" class="chip" hidden></span>
-      <span class="topbar__spacer"></span>
+  <!-- One row that answers "what is EduPeer looking at" — file, symbol, line
+       range, language — because that is the question the editor eight pixels
+       away cannot answer. The preview itself is a disclosure, collapsed by
+       default: a second copy of code the student is already looking at does
+       not earn 18vh of a 320px panel. -->
+  <section class="ctx">
+    <div class="ctx__bar">
+      <button class="ctx__row" id="collapseCode" aria-expanded="false" aria-controls="ctxCode"
+              title="Show or hide the code preview">
+        <span class="ctx__dot" id="ctxDot" aria-hidden="true"></span>
+        <span class="ctx__file" id="fileName">no file open</span>
+        <span class="ctx__sep" id="ctxSep" aria-hidden="true" hidden>›</span>
+        <span class="ctx__symbol" id="ctxSymbol"></span>
+        <span id="focusRange" class="ctx__range"></span>
+        <span id="langChip" class="chip" hidden></span>
+        <span class="ctx__chev" aria-hidden="true">⌄</span>
+      </button>
+      <button id="ctxOpen" class="btn btn--ghost btn--sm">Open a file</button>
       <button id="reviewBtn" class="btn btn--accent btn--sm" hidden title="A spaced-review exercise is ready">Review</button>
-      <button id="collapseCode" class="btn btn--ghost btn--sm" title="Show or hide the code preview" aria-expanded="true">Hide</button>
-      <button id="refreshCode" class="btn btn--ghost btn--sm" title="Re-read the active file">Refresh</button>
     </div>
-    <div class="filecard__scope" id="scopeRow">
-      <span id="focusRange" class="filecard__range"></span>
-      <span class="topbar__spacer"></span>
-      <button id="scopeToggle" class="btn btn--ghost btn--sm" aria-pressed="false" hidden>Whole file</button>
+    <div class="ctx__code" id="ctxCode" hidden>
+      <pre id="codeSnippet" class="ctx__pre" tabindex="0"></pre>
+      <div class="ctx__foot" id="scopeRow">
+        <span class="ctx__more" id="ctxMore"></span>
+        <span class="topbar__spacer"></span>
+        <button id="scopeToggle" class="btn btn--ghost btn--sm" aria-pressed="false" hidden>Whole file</button>
+        <button id="refreshCode" class="btn btn--ghost btn--sm" title="Re-read the active file">Refresh</button>
+      </div>
     </div>
-    <pre id="codeSnippet" class="filecard__code" tabindex="0"></pre>
   </section>
 
   <section class="chat" id="chat" role="log" aria-live="polite" aria-label="Tutor conversation"></section>
@@ -1250,14 +1278,46 @@ export class EduPeerSidebarProvider implements vscode.WebviewViewProvider {
   </div>
 
   <footer class="composer">
+    <!-- The strip names how the next submission will be read, and carries the
+         way out. It is always rendered, including in the default mode, because
+         it is teaching a mechanic the student has to be able to trust. -->
+    <div class="mode" id="modeStrip">
+      <span class="mode__arrow" aria-hidden="true">↳</span>
+      <span class="mode__label" id="modeLabel">sent as a question</span>
+      <button class="mode__exit" id="modeExit" hidden>back to a question ✕</button>
+    </div>
     <label class="visually-hidden" for="input">Your question</label>
-    <textarea id="input" rows="3" placeholder="Describe your error or ask a question…"></textarea>
+    <textarea id="input" rows="3" aria-describedby="modeLabel" placeholder="What's going wrong?"></textarea>
     <div class="composer__actions">
       <button id="send" class="btn btn--primary">Ask<span class="btn__hint">↵</span></button>
       <button id="quiz" class="btn btn--ghost" title="Answer one question about why your fix works">Quiz me</button>
       <button id="reset" class="btn btn--ghost" title="Clear the conversation and start at hint 1">Reset</button>
     </div>
+    <span class="visually-hidden" id="modeStatus" role="status" aria-live="polite"></span>
   </footer>
+
+  <!-- Gamification lives here, under the composer: last in reading order
+       rather than above a tutor that has not spoken yet, but permanently
+       visible, which the collapsed <details> in the top bar never was. -->
+  <footer class="ledger">
+    <span class="ledger__streak" id="streakChip" hidden>streak <span id="streakDays">0</span></span>
+    <span class="ledger__dot" id="ledgerSep" aria-hidden="true" hidden>·</span>
+    <button class="ledger__badges" id="badgesWrap" aria-expanded="false" aria-controls="badgesSheet" disabled>
+      <span id="badgeCount">No badges yet</span>
+    </button>
+    <span class="topbar__spacer"></span>
+    <button class="ledger__link" id="ledgerProgress">progress ›</button>
+  </footer>
+
+  <!-- Over the chat, not pushing it down: opening the badge list must not
+       move the conversation the student is reading. -->
+  <div class="sheet" id="badgesSheet" role="dialog" aria-label="Badges" hidden>
+    <div class="sheet__head">
+      <span class="sheet__title">Badges</span>
+      <button class="sheet__close" id="badgesClose" aria-label="Close badges">✕</button>
+    </div>
+    <div class="badges__list" id="badges" role="list"></div>
+  </div>
 
   <script nonce="${nonce}" src="${asset("markdown.js")}"></script>
   <script nonce="${nonce}" src="${asset("main.js")}"></script>
