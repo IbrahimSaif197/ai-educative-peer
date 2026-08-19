@@ -1732,16 +1732,20 @@ Facts about the current tree, not recommendations.
 3. *(Closed 2026-08-19.)* Definition CodeLenses were unbounded: `lensMode:
    "all"` put 40 lenses on a 40-function file. The mode is `"top8"` now, with
    the remainder behind one file-level quick pick.
-4. **Oversized blocks can lose a `bug:` marker they never reviewed.** Named at
-   `inlineTutor.ts:559-568`; the cursor anchor narrows the symptom without
-   closing it.
+4. *(Closed 2026-08-19.)* Oversized blocks could lose a `bug:` marker they
+   were never reviewed against: the marker filter acted on the whole focus
+   range while the scan had only seen the digest's share of it. The deletion
+   that made this possible is gone, and nothing in `src/` writes to the
+   student's file at all.
 5. **A scheduled scan is dropped by a tab switch inside its 3.5 s debounce.**
    Named at `inlineTutor.ts:552-556`; bounded and arguably correct.
 6. **`braceBlockEnd` counts braces inside strings and comments.** A deliberate
    trade against carrying a parser per language.
 7. **Python triple-quoted strings are not modelled** in
-   `indexOutsideStrings`, so a `bug:` marker inside a one-line docstring could
-   be treated as a comment.
+   `indexOutsideStrings`, so a `bug:` marker inside a one-line docstring is
+   treated as a comment. Since 1.7.0 the only consequence is that such a
+   marker is stripped out of a request it could have stayed in — the
+   conservative direction, and no longer a deletion from a file.
 8. **`testWatcher.ts` is 40% covered**, the lowest in the tree, because its
    callbacks need a host API the mock does not model.
 9. *(Closed 2026-08-19.)* The panel did not follow the VS Code colour theme,
