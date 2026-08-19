@@ -469,6 +469,41 @@ describe("a spaced-review exercise can be answered", () => {
 
 // ------------------------------------------------- the file stays on the machine
 
+describe("no source file writes to the student's code", () => {
+  const SRC = path.join(__dirname, "..");
+
+  /** A trailing `//` comment, so prose naming the API cannot trip the scan. */
+  const stripComment = (line: string) => line.replace(/(^|[^:])\/\/.*$/, "$1");
+
+  /**
+   * Until 1.7.0 there was exactly one write: a setting that deleted `bug:`
+   * comments from a block once it scanned clean. It was removed because
+   * nothing outside the demo files carries those comments, so on real student
+   * code the feature could only ever be a risk of editing a file it had no
+   * reason to touch.
+   *
+   * That makes the invariant unconditional, which is worth pinning: a tutor
+   * that never modifies your code is a much easier promise to keep than one
+   * that modifies it narrowly, and the difference is one careless
+   * `applyEdit` away. The Marketplace page states it as a flat fact.
+   */
+  it("constructs no WorkspaceEdit and calls no applyEdit anywhere in src/", () => {
+    const offenders = fs
+      .readdirSync(SRC)
+      .filter((name) => name.endsWith(".ts") && fs.statSync(path.join(SRC, name)).isFile())
+      .flatMap((name) =>
+        fs
+          .readFileSync(path.join(SRC, name), "utf8")
+          .split("\n")
+          .map((line, i) => [i + 1, stripComment(line)] as const)
+          .filter(([, line]) => /\bWorkspaceEdit\b|\bapplyEdit\s*\(/.test(line))
+          .map(([lineNo, line]) => `${name}:${lineNo} ${line.trim()}`)
+      );
+
+    expect(offenders).toEqual([]);
+  });
+});
+
 describe("no source file hands raw document text to the network", () => {
   const SRC = path.join(__dirname, "..");
   /**

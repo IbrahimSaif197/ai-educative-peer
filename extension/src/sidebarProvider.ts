@@ -1071,7 +1071,6 @@ export class EduPeerSidebarProvider implements vscode.WebviewViewProvider {
         // exists to a student who has not changed the setting since.
         lensMode: cfg.get<string>("lensMode", "top8") === "flagged" ? "flagged" : "top8",
         debounceMs: cfg.get<number>("debounceMs", 1800),
-        removeFixedBugComments: cfg.get<boolean>("removeFixedBugComments", true),
       },
       backendUrl: cfg.get<string>("backendUrl", ""),
     });
@@ -1220,12 +1219,6 @@ export class EduPeerSidebarProvider implements vscode.WebviewViewProvider {
             <button class="step__btn" id="debounceUp" aria-label="Wait longer before hinting">+</button>
           </span>
         </div>
-        <button class="row" role="switch" aria-checked="true" data-pref="removeFixedBugComments">
-          <span class="row__label">Delete <code>bug:</code> comments once fixed
-            <span class="row__sub">The only edit EduPeer makes to your file</span>
-          </span>
-          <span class="tog" aria-hidden="true"><i></i></span>
-        </button>
       </div>
 
       <div class="pop__group">
@@ -1355,7 +1348,6 @@ const WRITABLE_PREFERENCES = new Set([
   "autoScan",
   "lensMode",
   "debounceMs",
-  "removeFixedBugComments",
 ]);
 
 /** Matches the `minimum` in package.json and inlineTutor's own floor. */

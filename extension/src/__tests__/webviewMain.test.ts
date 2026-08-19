@@ -837,7 +837,7 @@ describe("the preferences popover", () => {
       type: "preferences",
       values: {
         inlineHints: true, autoScan: true, lensMode: "top8",
-        debounceMs: 1800, removeFixedBugComments: true, ...over,
+        debounceMs: 1800, ...over,
       },
       backendUrl: "https://edupeer-backend.onrender.com",
     });

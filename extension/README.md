@@ -77,7 +77,6 @@ click your avatar in the top-right corner. Changes take effect immediately.
 | `edupeer.autoScan` | `true` | Scan the block as you type, and flag suspicious lines without being asked |
 | `edupeer.lensMode` | `"top8"` | Which "ask about this line" entries appear: the eight biggest definitions plus one entry at the top of the file for the rest, or `"flagged"` for only the lines EduPeer has actually flagged |
 | `edupeer.debounceMs` | `1800` | Idle time before asking for a line hint |
-| `edupeer.removeFixedBugComments` | `true` | Delete a `bug:` comment once the file stops being flagged. The only time EduPeer edits your code, and undo puts it back. |
 
 ## Privacy
 
@@ -95,6 +94,13 @@ One thing is deliberately not capped: a **Trace This Code** selection travels
 whole, because a desk-check over an abridged block would have holes in it.
 That is why the command asks you to select the code first — the bound is put
 in your hand.
+
+**EduPeer never writes to your code.** Not a formatter, not a fix, not a
+comment. Until 1.7.0 there was one exception — a setting that tidied away
+`bug:` marker comments once a block scanned clean — and it was removed because
+nothing but the bundled demo files ever carries those. There is now no code
+path in the extension that edits a file, and a test scans the source to keep it
+that way.
 
 Do not use EduPeer on code you cannot share.
 

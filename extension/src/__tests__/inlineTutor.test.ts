@@ -1208,183 +1208,6 @@ describe("InlineTutor — the lens is the feedback channel", () => {
   });
 });
 
-describe("InlineTutor — stripping fixed bug markers", () => {
-  const MARKED = [
-    "def average(numbers):",
-    "    total = 0",
-    "    for i in range(1, len(numbers)):   # bug: off-by-one, skips the first item",
-    "    return total / len(numbers)",
-  ].join("\n");
-
-  const CODE_ON_MARKED_LINE = "    for i in range(1, len(numbers)):";
-
-  const tutors: any[] = [];
-  afterEach(() => {
-    while (tutors.length) tutors.pop().dispose();
-  });
-
-  function setupMarked(api: any, config: Record<string, any> = {}, source = MARKED) {
-    mock.__reset();
-    mock.__state.configuration = {
-      inlineHints: true,
-      lensMode: "top8",
-      autoScan: false,
-      ...config,
-    };
-    const doc = mock.__makeDocument(source, "python", "/tmp/marked.py");
-    const editor = mock.__makeEditor(doc, 2, 0);
-    mock.window.activeTextEditor = editor;
-    mock.window.visibleTextEditors = [editor];
-    const tutor = new InlineTutor({ subscriptions: [] } as any, api);
-    tutor.activate();
-    tutors.push(tutor);
-    return { tutor, doc };
-  }
-
-  /** One scan that flags, then one that comes back clean. */
-  function flaggedThenClean() {
-    return jest
-      .fn()
-      .mockResolvedValueOnce({ flags: [flag({ line: 3, end_line: 3 })] })
-      .mockResolvedValueOnce({ flags: [] });
-  }
-
-  it("removes the marker once the file scans clean, keeping the code", async () => {
-    const { doc } = setupMarked(makeApi({ scanCode: flaggedThenClean() }));
-
-    await mock.__runCommand("edupeer.scanFile");
-    await mock.__runCommand("edupeer.scanFile");
-
-    expect(mock.workspace.applyEdit).toHaveBeenCalledTimes(1);
-    const [edit] = mock.__state.appliedEdits;
-    expect(edit.deletions).toHaveLength(1);
-    const { range, uri } = edit.deletions[0];
-    expect(uri).toBe(String(doc.uri));
-    expect(range.start.line).toBe(2);
-    expect(range.start.character).toBe(CODE_ON_MARKED_LINE.length);
-    expect(range.end.character).toBe(MARKED.split("\n")[2].length);
-  });
-
-  it("does nothing while the file is still flagged", async () => {
-    setupMarked(makeApi({ scanCode: jest.fn(async () => ({ flags: [flag()] })) }));
-
-    await mock.__runCommand("edupeer.scanFile");
-    await mock.__runCommand("edupeer.scanFile");
-
-    expect(mock.workspace.applyEdit).not.toHaveBeenCalled();
-  });
-
-  it("does nothing when the setting is off", async () => {
-    setupMarked(makeApi({ scanCode: flaggedThenClean() }), {
-      removeFixedBugComments: false,
-    });
-
-    await mock.__runCommand("edupeer.scanFile");
-    await mock.__runCommand("edupeer.scanFile");
-
-    expect(mock.workspace.applyEdit).not.toHaveBeenCalled();
-  });
-
-  it("does nothing when the file has no marker", async () => {
-    setupMarked(
-      makeApi({ scanCode: flaggedThenClean() }),
-      {},
-      "def average(numbers):\n    return sum(numbers) / len(numbers)\n"
-    );
-
-    await mock.__runCommand("edupeer.scanFile");
-    await mock.__runCommand("edupeer.scanFile");
-
-    expect(mock.workspace.applyEdit).not.toHaveBeenCalled();
-  });
-
-  it("leaves prose that merely mentions a bug alone", async () => {
-    setupMarked(
-      makeApi({ scanCode: flaggedThenClean() }),
-      {},
-      "def f():\n    # Off-by-one style bug: index 4 does not exist\n    return 1\n"
-    );
-
-    await mock.__runCommand("edupeer.scanFile");
-    await mock.__runCommand("edupeer.scanFile");
-
-    expect(mock.workspace.applyEdit).not.toHaveBeenCalled();
-  });
-
-  it("runs ahead of the reflection gate, not behind it", async () => {
-    // The reflection quiz is offered once per fingerprint. Stripping must not
-    // inherit that gate: the marker describes fixed code either way.
-    const scanCode = jest
-      .fn()
-      .mockResolvedValueOnce({ flags: [flag({ line: 3, end_line: 3 })] })
-      .mockResolvedValueOnce({ flags: [] })
-      .mockResolvedValueOnce({ flags: [flag({ line: 3, end_line: 3 })] })
-      .mockResolvedValueOnce({ flags: [] });
-    setupMarked(makeApi({ scanCode }));
-
-    for (let i = 0; i < 4; i++) await mock.__runCommand("edupeer.scanFile");
-
-    expect(mock.workspace.applyEdit).toHaveBeenCalledTimes(2);
-    expect(mock.window.showInformationMessage).toHaveBeenCalledTimes(1);
-  });
-
-  it("announces the clean scan exactly once per transition", async () => {
-    const api = makeApi({ scanCode: flaggedThenClean() });
-    const { tutor } = setupMarked(api);
-    let announced = 0;
-    tutor.onDidScanClean(() => announced++);
-
-    await mock.__runCommand("edupeer.scanFile");
-    expect(announced).toBe(0); // still flagged
-
-    await mock.__runCommand("edupeer.scanFile");
-    expect(announced).toBe(1);
-  });
-
-  it("does not credit one selection's flags to the next selection", async () => {
-    // Every per-block map in the tutor is keyed on `focus.breadcrumb`. A
-    // breadcrumb that carries no position makes every selection in a file one
-    // block: `parse` scans dirty, `validate` scans clean, and the clean scan
-    // reads as a flagged-to-clean transition for a block that was never
-    // flagged — so the toast fires and the `bug:` marker inside `validate`,
-    // describing a bug nobody has fixed, is deleted from the student's file.
-    const TWO_BLOCKS = [
-      "def parse(payload):",                                        // 0
-      "    return payload",                                         // 1
-      "",                                                           // 2
-      "def validate(payload):",                                     // 3
-      "    return bool(payload)   # bug: accepts an empty payload", // 4
-    ].join("\n");
-    const scanCode = jest
-      .fn()
-      .mockResolvedValueOnce({ flags: [flag({ line: 1, end_line: 1 })] })
-      .mockResolvedValueOnce({ flags: [] });
-    const { doc } = setupMarked(makeApi({ scanCode }), {}, TWO_BLOCKS);
-    const editor = mock.window.activeTextEditor;
-
-    // `parse` selected, and flagged.
-    editor.selection = new vscode.Selection(
-      new vscode.Position(0, 0),
-      new vscode.Position(1, 10)
-    );
-    await mock.__runCommand("edupeer.scanFile");
-    expect(scanCode).toHaveBeenCalledTimes(1);
-
-    // `validate` selected, and clean. A different block, so nothing to
-    // celebrate and nothing to strip.
-    editor.selection = new vscode.Selection(
-      new vscode.Position(3, 0),
-      new vscode.Position(4, 10)
-    );
-    await mock.__runCommand("edupeer.scanFile");
-    expect(scanCode).toHaveBeenCalledTimes(2);
-
-    expect(mock.workspace.applyEdit).not.toHaveBeenCalled();
-    expect(mock.window.showInformationMessage).not.toHaveBeenCalled();
-    expect(doc.getText()).toContain("# bug: accepts an empty payload");
-  });
-});
-
 describe("InlineTutor — the seeded marker never reaches the tutor", () => {
   const MARKED = [
     "def add(a, b):",
@@ -1437,8 +1260,9 @@ describe("InlineTutor — the seeded marker never reaches the tutor", () => {
 
   it("lets a fixed file scan clean instead of the marker keeping it flagged", async () => {
     // Stands in for the real reviewer, which reads the comment and believes
-    // it. While the marker was on the wire this file could never scan clean,
-    // and the removal that needed a clean scan could therefore never fire.
+    // it. With the marker on the wire this file could never scan clean, however
+    // correct the code became — the tutor would keep flagging a bug the
+    // student had already fixed, because the comment still said there was one.
     const scanCode = jest.fn(async (digest: { code: string }) => ({
       flags:
         digest.code.includes("bug:") || digest.code.includes("a - b")
@@ -1449,12 +1273,34 @@ describe("InlineTutor — the seeded marker never reaches the tutor", () => {
     const { doc } = setup(api, MARKED.replace("a + b", "a - b"));
 
     await mock.__runCommand("edupeer.scanFile");
-    expect(mock.workspace.applyEdit).not.toHaveBeenCalled(); // genuinely buggy
+    expect(scanCode.mock.calls[0][0].code).not.toContain("bug:");
 
     doc.__setText(MARKED); // the student fixes the operator
     await mock.__runCommand("edupeer.scanFile");
 
-    expect(mock.workspace.applyEdit).toHaveBeenCalledTimes(1);
+    // Clean, on the strength of the code alone.
+    expect(scanCode).toHaveBeenCalledTimes(2);
+    expect(scanCode.mock.calls[1][0].code).not.toContain("bug:");
+  });
+
+  it("never edits the student's file", async () => {
+    // Until 1.7.0 a setting deleted these comments once a block scanned clean,
+    // and that was the only write EduPeer ever made. It was removed because
+    // outside the demos nobody writes `bug:` comments, so on real student code
+    // it could only be a risk of touching a file it had no reason to touch.
+    // The invariant is now unconditional rather than one-setting-wide.
+    const scanCode = jest.fn(async (digest: { code: string }) => ({
+      flags: digest.code.includes("a - b") ? [flag({ line: 2, end_line: 2 })] : [],
+    }));
+    const { doc } = setup(makeApi({ scanCode }), MARKED.replace("a + b", "a - b"));
+
+    await mock.__runCommand("edupeer.scanFile");
+    doc.__setText(MARKED);
+    await mock.__runCommand("edupeer.scanFile");
+
+    expect(mock.workspace.applyEdit).not.toHaveBeenCalled();
+    // And the comment is still where the student left it.
+    expect(doc.getText()).toContain("# bug: subtracts instead of adds");
   });
 });
 

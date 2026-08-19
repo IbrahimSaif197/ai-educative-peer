@@ -869,7 +869,6 @@ describe("account and preferences", () => {
         autoScan: expect.any(Boolean),
         lensMode: expect.any(String),
         debounceMs: expect.any(Number),
-        removeFixedBugComments: expect.any(Boolean),
       })
     );
     // The URL is shown but never edited here; a 268px popover is not a place

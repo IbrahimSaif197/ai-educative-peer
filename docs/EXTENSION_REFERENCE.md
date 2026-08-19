@@ -267,7 +267,7 @@ new command has to be declared in three places or the suite says so.
 | Activity bar container | id `edupeer-sidebar`, title "EduPeer", icon `media/icon.svg` | `package.json:41-49` |
 | Webview view | type `webview`, id `edupeer.sidebar`, name "EduPeer Tutor" | `package.json:50-58` |
 | Walkthrough | id `edupeer.gettingStarted`, four steps, each with a markdown media file | `package.json:190-230` |
-| Configuration | six settings | `package.json:231-274` |
+| Configuration | five settings | `package.json` `contributes.configuration` |
 
 The webview view is registered with `retainContextWhenHidden: true`
 (`extension.ts:117-121`), so the panel keeps its DOM when hidden.
@@ -276,14 +276,13 @@ The four walkthrough steps are `openFile`, `ask`, `inline`, `progress`, backed
 by `media/walkthrough/*.md`. Nothing in `src/` references the walkthrough — VS
 Code surfaces it on the Welcome page; the extension never opens it.
 
-### 5.3 Settings — six
+### 5.3 Settings — five
 
 | Setting | Type | Default | Effect |
 | --- | --- | --- | --- |
 | `edupeer.backendUrl` | string | `https://edupeer-backend.onrender.com` | Backend base URL. Re-read live on change (`extension.ts:410`) |
 | `edupeer.inlineHints` | boolean | `true` | Master switch for the whole inline surface. `isSupported` returns false when off (`inlineTutor.ts:326-331`), disabling lens, hover, Quick Fix, ghost text and line hints |
 | `edupeer.lensMode` | `"top8"` \| `"flagged"` | `"top8"` | `"top8"` puts the standing "EduPeer — ask about this line" lens on the eight biggest definitions plus one file-level lens for the rest; `"flagged"` suppresses all of them. A stored `"all"` — the pre-1.7 default — is read as `"top8"` rather than rewritten (`inlineTutor.ts`, `lensMode` getter) |
-| `edupeer.removeFixedBugComments` | boolean | `true` | Allows the one code edit EduPeer ever makes (`inlineTutor.ts:649-652`) |
 | `edupeer.autoScan` | boolean | `true` | Automatic block scans (`inlineTutor.ts:534-537`) |
 | `edupeer.debounceMs` | number | `1800`, min `600` | Idle time before a line hint. Floored again at 600 in code (`inlineTutor.ts:369`) |
 
@@ -924,7 +923,7 @@ Sent through `post()` (`sidebarProvider.ts:1000`), handled in the switch at
 | `scanClean` | — | `:234` | 900 ms celebration flash |
 | `badges` | `badges[]` | `:966` | The ledger's badge count, and the sheet behind it. At zero the count stays on screen and the button is disabled — there is nothing to open, but the number is still a fact |
 | `authState` | `signedIn, label, email, initials` | `postAuthState` | Paints the avatar (initials, or a pip when anonymous), the popover's identity block, and swaps the placeholder |
-| `preferences` | `values{inlineHints, autoScan, lensMode, debounceMs, removeFixedBugComments}, backendUrl` | `postPreferences` | Repaints the popover's live controls. Also posted after every write, and on any `edupeer` configuration change, so a toggle never disagrees with the editor it claims to control |
+| `preferences` | `values{inlineHints, autoScan, lensMode, debounceMs}, backendUrl` | `postPreferences` | Repaints the popover's live controls. Also posted after every write, and on any `edupeer` configuration change, so a toggle never disagrees with the editor it claims to control |
 | `reviewDue` | `concepts` | `:404` | Reveals the Review button |
 | `resetCleared` | — | `resetSession`, **before** the network call | Clears the transcript, resets the composer and empties the avatar ring. The host has already dropped the threads by this point, so the panel no longer waits on `/reset` to say so |
 | `resetDone` | `summary` | `resetSession`, after the network call | Appends the "what you learned" note, when there is one. Clears nothing |
@@ -1277,24 +1276,30 @@ each just routes the line into a tutor mode:
   reference would clear the ghost text on the editor they are actually looking
   at while repainting one that is no longer active.
 
-### 12.9 The one code edit EduPeer makes
+### 12.9 EduPeer makes no code edits
 
-`removeFixedBugMarkers` (`inlineTutor.ts:645`), gated on
-`edupeer.removeFixedBugComments`. Fires only on the **flagged → clean
-transition** for a block, deletes only comments whose body opens with `bug:`,
-only inside the focus range, and through a **single `WorkspaceEdit`** so one
-Ctrl+Z puts it back. A whole-line marker takes its line with it unless it is
-the last line of the file.
+**Removed in 1.7.0.** There was exactly one write: `removeFixedBugMarkers`,
+gated on `edupeer.removeFixedBugComments`, which deleted `bug:` comments from a
+block on the flagged → clean transition through a single undoable
+`WorkspaceEdit`.
 
-It runs **ahead of** the reflection-quiz gate on purpose: the markers describe
-code that is already fixed whether or not this fingerprint has been quizzed
-(`inlineTutor.ts:684-686`).
+It went because nothing outside `demos/` carries those comments. The demos seed
+them so a reader can see what each exercise is; a student's own code has no
+reason to, so on real work the feature could only ever be a risk of editing a
+file it had nothing to say about. It also carried a hazard documented in the
+code: in a block longer than the digest budget, the marker filter acted on the
+whole focus range, so a marker at line 250 of a 300-line class was deletable by
+a scan that only ever saw lines 1–119 plus the anchor.
 
-**A known hazard, documented in the code** (`inlineTutor.ts:559-568`): in a
-block longer than the digest budget, `setFlagsIn` and the marker filter both
-act on the whole focus range, so a marker at line 250 of a 300-line class is
-deletable by a scan that only ever saw lines 1–119 plus the anchor. The cursor
-anchor does not close this; it predates it.
+What survives is the half that matters: **`stripBugMarkers` removes those
+comments from every request**, at the digest chokepoint. A model handed
+`# bug: off-by-one, skips the first item` is not finding the bug, it is reading
+the answer off the line above it — and the demo stops demonstrating anything.
+`bugMarkers.ts` is now only ever read from, never written through.
+
+The invariant this leaves is stronger and unconditional, and
+`auditRegressions.test.ts` pins it: no file in `src/` constructs a
+`WorkspaceEdit` or calls `applyEdit` at all.
 
 ### 12.10 Reflection offer (`maybeOfferReflection`, `inlineTutor.ts:674`)
 
@@ -1627,8 +1632,10 @@ somewhere, not merely intended.
    `backend/models.py` from the test (`pedagogy.test.ts`).
 10. **The transcript on screen and the depth beside it describe the same
     problem.** Both ride `threadKey`.
-11. **EduPeer writes to the student's code exactly once**, under one setting,
-    on one transition, through one undoable `WorkspaceEdit`.
+11. **EduPeer never writes to the student's code.** Not under a setting, not
+    on any transition. Scanned for in `src/` by
+    `auditRegressions.test.ts`'s "no source file writes to the student's
+    code". Until 1.7.0 this read "exactly once, under one setting".
 
 ---
 
@@ -1782,8 +1789,8 @@ about being wrong. Concretely, against 1.7.0:
   "EduPeer: Scan This Block", and it scans the focus block, not the file.
 - **Activation events: says `["onStartupFinished"]`**; `onUri` was added for
   the sign-in deep link.
-- **Settings: says four, there are six.** `edupeer.lensMode` and
-  `edupeer.removeFixedBugComments` are missing.
+- **Settings: says four, there are five.** `edupeer.lensMode` is missing.
+  It also predates `removeFixedBugComments` being added *and* removed.
 - **The extension→webview table is substantially out of date.** It lists
   `activeCode`, which no longer exists. It is missing `focus`, `cursor`,
   `fullFile`, `authTrouble`, `streak` and `scanClean`. `restoreChat` is now
@@ -1826,15 +1833,15 @@ about being wrong. Concretely, against 1.7.0:
 
 ### 21.3 `extension/README.md` (the Marketplace page)
 
-This is the page a student sees before installing, and 1.7.0 changed enough of
-what it describes that it is the most out-of-date of the three.
+*(Rewritten 2026-08-19. The list below is what it said beforehand, kept
+because the same drift is what to watch for next time.)*
 
-- **Settings table lists four**; `edupeer.lensMode` and
-  `edupeer.removeFixedBugComments` are missing — and `lensMode`'s values are
-  `"top8"`/`"flagged"` now, not `"all"`/`"flagged"`.
-- **Command table lists 12**; `signIn`/`signOut` appear only in prose, and
-  `deepenLine`, `dismissLine`, `discussLines`, `pickDefinition` are absent.
-- **Any screenshot or description of the panel** predates the redesign: the
+- **Settings table listed four** of the then-six; `edupeer.lensMode` and
+  `edupeer.removeFixedBugComments` were missing. It now lists all five — the
+  latter having gone with the code edit it gated.
+- **Command table listed 12**; `signIn`/`signOut` appeared only in prose, and
+  `deepenLine`, `dismissLine`, `discussLines`, `pickDefinition` were absent.
+- **Its description of the panel** predated the redesign: the
   streak chip and badges are in a footer ledger now, the code preview is a
   collapsed disclosure, the hint dots are a bar meter, and the panel follows
   the workbench theme in four skins rather than being dark always.

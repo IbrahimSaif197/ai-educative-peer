@@ -9,7 +9,6 @@ import {
 } from "./languages";
 import { localLineHint } from "./localTutor";
 import { resolveFocus } from "./focusScope";
-import { findBugMarkers } from "./bugMarkers";
 import { digestFor } from "./documentDigest";
 
 import { codeFingerprint as fingerprintCode } from "./pedagogy";
@@ -697,42 +696,7 @@ export class InlineTutor {
 
   /**
    * Strip the seeded `bug:` markers once the file scans clean.
-   *
-   * The comment named a bug the student has now fixed, so leaving it there
-   * makes the file lie about itself. This is the one place EduPeer writes into
-   * the student's code, so it is narrow by construction: only a comment whose
-   * body opens with `bug:`, and only on the flagged-to-clean transition. The
-   * edit goes through a single `WorkspaceEdit`, so one Ctrl+Z puts it back.
-   */
-  private async removeFixedBugMarkers(
-    doc: vscode.TextDocument,
-    focus: { startLine: number; endLine: number }
-  ) {
-    const enabled = vscode.workspace
-      .getConfiguration("edupeer")
-      .get<boolean>("removeFixedBugComments", true);
-    if (!enabled) return;
-
-    const markers = findBugMarkers(doc.getText().split("\n"), doc.languageId).filter(
-      // Narrowed with the scan: this is the one place EduPeer writes into the
-      // student's code, and it may only speak for the block that went clean.
-      (m) => m.line >= focus.startLine && m.line <= focus.endLine
-    );
-    if (!markers.length) return;
-
-    const edit = new vscode.WorkspaceEdit();
-    for (const marker of markers) {
-      const lastLine = marker.line >= doc.lineCount - 1;
-      const range =
-        marker.wholeLine && !lastLine
-          ? new vscode.Range(marker.line, 0, marker.line + 1, 0)
-          : new vscode.Range(marker.line, marker.start, marker.line, marker.end);
-      edit.delete(doc.uri, range);
-    }
-    await vscode.workspace.applyEdit(edit);
-  }
-
-  /** After a block goes from flagged to clean, offer a reflection quiz once. */
+   * After a block goes from flagged to clean, offer a reflection quiz once. */
   private maybeOfferReflection(
     doc: vscode.TextDocument,
     key: string,
@@ -743,9 +707,6 @@ export class InlineTutor {
     const prev = this.lastFlagCounts.get(key) ?? 0;
     this.lastFlagCounts.set(key, flagCount);
     if (prev === 0 || flagCount > 0) return;
-    // Ahead of the reflection gate on purpose: the markers describe code that
-    // is already fixed whether or not this fingerprint has been quizzed.
-    void this.removeFixedBugMarkers(doc, focus);
     this.cleanEmitter.fire();
     const fp = fingerprintCode(code);
     if (this.reflectOffered.has(fp)) return;

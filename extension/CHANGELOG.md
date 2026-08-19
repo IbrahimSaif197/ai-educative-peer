@@ -2,6 +2,21 @@
 
 ## 1.7.0
 
+### EduPeer no longer edits your code. At all.
+
+There was one exception, and it is gone: a setting that tidied away `bug:`
+marker comments from a block once it scanned clean. It existed for the bundled
+demo files, which seed a comment naming each planted bug so you can see what
+the exercise is — and nothing else has ever written one. On your own code it
+could only be a risk of touching a file it had nothing to say about, so the
+setting and the edit behind it are both removed. The preferences panel is one
+row shorter.
+
+What has not changed is the half that matters: those comments are still
+stripped out of everything sent to the tutor. A tutor handed
+`# bug: off-by-one, skips the first item` is not finding your bug, it is
+reading the answer off the line above it.
+
 ### The panel, rebuilt
 
 - **EduPeer follows your theme now.** Light, dark, and both high-contrast

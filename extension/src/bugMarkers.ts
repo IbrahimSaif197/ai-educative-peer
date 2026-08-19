@@ -1,13 +1,22 @@
 /**
  * Finding the seeded `bug:` marker comments in a file.
  *
- * The demos ship deliberate bugs with a comment naming each one. Once the file
- * scans clean those comments describe a bug the student has already fixed, so
- * EduPeer strips them.
+ * The demos ship deliberate bugs with a comment naming each one, so that a
+ * reader can see what the exercise is. Those comments must never reach the
+ * tutor: a model handed `# bug: off-by-one, skips the first item` is not
+ * finding the bug, it is reading the answer off the line above it, and the
+ * demo stops being a demonstration of anything. `stripBugMarkers` is the
+ * chokepoint that removes them from every request.
  *
- * Deliberately narrow, because this deletes from the student's own file: only a
- * comment whose body *starts* with `bug:` counts. `// Off-by-one style bug:
- * index 4 does not exist` is prose about a bug, not a marker, and survives.
+ * Nothing here writes to the student's file. It used to: until 1.7.0 a
+ * setting deleted these comments once a block scanned clean. That was removed
+ * because outside the demos nobody writes them, so on real student code the
+ * feature could only ever be a risk of editing a file it had no reason to
+ * touch. EduPeer now never modifies your code.
+ *
+ * Deliberately narrow: only a comment whose body *starts* with `bug:` counts.
+ * `// Off-by-one style bug: index 4 does not exist` is prose about a bug, not
+ * a marker, and survives into the request.
  *
  * Pure module: raw lines in, spans out.
  */

@@ -262,11 +262,6 @@
           "default": "top8",
           "description": "Which CodeLens entries EduPeer shows above your code. \"top8\" replaces the old \"all\", which put a lens on every definition and made the gutter unusable on a large file; an existing \"all\" is read as \"top8\". Set edupeer.inlineHints to false to turn the inline surface off entirely."
         },
-        "edupeer.removeFixedBugComments": {
-          "type": "boolean",
-          "default": true,
-          "description": "When a file stops being flagged, delete any comment that starts with \"bug:\" — the note described a bug you have already fixed. This is the only time EduPeer edits your code; undo puts it back."
-        },
         "edupeer.autoScan": {
           "type": "boolean",
           "default": true,

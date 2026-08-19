@@ -2151,7 +2151,7 @@ and is only ever invoked programmatically by a Quick Fix
 | Activity bar container | id `edupeer-sidebar`, title "EduPeer", icon `media/icon.svg` | `package.json:19-27` |
 | Webview view | id `edupeer.sidebar`, name "EduPeer Tutor" | `package.json:28-36` |
 | Walkthrough | id `edupeer.gettingStarted`, four steps | `package.json:152-192` |
-| Configuration | six settings: `backendUrl`, `inlineHints`, `lensMode`, `removeFixedBugComments`, `autoScan`, `debounceMs`. All but `backendUrl` are rendered as live controls in the preferences popover; that one it shows read-only and links out for | `package.json` `contributes.configuration` |
+| Configuration | five settings: `backendUrl`, `inlineHints`, `lensMode`, `autoScan`, `debounceMs`. All but `backendUrl` are rendered as live controls in the preferences popover; that one it shows read-only and links out for. `removeFixedBugComments` was removed in 1.7.0 along with the only code edit EduPeer made | `package.json` `contributes.configuration` |
 
 The webview view is registered with `retainContextWhenHidden: true`
 (`extension/src/extension.ts:72`), so the panel keeps its DOM when hidden.
@@ -2178,7 +2178,7 @@ handled in the `switch` at `extension/media/main.js:466`.
 | `offline` | `value: boolean` | `sidebarProvider.ts:75-77` | Toggles the offline banner (`main.js:585-587`) |
 | `badges` | `badges: string[]` | `sidebarProvider.ts:520` | Repaints the badge disclosure and its count (`main.js:589-591`) |
 | `authState` | `signedIn`, `label`, `email`, `initials` | `postAuthState` | Paints the account avatar (initials, or a coral pip when anonymous) and the preferences popover's identity block. The header's account label and Sign in/out button are gone — both live behind the avatar now |
-| `preferences` | `values{inlineHints, autoScan, lensMode, debounceMs, removeFixedBugComments}`, `backendUrl` | `postPreferences` | Repaints the popover's live controls. Sent on `ready`, on every `requestPreferences`, after every write, and on any `edupeer` configuration change — a toggle that disagrees with the editor it claims to control is worse than no toggle |
+| `preferences` | `values{inlineHints, autoScan, lensMode, debounceMs}`, `backendUrl` | `postPreferences` | Repaints the popover's live controls. Sent on `ready`, on every `requestPreferences`, after every write, and on any `edupeer` configuration change — a toggle that disagrees with the editor it claims to control is worse than no toggle |
 | `reviewDue` | `concepts` | `sidebarProvider.ts:217` | Reveals the Review button (`main.js:600-602`) |
 | `resetCleared` | — | `resetSession`, **before** the network call | Clears the transcript, resets the composer, empties the avatar ring. The host has already dropped every thread by this point, so the panel no longer waits on `/reset` to say so |
 | `resetDone` | `summary` | `resetSession`, after the network call | Appends the "what you learned" note when the backend had one. Clears nothing |
