@@ -1531,6 +1531,136 @@ describe("webview — signed-out state", () => {
  * matters is that they agree — and that the way out actually works, since a
  * mode the student cannot leave silently reinterprets their next question.
  */
+/**
+ * One session, end to end.
+ *
+ * Every piece of the redesign was built on its own and tested on its own.
+ * This walks a plausible half hour through the panel and checks they compose:
+ * that the meter, the families, the context strip, the composer strip, the
+ * ledger and the placeholder all agree about what is happening at each step.
+ */
+describe("webview — a whole session holds together", () => {
+  const focus = (symbol: string) => ({
+    type: "focus",
+    focusCode: "def last_index(items):\n    for i in range(n):\n        return i",
+    breadcrumb: `demo.py › ${symbol}`,
+    startLine: 12,
+    endLine: 14,
+    cursorLine: 13,
+    fileName: "/tmp/demo.py",
+    language: "Python",
+    totalLines: 40,
+  });
+
+  it("walks cold start → three rungs → a gate → a worked example → reset", () => {
+    // --- cold, signed out, no file --------------------------------------
+    expect(el("fileName").textContent).toBe("no file open");
+    expect((el("ctxOpen") as HTMLElement).hidden).toBe(false);
+    expect((el("collapseCode") as HTMLButtonElement).disabled).toBe(true);
+    expect($$(".empty__rules li")).toHaveLength(3);
+    expect($(".rung")).toBeNull();
+    expect(el("modeLabel").textContent).toBe("sent as a question");
+    expect((el("streakChip") as HTMLElement).hidden).toBe(true);
+    expect((el("badgesWrap") as HTMLButtonElement).disabled).toBe(true);
+
+    // --- signs in, opens a file ----------------------------------------
+    post({ type: "authState", signedIn: true, label: "Ada Lovelace", email: "ada@uni.edu", initials: "AL" });
+    post({ type: "streak", days: 3 });
+    post({ type: "badges", badges: ["first fix", "traced a loop"] });
+    post(focus("last_index"));
+
+    expect(el("fileName").textContent).toBe("demo.py");
+    expect(el("ctxSymbol").textContent).toBe("last_index");
+    expect(el("ctxDot").classList.contains("is-live")).toBe(true);
+    expect((el("ctxOpen") as HTMLElement).hidden).toBe(true);
+    expect($(".empty__sub")!.textContent).toContain("I'm looking at last_index");
+    expect(el("streakChip").textContent).toBe("streak 3");
+    expect((el("badgesWrap") as HTMLButtonElement).disabled).toBe(false);
+    // The avatar pip is the anonymous call to action; they are signed in now.
+    expect((el("accountPip") as HTMLElement).hidden).toBe(true);
+
+    // --- asks, and climbs --------------------------------------------------
+    post({ type: "userMessage", text: "it crashes on the last item" });
+    expect($(".empty")).toBeNull();
+
+    for (const level of [1, 2]) {
+      post({ type: "hint", hint: `rung ${level}`, hint_level: level, concept_tags: ["off-by-one"], mode: "hint" });
+      expect(lastTurn().classList.contains("turn--ask")).toBe(true);
+      expect(lastTurn().querySelectorAll(".rung__bar.is-spent")).toHaveLength(level);
+      expect($$(".avatar__arc.is-on")).toHaveLength(level);
+    }
+
+    // --- asks again without changing anything ------------------------------
+    post({ type: "hint", hint: "what did you try?", hint_level: 0, concept_tags: [], mode: "attempt-gate" });
+    expect(lastTurn().classList.contains("turn--withhold")).toBe(true);
+    expect(lastTurn().querySelector(".rung")!.classList.contains("is-held")).toBe(true);
+    // Held, so the depth has not moved — on the card or on the ring.
+    expect(lastTurn().querySelectorAll(".rung__bar.is-spent")).toHaveLength(2);
+    expect($$(".avatar__arc.is-on")).toHaveLength(2);
+
+    // --- rung 3, and the translation it offers -----------------------------
+    post({ type: "hint", hint: "here is the shape", hint_level: 3, concept_tags: [], mode: "hint" });
+    expect(lastTurn().querySelectorAll(".rung__bar.is-spent")).toHaveLength(3);
+    const action = $(".actions button") as HTMLButtonElement;
+    expect(action.closest(".turn--tutor")).toBe(lastTurn());
+
+    action.click();
+    expect(el("modeLabel").textContent).toBe("read as a translation");
+    expect($(".composer")!.classList.contains("is-producing")).toBe(true);
+    expect(el("send").firstChild!.textContent).toBe("Submit translation");
+
+    // Backs out rather than submitting.
+    document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+    expect(el("modeLabel").textContent).toBe("sent as a question");
+    expect(el("send").firstChild!.textContent).toBe("Ask");
+
+    // --- the worked example, and the end of the ladder ---------------------
+    post({ type: "hint", hint: "1. stop one early", hint_level: 4, concept_tags: [], mode: "worked-example" });
+    expect(lastTurn().classList.contains("turn--show")).toBe(true);
+    expect(lastTurn().querySelector(".rung__read")!.textContent).toBe("deepest help — no rung 5");
+    expect(lastTurn().querySelector(".rung__bar.is-next")).toBeNull();
+    expect($$(".avatar__arc.is-on")).toHaveLength(4);
+
+    // --- and reset ---------------------------------------------------------
+    post({ type: "resetCleared" });
+    // The whole thread goes, and a single "fresh start" card takes its place —
+    // an empty panel would look like the reset had failed.
+    expect($$(".turn")).toHaveLength(1);
+    expect(lastTurn().querySelector(".turn__eyebrow")!.textContent).toBe("Fresh start");
+    expect($(".rung")).toBeNull();
+    expect($$(".avatar__arc.is-on")).toHaveLength(0);
+    expect(el("modeLabel").textContent).toBe("sent as a question");
+    // The context strip and the ledger survive a reset: neither is a
+    // conversation, and both were true a moment ago.
+    expect(el("ctxSymbol").textContent).toBe("last_index");
+    expect(el("streakChip").textContent).toBe("streak 3");
+    expect((el("badgesWrap") as HTMLButtonElement).disabled).toBe(false);
+  });
+
+  it("keeps the panel coherent when the backend dies mid-thread", () => {
+    post({ type: "authState", signedIn: true, label: "Ada", email: "a@u.edu", initials: "A" });
+    post(focus("last_index"));
+    post({ type: "hint", hint: "rung 1", hint_level: 1, concept_tags: [], mode: "hint" });
+
+    post({ type: "offline", value: true });
+    post({ type: "authTrouble", value: true });
+
+    // Two tiers, one live region, stacked in severity order.
+    expect((el("offlineBanner") as HTMLElement).hidden).toBe(false);
+    expect((el("authBanner") as HTMLElement).hidden).toBe(false);
+    expect(el("banners").getAttribute("aria-live")).toBe("polite");
+    // The pip goes danger even though they are signed in, and says why.
+    expect((el("accountPip") as HTMLElement).hidden).toBe(false);
+    expect(el("accountPip").classList.contains("is-danger")).toBe(true);
+
+    // An offline nudge is the tutor withholding, not teaching, and it does
+    // not spend a rung.
+    post({ type: "hint", hint: "hints are local for now", hint_level: 0, concept_tags: [], mode: "offline" });
+    expect(lastTurn().classList.contains("turn--withhold")).toBe(true);
+    expect($$(".avatar__arc.is-on")).toHaveLength(1);
+  });
+});
+
 describe("webview — the composer says how it will read you", () => {
   const MODES = [
     ["hint", "sent as a question", "Ask", "What's going wrong?"],
