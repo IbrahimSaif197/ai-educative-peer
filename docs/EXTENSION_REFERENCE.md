@@ -29,7 +29,7 @@ symbol name as authoritative and the number as a hint.
 | --- | --- |
 | Commit | `f46122b7ee7d5fb2933cca5202d9693a6acb485f` (`f46122b`, 2026-08-19) |
 | Branch | `main` |
-| Extension version | 1.6.0 (`extension/package.json:5`) — unbumped; the panel redesign sits under `## Unreleased` |
+| Extension version | 1.7.0 (`extension/package.json:5`) — the panel redesign |
 | Publisher / id | `edupeer` / `edupeer.edupeer` |
 | Licence | GPL-3.0-or-later |
 | Engine floor | VS Code `^1.85.0` (`package.json:21-23`) |
@@ -58,20 +58,28 @@ Produced by running `npx jest --coverage` at this snapshot, not estimated.
 | Metric | Value |
 | --- | --- |
 | Test suites | 26 passed, 26 total |
-| Tests | **925 passed, 925 total** |
-| Statements | **91.91%** |
-| Branches | 82.92% |
-| Functions | 90.31% |
-| Lines | **93.30%** |
+| Tests | **1,007 passed, 1,007 total** |
+| Statements | **91.00%** |
+| Branches | 81.78% |
+| Functions | 89.86% |
+| Lines | **92.41%** |
 
 `media/main.js` and `media/markdown.js` are excluded from the percentage:
 `webviewMain.test.ts` loads them through `new Function`, which istanbul cannot
 instrument (`jest.config.js:8-10`). They are behaviourally covered by
-117 + 37 = 154 tests that contribute no percentage.
+180 + 37 = 217 tests that contribute no percentage — a third of the suite, and
+the third that grew most in the redesign.
+
+The statement percentage fell 0.9 points across the redesign while the test
+count rose by 82. That is the shape you would expect: the tickets added
+TypeScript in `sidebarProvider.getHtml` and `inlineTutor`, but most of the new
+*behaviour* went into `media/main.js`, which contributes tests and no
+percentage.
 
 Lowest-covered modules, and why: `testWatcher.ts` 40.47% (the shell-integration
 callbacks need a host API the mock does not model) and `extension.ts` 78.12%
 (the `activate()` command bodies are exercised through their collaborators).
+`progressPanel.ts` is at 100%.
 
 ---
 
@@ -202,7 +210,7 @@ code in them.
 
 ## 5. Contributed surface
 
-### 5.1 Commands — seventeen
+### 5.1 Commands — eighteen
 
 Declared at `package.json:59-128`. Registration site in `extension.ts` unless
 noted.
@@ -226,21 +234,28 @@ noted.
 | `edupeer.signOut` | EduPeer: Sign Out | `extension.ts:403` | yes | — |
 | `edupeer.deepenLine` | EduPeer: Go Deeper on This Line | `inlineTutor.ts:258` | **hidden** | — |
 | `edupeer.dismissLine` | EduPeer: Dismiss This Line Hint | `inlineTutor.ts:246` | **hidden** | — |
+| `edupeer.pickDefinition` | EduPeer: Ask About a Definition | `inlineTutor.ts`, beside `deepenLine` | **hidden** | — |
 
 "lang" is the regex
 `resourceLangId =~ /^(python|javascript|typescript|java|c|cpp|csharp|go|rust|sql)$/`
 (`package.json:130-165`). Seven commands are on the editor context menu, all in
 group `edupeer`.
 
-Three commands are hidden from the palette via `commandPalette` `when: "false"`
-(`package.json:167-180`) because each takes arguments and is only ever invoked
-programmatically:
+Four commands are hidden from the palette via `commandPalette` `when: "false"`
+because each takes arguments and is only ever invoked programmatically:
 
 - `edupeer.discussLines(uri, startLine, endLine, question?)` — from the Quick
-  Fix on an EduPeer diagnostic (`inlineTutor.ts:850-854`) and from
-  `deepenLine` (`inlineTutor.ts:266-272`).
+  Fix on an EduPeer diagnostic and from `deepenLine`.
 - `edupeer.deepenLine(uri, line)` / `edupeer.dismissLine(uri, line)` — sibling
-  CodeLenses rendered beside a `ready` lens (`inlineTutor.ts:772-783`).
+  CodeLenses rendered beside a `ready` lens.
+- `edupeer.pickDefinition(uri)` — the file-level lens on line 1, shown only
+  when a file has more definitions than the eight the gutter will carry. It
+  opens a quick pick over all of them and routes the chosen one into
+  `nudgeLine`.
+
+The command-set itself is pinned: `extension.test.ts`'s "registers no commands
+beyond the expected set" compares the registry against a literal list, so a
+new command has to be declared in three places or the suite says so.
 
 **Keybinding**: one. `edupeer.nudgeLine` on `ctrl+alt+h` / `cmd+alt+h`, when
 `editorTextFocus` and the language matches (`package.json:182-189`).
@@ -1167,7 +1182,12 @@ An `after` decoration on the **active line only** — 2 rem margin, italic,
 > a real line hint → a scan flag → a local rule
 
 `hint.local` is what lets a real hint and a local rule share one map in the
-store without losing that ordering (`inlineTutor.ts:510-517`).
+store without losing that ordering.
+
+The text is the hint or `flagLabel(flag)` — bare, with no glyph and no
+"EduPeer" prefix. The prefix exists so the *lens column* scans as one product;
+ghost text is already sitting against the line it is about, in EduPeer's own
+decoration style, and end-of-line is the tightest space the extension has.
 
 The function **clears the decoration on every other visible editor first**
 (`inlineTutor.ts:488-492`). Decorations are per-editor, so a split view kept
@@ -1195,7 +1215,9 @@ in `securityInvariants.test.ts` pin this.
 Collection name `"edupeer"` (`inlineTutor.ts:142`). One `Diagnostic` per flag
 (`inlineTutor.ts:717-730`):
 
-- message `{emoji} {question}`
+- message `flagLabel(flag)` — `style: {question}` for a style flag, the bare
+  question otherwise. No glyph: `source` is the field that says who is talking,
+  and the Problems panel already renders it
 - severity `Warning` when `flag.severity === "warning"`, else `Information`
 - `source = "EduPeer"`, `code = flag.concept`
 - range from `flagRange` (`inlineTutor.ts:707`), clamped into the document
@@ -1301,6 +1323,10 @@ Eleven (`pedagogy.ts:6-17`): `hint`, `reflect`, `translate`, `worked-example`,
 The panel adds four **display-only** pseudo-modes that never reach the wire:
 `attempt-gate`, `rate-limited`, `offline`, `waking`.
 
+Eleven plus four is the fifteen the panel's `FAMILY` table and `FLAGGED_MODES`
+between them classify, and `webviewMain.test.ts` asserts that every one of the
+fifteen lands on exactly one family class — not zero, and not two.
+
 ### 13.2 The hint ladder
 
 `MAX_HINT_LEVEL = 4` (`pedagogy.ts:33`). Rungs 1–3 are the Socratic ladder;
@@ -1312,6 +1338,24 @@ service share no build step — but it is not left to memory:
 Everything client-side that renders or clamps a depth reads this constant
 rather than a literal; a bare `3` in the status bar is what left it saying
 "hint 3/3" beside a panel showing four filled rungs.
+
+**How the panel draws it.** Four bars of increasing height (`.rung__bar`,
+`data-rung="1".."4"`), spent up to the current depth and coloured from a ramp
+that ends in mint rather than continuing the coral — rung 4 differs in kind,
+not degree, so the ramp says so. The next bar is outlined rather than filled,
+which is what "the next rung costs an attempt" looks like; the fourth is dashed
+until reached. Height carries the depth, so it reads without counting.
+
+The same ramp lights the avatar ring (`.avatar__arc:nth-of-type(n)`) and the
+"how deep you went" bar on the progress dashboard, so the always-visible
+readout, the card and the report agree.
+
+**Held.** When the gate refuses, the refusal card carries *its own* meter at
+the unmoved depth, with an amber bracket on the current bar. The bracket is a
+resting `box-shadow`, not a keyframe: three consecutive gates each look held,
+and reduced motion loses nothing. It used to be an animation replayed by
+forcing a reflow on the *previous* card, which meant only the most recent
+refusal was ever visible and reduced motion showed none of them.
 
 ### 13.3 The attempt gate (`attemptTracker.ts`)
 
@@ -1426,12 +1470,26 @@ all**, so `default-src 'none'` denies every script (`progressPanel.ts:160`).
 
 Charts are hand-written SVG: no library, no network, and geometry lives in
 element **attributes** rather than style attributes so it runs under that CSP.
-Colour comes from VS Code chart tokens, and **every series is also labelled in
-text** — hue never carries meaning on its own.
+**Every series is also labelled in text** — hue never carries meaning on its
+own.
+
+Colour comes from the panel's own token layer rather than the workbench chart
+palette, and the dashboard carries the same four skins, keyed off the same
+`vscode-*` body class. "How deep you went" uses the same four-value rung ramp
+as the card meter, ending in mint, which is what lets it read without its
+legend — the legend is there anyway, for the reason above. The one thing it
+does not borrow is the bundled faces: its CSP has no `font-src` and the panel
+is created without `localResourceRoots`, so `--display` falls through to the
+workbench face.
 
 Sections: four stat tiles (questions, sessions, streak, languages), an optional
 review banner, hint-depth distribution, a 14-day activity strip, concepts to
 revisit, strengths, goal, badges, session notes.
+
+`LEVEL_BLURBS` names what each rung actually gave the student. Rung 3's read
+"needed pseudocode" until 1.7.0, which was the Socratic prompt's *old rule*
+rather than its goal — the prompt asks for a skeleton with the answer punched
+out of it now, and pseudocode was only ever one way to produce that.
 
 `conceptBars` scales against `MAX_HINT_LEVEL`, not 3 (`progressPanel.ts:32`):
 the backend counts rung-4 hints, so an average above 3 is ordinary, and scaling
@@ -1596,8 +1654,14 @@ tests. Coverage collects from `src/**/*.ts` only.
 `.vscodeignore` excludes `src/`, `node_modules/`, source maps, compiled tests
 and mocks, `tsconfig.json`, `jest.config.js` and `coverage/`.
 
-Five built archives are checked in: `edupeer-1.3.1.vsix` through
-`edupeer-1.6.0.vsix`.
+Six built archives sit in `extension/`, `edupeer-1.3.1.vsix` through
+`edupeer-1.7.0.vsix` — present in the working tree but **not tracked**:
+`.gitignore` carries `*.vsix`, and `git ls-files` returns none of them. (An
+earlier version of this document said they were checked in. They are not, and
+were not.) The last is 148 KB across 21 files — up from 128 KB,
+almost all of it the redesigned `style.css` (52 KB) and `main.js` (52 KB),
+which ship unminified because they are webview assets rather than bundle
+input. The two bundled woff2 faces are 50 KB of the total and always were.
 
 **Publishing** is done by uploading the built `.vsix` at
 `marketplace.visualstudio.com/manage`, not with `vsce publish`.
@@ -1606,16 +1670,18 @@ Five built archives are checked in: `edupeer-1.3.1.vsix` through
 
 ## 19. Test inventory
 
-26 suites, 925 tests, all passing at this snapshot.
+26 suites, 1,007 tests, all passing at this snapshot. The redesign added 82,
+almost all of them in `webviewMain.test.ts`, which is where the behaviour it
+added lives.
 
 | Suite | Tests | Lines | Covers |
 | --- | --- | --- | --- |
-| `sidebarProvider.test.ts` | 121 | 2350 | Threads, `handleAsk`, focus, exercises, failure tiers |
-| `webviewMain.test.ts` | 117 | 1279 | `media/main.js` end to end (22 describes) |
-| `inlineTutor.test.ts` | 98 | 1675 | Lens, hover, scan, decorations, marker removal |
+| `webviewMain.test.ts` | 180 | 2096 | `media/main.js` end to end (28 describes), including one that walks a whole session |
+| `sidebarProvider.test.ts` | 135 | 2487 | Threads, `handleAsk`, focus, exercises, failure tiers |
+| `inlineTutor.test.ts` | 103 | 1753 | Lens, hover, scan, decorations, marker removal, the eight-lens cap |
 | `attemptTracker.test.ts` | 81 | 366 | The gate, diffing, give-up and answer-request lists |
 | `apiClient.test.ts` | 47 | 660 | Endpoints, errors, timeouts, mode downgrade |
-| `extension.test.ts` | 40 | 600 | Activation, command registration, wiring |
+| `extension.test.ts` | 40 | 601 | Activation, command registration, wiring |
 | `markdown.test.ts` | 37 | 282 | `media/markdown.js` |
 | `codeDigest.test.ts` | 36 | 530 | Band selection and budget arithmetic |
 | `pedagogy.test.ts` | 34 | 198 | Modes, framing, **and the `MAX_HINT_LEVEL` cross-check** |
@@ -1671,11 +1737,30 @@ Facts about the current tree, not recommendations.
    be treated as a comment.
 8. **`testWatcher.ts` is 40% covered**, the lowest in the tree, because its
    callbacks need a host API the mock does not model.
-9. **The panel does not follow the VS Code colour theme**, including the
-   high-contrast themes — a deliberate 1.3.0 decision recorded in the
-   changelog, and a genuine accessibility cost.
+9. *(Closed 2026-08-19.)* The panel did not follow the VS Code colour theme,
+   including the high-contrast themes — a deliberate 1.3.0 decision recorded
+   in the changelog, and a genuine accessibility cost. It now re-points its
+   token layer from the `vscode-light` / `vscode-high-contrast` /
+   `vscode-high-contrast-light` class VS Code puts on `<body>`, keeping the
+   brand in all four skins. Nothing past the `:root` block is skin-aware.
 10. **`extension.ts` and `package.json` each declare the default backend URL.**
     Kept in step by a comment, not by a test.
+11. **The banner exit is timed, not event-driven.** `setBanner` hides on a
+    160 ms `setTimeout` rather than `animationend`, because that event does not
+    fire for a webview hidden mid-animation and a banner that never hides is
+    worse than one that hides abruptly. The timer and the CSS duration are kept
+    in step by hand.
+12. **`--e2` and `--s8` are declared and unused.** Both came in with the
+    redesign's token layer; the elevation scale is deliberately near-unused
+    (only the popover and the badge sheet float at all).
+13. **The composer has no "Sending…" verb.** The component spec lists it as a
+    per-mode state; the thinking row directly above already says "EduPeer is
+    thinking…", so a third copy of the same fact was left out.
+14. **The redesign's own preview is a paint check, not a render.**
+    `docs/mockups/make-preview.py` lifts the markup from `getHtml()` and points
+    it at the real stylesheet, but runs no script — so it shows the chrome and
+    never a card. It exits non-zero when a substitution stops matching, which
+    is what keeps it honest.
 
 ---
 
@@ -1688,10 +1773,11 @@ can be reconciled; none of these is a code defect.
 ### 21.1 `docs/SYSTEM_REFERENCE.md` §14
 
 That section carries its own staleness banner dated 2026-08-09 and is accurate
-about being wrong. Concretely, against 1.6.0:
+about being wrong. Concretely, against 1.7.0:
 
-- **Commands: says fifteen, there are seventeen.** `edupeer.deepenLine` and
-  `edupeer.dismissLine` are missing, and both are hidden from the palette.
+- **Commands: says fifteen, there are eighteen.** `edupeer.deepenLine`,
+  `edupeer.dismissLine` and `edupeer.pickDefinition` are missing, and all three
+  are hidden from the palette.
 - **`edupeer.scanFile` is titled "EduPeer: Scan File for Issues"**; it is
   "EduPeer: Scan This Block", and it scans the focus block, not the file.
 - **Activation events: says `["onStartupFinished"]`**; `onUri` was added for
@@ -1720,13 +1806,16 @@ about being wrong. Concretely, against 1.6.0:
   those add `codeDigest.ts`, `documentDigest.ts` and `bugMarkers.ts`, which
   postdate it.
 - **Counts**: it reports 16 source modules / 3,843 source lines / 21 test files
-  / 5,307 test lines, and 89.45% statement coverage. Current: 22 / 6,364 /
-  26 / 11,354, and 91.91%.
+  / 5,307 test lines, and 89.45% statement coverage. Current: 22 / 6,855 /
+  26 / 12,230, and 91.00%.
+- **Everything it says about the panel's structure** is superseded by the
+  2026-08-19 redesign; its own banner now carries a section listing what
+  moved.
 
 ### 21.2 `README.md` (repository root)
 
 - **Command table lists 14** and mentions `discussLines` in prose (15). Missing
-  `edupeer.deepenLine` and `edupeer.dismissLine`.
+  `edupeer.deepenLine`, `edupeer.dismissLine` and `edupeer.pickDefinition`.
 - **`edupeer.scanFile` described as "Scan the open file"** — it is per block,
   and retitled.
 - **`edupeer.signIn` described as "sign in with Google, GitHub, or email"** —
@@ -1737,10 +1826,18 @@ about being wrong. Concretely, against 1.6.0:
 
 ### 21.3 `extension/README.md` (the Marketplace page)
 
+This is the page a student sees before installing, and 1.7.0 changed enough of
+what it describes that it is the most out-of-date of the three.
+
 - **Settings table lists four**; `edupeer.lensMode` and
-  `edupeer.removeFixedBugComments` are missing.
+  `edupeer.removeFixedBugComments` are missing — and `lensMode`'s values are
+  `"top8"`/`"flagged"` now, not `"all"`/`"flagged"`.
 - **Command table lists 12**; `signIn`/`signOut` appear only in prose, and
-  `deepenLine`, `dismissLine`, `discussLines` are absent.
+  `deepenLine`, `dismissLine`, `discussLines`, `pickDefinition` are absent.
+- **Any screenshot or description of the panel** predates the redesign: the
+  streak chip and badges are in a footer ledger now, the code preview is a
+  collapsed disclosure, the hint dots are a bar meter, and the panel follows
+  the workbench theme in four skins rather than being dark always.
 - **"The **Get started with EduPeer** walkthrough opens automatically on first
   run."** Nothing in `src/` opens it — `grep -rn walkthrough extension/src`
   returns nothing. VS Code surfaces it on the Welcome page.
@@ -1763,16 +1860,29 @@ about being wrong. Concretely, against 1.6.0:
 | What "the current block" means | `focusScope.ts`, then `blockHeuristics.ts` |
 | The conversation, threads, or the ask path | `sidebarProvider.ts` |
 | Anything drawn in the editor | `inlineTutor.ts` + `annotationStore.ts` |
-| The panel's DOM or composer | `media/main.js` (+ `style.css`) |
+| The panel's DOM or composer | `media/main.js` (+ `style.css`); the markup itself is a template literal in `sidebarProvider.getHtml` |
+| A colour, a size, a radius, a skin | the `:root` block and the three `body.vscode-*` blocks at the top of `style.css`. Nothing below them is skin-aware, so a value is changed in one place |
+| How a card is drawn | the `FAMILY` table in `main.js`, then `.turn--ask` / `--show` / `--tell` / `--withhold`. Never per mode |
+| What the composer says in a mode | the `COMPOSER` table in `main.js` — strip, placeholder and verb together, so they cannot drift |
 | Hint depth, modes, prompt framing | `pedagogy.ts` |
 | When a hint gets deeper | `attemptTracker.ts` |
 | HTTP, streaming, retries, error classes | `apiClient.ts` |
 | Sign-in, tokens, migration | `authManager.ts` + `signInFlow.ts` |
 | A new language | `languages.ts` (and `backend/languages.py`, which must agree) |
-| A new command | `package.json` `contributes.commands` **and** a registration site |
+| A new command | `package.json` `contributes.commands`, a registration site, **and** `EXPECTED_COMMANDS` in `extension.test.ts`, which pins the set |
 | The dashboard | `progressPanel.ts` |
 | The offline experience | `localTutor.ts` + `offlineQueue.ts` |
 
 Before editing anything that reaches the network, read
 `src/__tests__/auditRegressions.test.ts:472-637` — it will tell you what the
-change is allowed to look like.
+change is allowed to look like. In particular a bare `getText()` in a sender
+module fails that scan by design, so code needing whole-document text has to
+go through the chokepoint or be rewritten to read line numbers instead.
+
+For the panel, `webviewMain.test.ts`'s "a whole session holds together" is the
+fastest way to see the pieces working as one: it walks cold start → sign-in →
+open a file → three rungs → a gate → the translation offer → the worked
+example → reset, and asserts the meter, the families, the context strip, the
+composer strip and the ledger all agree at each step. And
+`docs/mockups/make-preview.py` will show you the chrome in a browser, against
+the real stylesheet.
