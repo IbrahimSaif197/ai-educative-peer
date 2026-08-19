@@ -105,8 +105,8 @@ describe("startup", () => {
     expect(el("codeSnippet").textContent).toContain("No file open");
   });
 
-  it("shows no hint ladder until a hint arrives", () => {
-    expect($(".ladder")).toBeNull();
+  it("shows no rung meter until a hint arrives", () => {
+    expect($(".rung")).toBeNull();
   });
 });
 
@@ -349,19 +349,40 @@ describe("the code preview", () => {
 });
 
 describe("rendering a hint", () => {
-  it("labels the depth on the ladder, not in the eyebrow", () => {
+  it("names the stance in the eyebrow and the depth on the meter", () => {
     post({ type: "hint", hint: "Think about the bound.", hint_level: 2, concept_tags: [], mode: "hint" });
-    // The eyebrow is redundant with the ladder label now, so hint turns carry
-    // no eyebrow at all — the depth is stated once, where the dots are.
-    expect(lastTurn().querySelector(".turn__eyebrow")).toBeNull();
-    expect(lastTurn().querySelector(".ladder__label")!.textContent).toBe("hint 2");
+    // Two different facts, on one head row. The eyebrow used to be dropped on
+    // hint cards because the old label beside it already read "hint 2"; the
+    // meter reads out a depth rather than a mode, so they no longer collide.
+    const head = lastTurn().querySelector(".turn__head")!;
+    expect(head.querySelector(".turn__eyebrow")!.textContent).toBe("Asking");
+    expect(head.querySelector(".rung")).not.toBeNull();
+    expect(lastTurn().querySelector(".rung__read")!.textContent).toBe(
+      "rung 2 of 4 · next costs an attempt"
+    );
+    expect(lastTurn().querySelector(".rung__short")!.textContent).toBe("2/4");
   });
 
-  it("fills the ladder up to the current depth", () => {
+  it("spends the bars up to the current depth and outlines the next one", () => {
     post({ type: "hint", hint: "h", hint_level: 2, concept_tags: [], mode: "hint" });
-    const on = $$(".ladder__dot.is-on");
-    expect(on).toHaveLength(2);
-    expect($(".ladder")).not.toBeNull();
+    expect($(".rung")).not.toBeNull();
+    expect($$(".rung__bar.is-spent")).toHaveLength(2);
+    // Which bar is current, and which one the next ask would cost.
+    expect($(".rung__bar.is-current")!.getAttribute("data-rung")).toBe("2");
+    expect($(".rung__bar.is-next")!.getAttribute("data-rung")).toBe("3");
+  });
+
+  it("says the whole depth in one sentence, for a screen reader", () => {
+    post({ type: "hint", hint: "h", hint_level: 2, concept_tags: [], mode: "hint" });
+    // Announced once, as a fact about depth — not four unlabelled graphics,
+    // and not the visible line read token by token, which is why both visible
+    // readings are aria-hidden.
+    expect($(".rung .visually-hidden")!.textContent).toBe(
+      "Hint depth: rung 2 of 4. One rung remains before the worked example. " +
+        "The next rung costs an attempt."
+    );
+    expect($(".rung__bars")!.getAttribute("aria-hidden")).toBe("true");
+    expect($(".rung__read")!.getAttribute("aria-hidden")).toBe("true");
   });
 
   it("renders concept tags", () => {
@@ -405,27 +426,35 @@ describe("rendering a hint", () => {
 });
 
 describe("the fourth rung", () => {
-  it("renders four dots on the ladder", () => {
+  it("renders four bars whatever the depth, so the remaining ones are visible", () => {
     post({ type: "hint", hint: "h", hint_level: 1, concept_tags: [], mode: "hint" });
-    expect(document.querySelectorAll(".ladder__dot").length).toBe(4);
+    expect(document.querySelectorAll(".rung__bar").length).toBe(4);
+    // The last one is always marked final: dashed mint until reached, because
+    // rung 4 is a worked example rather than another question.
+    expect($(".rung__bar.is-final")!.getAttribute("data-rung")).toBe("4");
   });
 
-  it("fills all four at level four", () => {
+  it("spends all four at level four, with nothing left to offer", () => {
     post({ type: "hint", hint: "h", hint_level: 4, concept_tags: [], mode: "worked-example" });
-    expect(document.querySelectorAll(".ladder__dot.is-on").length).toBe(4);
+    expect(document.querySelectorAll(".rung__bar.is-spent").length).toBe(4);
+    expect($(".rung__bar.is-next")).toBeNull();
+    expect($(".rung__read")!.textContent).toBe("deepest help — no rung 5");
   });
 
-  it("keeps the ladder on a level-four worked example", () => {
+  it("keeps the meter on a level-four worked example", () => {
     // It arrives as mode "worked-example", but it is still rung four - the
     // student needs to see they have reached the end of the ladder.
     post({ type: "hint", hint: "1. do a thing", hint_level: 4, concept_tags: [], mode: "worked-example" });
-    expect(document.querySelector(".ladder")).not.toBeNull();
+    expect(document.querySelector(".rung")).not.toBeNull();
     expect(document.querySelector(".turn__eyebrow")?.textContent).toBe("Worked example");
+    expect($(".rung .visually-hidden")!.textContent).toBe(
+      "Hint depth: rung 4 of 4. This is the worked example — the deepest help there is."
+    );
   });
 
-  it("shows no ladder on an answer card", () => {
+  it("shows no meter on an answer card", () => {
     post({ type: "hint", hint: "Line 11 should be...", hint_level: 1, concept_tags: [], mode: "answer" });
-    expect(document.querySelector(".ladder")).toBeNull();
+    expect(document.querySelector(".rung")).toBeNull();
     expect(document.querySelector(".turn__eyebrow")?.textContent).toBe("Answer");
   });
 
@@ -438,25 +467,43 @@ describe("the fourth rung", () => {
 });
 
 describe("modes that withhold", () => {
-  it("flags the attempt gate and leaves the ladder at its prior depth", () => {
+  it("holds the attempt gate at its prior depth, on the gate's own meter", () => {
     post({ type: "hint", hint: "h", hint_level: 1, concept_tags: [], mode: "hint" });
     post({ type: "hint", hint: "not yet", hint_level: 0, concept_tags: [], mode: "attempt-gate" });
-    expect(lastTurn().classList.contains("is-flagged")).toBe(true);
-    // The gate turn carries no ladder of its own, so the only depth reading
-    // on screen is still the earlier hint's — the level is neither reset nor
-    // advanced by the gate. That refusal is not silent, though: the earlier
-    // ladder picks up an `is-held` class (see "marks the ladder held when
-    // the tutor refuses to go deeper" below), the same signal the old
-    // composer stepper gave.
-    expect(lastTurn().querySelector(".ladder")).toBeNull();
-    const ladders = $$(".ladder");
-    expect(ladders).toHaveLength(1);
-    expect(ladders[0].querySelectorAll(".ladder__dot.is-on")).toHaveLength(1);
+    expect(lastTurn().classList.contains("turn--withhold")).toBe(true);
+    // The gate carries its own meter, at the depth the thread is actually at:
+    // a refusal neither resets the level nor advances it. It used to reach
+    // backwards into the previous card and force a reflow to replay a nudge,
+    // which left consecutive gates silent and reduced motion with no signal
+    // at all. The bracket is a resting style now, so a held card looks held.
+    const meter = lastTurn().querySelector(".rung")!;
+    expect(meter).not.toBeNull();
+    expect(meter.classList.contains("is-held")).toBe(true);
+    expect(meter.querySelectorAll(".rung__bar.is-spent")).toHaveLength(1);
+    expect(meter.querySelector(".rung__read")!.textContent).toBe("rung 1 of 4 · held");
+    expect(meter.querySelector(".visually-hidden")!.textContent).toContain(
+      "Held at rung 1 — edit your code or explain your reasoning to go deeper."
+    );
+    // Both meters are on screen: the hint's, and the gate's held copy.
+    expect($$(".rung")).toHaveLength(2);
+  });
+
+  it("gives three consecutive gates three held meters, not one animation", () => {
+    post({ type: "hint", hint: "h", hint_level: 2, concept_tags: [], mode: "hint" });
+    for (let i = 0; i < 3; i++) {
+      post({ type: "hint", hint: "not yet", hint_level: 0, concept_tags: [], mode: "attempt-gate" });
+    }
+    const held = $$(".rung.is-held");
+    expect(held).toHaveLength(3);
+    // Each reports the same unmoved depth, because a refusal spends no rung.
+    for (const meter of held) {
+      expect(meter.querySelectorAll(".rung__bar.is-spent")).toHaveLength(2);
+    }
   });
 
   it("flags a rate-limited reply", () => {
     post({ type: "hint", hint: "slow down", hint_level: 0, concept_tags: [], mode: "rate-limited" });
-    expect(lastTurn().classList.contains("is-flagged")).toBe(true);
+    expect(lastTurn().classList.contains("turn--withhold")).toBe(true);
     expect(lastTurn().querySelector(".turn__eyebrow")!.textContent).toBe("Slow down");
   });
 
@@ -910,10 +957,10 @@ describe("errors and reset", () => {
     expect(turns()).toHaveLength(1);
   });
 
-  it("resets the ladder", () => {
+  it("resets the meter", () => {
     post({ type: "hint", hint: "h", hint_level: 3, concept_tags: [], mode: "hint" });
     post({ type: "resetCleared" });
-    expect($(".ladder")).toBeNull();
+    expect($(".rung")).toBeNull();
   });
 
   it("disables Reset while the reset is in flight", () => {
@@ -1361,34 +1408,128 @@ describe("webview — signed-out state", () => {
 // no `dom` handle to destructure. `post`/`$`/`$$` already drive and read the
 // one jsdom `document` every test in this file shares, reset by `load()` in
 // `beforeEach`.
-describe("webview — the hint ladder lives in the card", () => {
-  it("renders one dot per level, filled up to the current one", () => {
-    post({ type: "hint", hint: "why is it empty?", hint_level: 2, concept_tags: [], mode: "hint" });
+/**
+ * Fifteen modes, four families.
+ *
+ * The taxonomy only pays for itself if it is total: a mode that falls through
+ * lands unstyled, and a mode in two families is drawn twice. Both are caught
+ * here rather than by looking at one card at a time.
+ */
+describe("webview — every mode lands in exactly one card family", () => {
+  const FAMILIES = ["turn--ask", "turn--show", "turn--tell", "turn--withhold"];
 
-    const dots = $$(".turn--tutor .ladder__dot");
-    expect(dots).toHaveLength(4);
-    expect($$(".turn--tutor .ladder__dot.is-on")).toHaveLength(2);
+  const EXPECTED: Record<string, string> = {
+    // A — asking. The body is a question.
+    hint: "turn--ask",
+    reflect: "turn--ask",
+    "predict-output": "turn--ask",
+    "trace-check": "turn--ask",
+    "review-exercise": "turn--ask",
+    // B — showing. The family that owns the code block.
+    "worked-example": "turn--show",
+    translate: "turn--show",
+    "subgoal-label": "turn--show",
+    "explain-concept": "turn--show",
+    "explain-error": "turn--show",
+    // C — telling. The end of a thread by construction.
+    answer: "turn--tell",
+    // D — withholding. FLAGGED_MODES, unchanged, is the lookup.
+    "attempt-gate": "turn--withhold",
+    "rate-limited": "turn--withhold",
+    offline: "turn--withhold",
+    waking: "turn--withhold",
+  };
+
+  it("covers all fifteen modes", () => {
+    expect(Object.keys(EXPECTED)).toHaveLength(15);
   });
 
-  it("labels the card with the level", () => {
+  for (const [mode, family] of Object.entries(EXPECTED)) {
+    it(`draws ${mode} as ${family}`, () => {
+      post({ type: "hint", hint: "h", hint_level: 1, concept_tags: [], mode });
+
+      const classes = FAMILIES.filter((f) => lastTurn().classList.contains(f));
+      expect(classes).toEqual([family]);
+    });
+  }
+
+  it("classifies an unknown mode rather than leaving it bare", () => {
+    // A mode the backend adds before the panel knows about it still has to be
+    // drawn as something. Asking is the safe default: it is the stance that
+    // gives the least away.
+    post({ type: "hint", hint: "h", hint_level: 0, concept_tags: [], mode: "some-new-mode" });
+
+    expect(lastTurn().classList.contains("turn--ask")).toBe(true);
+  });
+
+  it("still classifies a transcript persisted before families existed", () => {
+    // Pre-1.7 turns carry `flagged`, not `family`. Restoring one has to reach
+    // the same treatment, or a student's saved thread comes back unstyled.
+    post({
+      type: "restoreChat",
+      messages: [
+        { role: "tutor", text: "not yet", eyebrow: "Same depth", level: 0, flagged: true },
+        { role: "tutor", text: "why is it empty?", eyebrow: undefined, level: 1, flagged: false },
+      ],
+    });
+
+    const cards = $$(".turn--tutor");
+    expect(cards[0].classList.contains("turn--withhold")).toBe(true);
+    expect(cards[1].classList.contains("turn--ask")).toBe(true);
+  });
+
+  it("puts an action row inside the card it acts on", () => {
+    // As a sibling with a left pad it sat between the card and the composer
+    // and read as the composer's, and a screen reader reached it only after
+    // leaving the card. Inside, it is in reading order.
     post({ type: "hint", hint: "h", hint_level: 3, concept_tags: [], mode: "hint" });
 
-    expect($(".turn--tutor .ladder__label")!.textContent).toBe("hint 3");
+    const row = $(".actions")!;
+    expect(row).not.toBeNull();
+    expect(row.closest(".turn--tutor")).toBe(lastTurn());
+    expect(row.parentElement).toBe(lastTurn());
   });
 
-  it("gives a non-hint turn no ladder", () => {
+  it("gives the student's own words no family at all", () => {
+    // Families describe the tutor's stance. The student is not taking one.
+    post({
+      type: "restoreChat",
+      messages: [{ role: "student", text: "it crashes on the last item", level: 0 }],
+    });
+
+    const student = $(".turn--student")!;
+    expect(student).not.toBeNull();
+    expect(FAMILIES.some((f) => student.classList.contains(f))).toBe(false);
+  });
+});
+
+describe("webview — the rung meter lives in the card", () => {
+  it("renders one bar per rung, spent up to the current one", () => {
+    post({ type: "hint", hint: "why is it empty?", hint_level: 2, concept_tags: [], mode: "hint" });
+
+    const bars = $$(".turn--tutor .rung__bar");
+    expect(bars).toHaveLength(4);
+    expect($$(".turn--tutor .rung__bar.is-spent")).toHaveLength(2);
+    // Height is depth, so every bar declares which rung it is.
+    expect(bars.map((b) => b.getAttribute("data-rung"))).toEqual(["1", "2", "3", "4"]);
+  });
+
+  it("reads the level out beside the bars", () => {
+    post({ type: "hint", hint: "h", hint_level: 3, concept_tags: [], mode: "hint" });
+
+    expect($(".turn--tutor .rung__read")!.textContent).toBe(
+      "rung 3 of 4 · next costs an attempt"
+    );
+    expect($(".turn--tutor .rung .visually-hidden")!.textContent).toBe(
+      "Hint depth: rung 3 of 4. The next rung is the worked example. " +
+        "The next rung costs an attempt."
+    );
+  });
+
+  it("gives a non-hint turn no meter", () => {
     post({ type: "hint", hint: "nice work", hint_level: 0, concept_tags: [], mode: "reflect" });
 
-    expect($(".ladder")).toBeNull();
-  });
-
-  it("marks the ladder held when the tutor refuses to go deeper", () => {
-    post({ type: "hint", hint: "why empty?", hint_level: 1, concept_tags: [], mode: "hint" });
-    post({ type: "hint", hint: "same depth", hint_level: 0, concept_tags: [], mode: "attempt-gate" });
-
-    const ladders = $$(".ladder");
-    expect(ladders).toHaveLength(1);
-    expect(ladders[0].classList.contains("is-held")).toBe(true);
+    expect($(".rung")).toBeNull();
   });
 
   it("no longer has a stepper above the composer", () => {

@@ -75,6 +75,8 @@
   --rung-2: #FF8366;
   --rung-3: #FF6B4A;
   --rung-4: var(--mint);
+  /* The halo marking which bar is the current one. */
+  --rung-glow: rgba(255, 107, 74, 0.45);
 
   /* Space — a 4px rhythm, with a 32 for section breaks */
   --s1: 2px;
@@ -159,6 +161,7 @@ body.vscode-light {
   --rung-2: #E4633C;
   --rung-3: #D9401A;
   --rung-4: #1C8F80;
+  --rung-glow: rgba(217, 64, 26, 0.35);
   --e1: 0 1px 2px rgba(34, 30, 48, 0.07);
   --e2: 0 6px 16px -6px rgba(34, 30, 48, 0.18);
   --e3: 0 14px 34px rgba(34, 30, 48, 0.2);
@@ -187,6 +190,7 @@ body.vscode-high-contrast {
   --rung-2: #FFB39F;
   --rung-3: #FF9B80;
   --rung-4: #8FF3E5;
+  --rung-glow: #FF9B80;
   --e1: none;
   --e2: none;
   --e3: none;
@@ -215,6 +219,7 @@ body.vscode-high-contrast-light {
   --rung-2: #C4491F;
   --rung-3: #A32B0B;
   --rung-4: #0F5F55;
+  --rung-glow: #A32B0B;
   --e1: none;
   --e2: none;
   --e3: none;
@@ -405,9 +410,13 @@ body {
   transition: stroke var(--t-standard) var(--ease-signature);
 }
 
-.avatar__arc.is-on {
-  stroke: var(--coral);
-}
+/* The ring is the meter, so it takes the meter's ramp — including the mint
+   at the top, which is how the always-visible readout says the same thing
+   the card does about rung 4 being different in kind. */
+.avatar__arc.is-on:nth-of-type(1) { stroke: var(--rung-1); }
+.avatar__arc.is-on:nth-of-type(2) { stroke: var(--rung-2); }
+.avatar__arc.is-on:nth-of-type(3) { stroke: var(--rung-3); }
+.avatar__arc.is-on:nth-of-type(4) { stroke: var(--rung-4); }
 
 .avatar__face {
   width: 18px;
@@ -997,35 +1006,20 @@ body {
   box-shadow: none;
 }
 
-/* Retired by T6, when .turn--withhold takes over the four flagged modes.
-   Kept until then so the flagged treatment survives the gap between the
-   families being defined and being applied. */
-.turn--tutor.is-flagged {
-  border-left-color: var(--warn);
-}
-
 .turn--tutor.is-error {
   border-left-color: var(--danger);
 }
 
 /* Restoring a saved transcript rebuilds every turn in one pass (main.js,
    the "restoreChat" handler), so without this a 20-turn history would fire
-   every card's entrance and every ladder's dot-fill/dot-ring at once — a lot
-   of motion for content the student has already read. main.js marks those
-   turns with `is-restored` only while rebuilding; live turns are untouched
-   and keep animating normally. Specificity ((0,2,0) / (0,4,0) / (0,4,1))
-   beats the unmodified rules above regardless of source order. */
+   every card's entrance and every meter's grow at once — a lot of motion for
+   content the student has already read. main.js marks those turns with
+   `is-restored` only while rebuilding; live turns are untouched and keep
+   animating normally. Specificity ((0,2,0) / (0,4,0)) beats the unmodified
+   rules above regardless of source order. */
 .turn.is-restored,
-.turn.is-restored .ladder__dot.is-on {
+.turn.is-restored .rung__bar.is-spent.is-current {
   animation: none;
-}
-
-.turn.is-restored .ladder__dot.is-on::after {
-  animation: none;
-  /* The ring is purely an animation effect (it has no resting appearance),
-     so with the animation suppressed it would otherwise still render at its
-     `from` keyframe's opacity. Hide it outright. */
-  display: none;
 }
 
 /* The student's own words are the one filled surface, right-aligned. */
@@ -1035,16 +1029,40 @@ body {
   max-width: 88%;
 }
 
+/* The eyebrow and the meter on one line: what the tutor is doing, and how
+   deep it has gone to do it. */
+.turn__head {
+  display: flex;
+  align-items: center;
+  gap: var(--s4);
+  margin-bottom: var(--s4);
+}
+
 .turn__eyebrow {
   font-family: var(--mono);
   font-size: var(--t-micro);
-  letter-spacing: 0.06em;
+  letter-spacing: 0.1em;
   text-transform: uppercase;
   color: var(--muted);
+  flex: none;
 }
 
-.turn--tutor.is-flagged .turn__eyebrow {
-  color: var(--warn);
+/* The eyebrow is the family's name, so it wears the family's hue. Colour is
+   never the only carrier — the word itself changes with the stance. */
+.turn--ask .turn__eyebrow {
+  color: var(--ask);
+}
+
+.turn--show .turn__eyebrow {
+  color: var(--show);
+}
+
+.turn--tell .turn__eyebrow {
+  color: var(--tell);
+}
+
+.turn--withhold .turn__eyebrow {
+  color: var(--withhold);
 }
 
 .turn--tutor.is-error .turn__eyebrow {
@@ -1156,11 +1174,15 @@ body {
 
 /* ------------------------------------------------------------ action rows */
 
+/* Inside the tutor card, under a hairline. The left pad this used to carry
+   was standing in for an attachment it did not have. */
 .actions {
   display: flex;
   flex-wrap: wrap;
   gap: var(--s3);
-  padding-left: var(--s5);
+  margin-top: var(--s4);
+  padding-top: var(--s4);
+  border-top: 1px solid var(--hair);
 }
 
 /* ---------------------------------------------------------- trace exercise */
@@ -1501,10 +1523,10 @@ textarea::placeholder {
     animation: sweep-hold 400ms linear both !important;
   }
 
-  /* The held ladder needs no rule here: `.ladder.is-held .ladder__dot--anchor`
-     is a static ring outside this block, so the refusal is already readable
-     without the nudge. The nudge (`dot-held`) collapses, which is correct —
-     it was the decoration, not the signal. */
+  /* The held ladder needs no rule here: `.rung.is-held .rung__bar.is-current`
+     is a resting box-shadow rather than a keyframe, so the amber bracket is
+     already on screen without anything having to move. That was the point of
+     making it a bracket instead of a nudge. */
 }
 
 /* ----------------------------------------------------------------- signin */
@@ -1529,93 +1551,126 @@ textarea::placeholder {
   color: var(--muted);
 }
 
-/* The signature element: the product's own mechanic, on screen constantly. */
-.ladder {
+/* The signature element: the product's own mechanic, on screen constantly.
+
+   Four bars of increasing height, because height is depth: how far in you
+   are reads without counting anything. Spent bars fill from the ramp; the
+   next one is outlined rather than filled, which is what "the next rung
+   costs something" looks like; the fourth is dashed mint until it is
+   reached, because rung 4 is a worked example rather than another question
+   and so differs in kind, not degree. */
+.rung {
   display: flex;
   align-items: center;
-  gap: var(--s2);
-  margin-bottom: var(--s4);
+  gap: var(--s4);
+  /* Far end of the head row, opposite the eyebrow. */
+  margin-left: auto;
 }
 
-.ladder__label {
-  margin-right: var(--s2);
-  font-family: var(--display);
-  font-size: var(--t-small);
-  font-weight: 700;
+.rung__bars {
+  display: flex;
+  align-items: flex-end;
+  gap: 3px;
+  height: 14px;
+}
+
+.rung__bar {
+  width: 5px;
+  border-radius: 2px;
+  /* How many rungs remain is readable only from the unspent bars, so this is
+     state, not grouping — it needs the 3:1 --line clears (3.16:1 on --card)
+     and --line-soft cannot (1.25:1 on --card). */
+  background: var(--rung-off);
+}
+
+.rung__bar[data-rung="1"] { height: 5px; }
+.rung__bar[data-rung="2"] { height: 8px; }
+.rung__bar[data-rung="3"] { height: 11px; }
+.rung__bar[data-rung="4"] { height: 14px; }
+
+.rung__bar.is-spent[data-rung="1"] { background: var(--rung-1); }
+.rung__bar.is-spent[data-rung="2"] { background: var(--rung-2); }
+.rung__bar.is-spent[data-rung="3"] { background: var(--rung-3); }
+.rung__bar.is-spent[data-rung="4"] { background: var(--rung-4); }
+
+.rung__bar.is-next {
+  background: transparent;
+  border: 1px solid var(--ask);
+}
+
+/* Ordered after .is-next on purpose: at rung 3 the fourth bar is both the
+   next one and the final one, and final wins. It stays dashed mint until it
+   is spent, so the last rung never changes what it is saying. */
+.rung__bar.is-final:not(.is-spent) {
+  background: transparent;
+  border: 1px dashed var(--show);
+}
+
+.rung__bar.is-current {
+  box-shadow: 0 0 0 2px var(--card), 0 0 0 3px var(--rung-glow);
+}
+
+/* Asked again without editing: the meter reports, it does not advance. The
+   bracket is a resting style rather than a keyframe, so it survives reduced
+   motion, and consecutive holds need nothing restarted. */
+.rung.is-held .rung__bar.is-current {
+  box-shadow: 0 0 0 2px var(--card), 0 0 0 4px var(--withhold);
+}
+
+.rung__read,
+.rung__short {
+  font-family: var(--mono);
+  font-size: var(--t-micro);
   color: var(--muted);
 }
 
-.ladder__dot {
-  position: relative;
-  width: 7px;
-  height: 7px;
-  border-radius: var(--radius-pill);
-  /* How many hints remain is readable only from the empty dots, so this is
-     state, not grouping — it needs the 3:1 --line clears (3.16:1 on --card)
-     and --line-soft cannot (1.25:1 on --card). */
-  background: var(--line);
+.rung.is-held .rung__read,
+.rung.is-held .rung__short {
+  color: var(--withhold);
 }
 
-.ladder__dot.is-on {
-  background: var(--coral);
-  animation: dot-fill 220ms var(--ease-signature) both;
-  /* Left to right, 40ms apart: a micro cascade well inside the 200ms budget. */
-  animation-delay: calc(var(--dot-index, 0) * 40ms);
+/* The compact form only exists below 220px; above it the full line shows.
+   Both are aria-hidden — the visually-hidden sentence beside them is what a
+   screen reader reads, and it reads it once. */
+.rung__short {
+  display: none;
 }
 
-.ladder__dot.is-on::after {
-  content: "";
-  position: absolute;
-  inset: -3px;
-  border-radius: var(--radius-pill);
-  border: 1px solid var(--coral);
-  animation: dot-ring 320ms var(--ease-signature) both;
-  animation-delay: calc(var(--dot-index, 0) * 40ms);
-  pointer-events: none;
+@media (max-width: 219px) {
+  .rung__read {
+    display: none;
+  }
+
+  .rung__short {
+    display: inline;
+  }
 }
 
-@keyframes dot-fill {
+/* Under 190px there is nothing left to truncate: the bars carry the depth,
+   the visually-hidden sentence carries the rest. */
+@media (max-width: 189px) {
+  .rung__short {
+    display: none;
+  }
+}
+
+/* The bar just spent grows in, 40ms behind the ones below it. */
+.rung__bar.is-spent.is-current {
+  animation: rung-grow 220ms var(--ease-signature) both;
+}
+
+@keyframes rung-grow {
   from {
-    transform: scale(0.6);
-    background: var(--line);
-  }
-  60% {
-    transform: scale(1.15);
-  }
-  to {
-    transform: scale(1);
-    background: var(--coral);
+    height: 0;
+    opacity: 0.4;
   }
 }
 
-@keyframes dot-ring {
-  from {
-    opacity: 0.9;
-    transform: scale(0.6);
-  }
-  to {
-    opacity: 0;
-    transform: scale(1.6);
-  }
-}
-
-/* Asked again without editing: the ladder reports, it does not advance. */
-.ladder.is-held .ladder__dot.is-on {
-  animation: dot-held var(--t-slow) var(--ease-signature);
-}
-
-/* The animation above is the only signal otherwise — it collapses to
-   nothing under reduced motion, the same defect the sweep has above, and a
-   student who re-asks without editing would get no ladder feedback at all.
-   A static ring on the last filled dot (`.ladder__dot--anchor`, set in
-   main.js) makes the held state readable without relying on movement. */
-.ladder.is-held .ladder__dot--anchor {
-  box-shadow: 0 0 0 2px var(--card), 0 0 0 4px var(--coral);
-}
-
-@keyframes dot-held {
-  50% {
-    transform: scale(1.25);
+@media (prefers-reduced-motion: reduce) {
+  /* Named, not collapsed: the bar simply appears at full height. Its arrival
+     is the signal; the growth was the flourish on it. */
+  .rung__bar.is-spent.is-current {
+    animation: none !important;
   }
 }
 

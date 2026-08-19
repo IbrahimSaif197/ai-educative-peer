@@ -38,8 +38,13 @@
   const DEFAULT_PLACEHOLDER = "Describe your error or ask a question…";
   const MAX_PREVIEW_LINES = 200;
 
-  /** Eyebrow text per tutor move. Hint mode is level-dependent. */
+  /** Eyebrow text per tutor move: what the tutor is doing, in two words. */
   const MODE_LABEL = {
+    // Hint cards used to carry no eyebrow, because the old ladder label read
+    // "hint 2" right beside where "hint" would have gone. The meter that
+    // replaced it reads out a depth, not a mode, so the two no longer say the
+    // same thing and the stance is worth naming.
+    hint: "Asking",
     reflect: "Reflection",
     translate: "Translation check",
     "worked-example": "Worked example",
@@ -58,6 +63,41 @@
 
   /** Modes that are the tutor withholding rather than teaching. */
   const FLAGGED_MODES = new Set(["attempt-gate", "rate-limited", "offline", "waking"]);
+
+  /**
+   * The stance each mode takes, which is what decides how its card is drawn.
+   *
+   * Fifteen modes, four families. The axis is the tutor's stance — is it
+   * asking, showing, telling, or refusing? — because that is the axis the
+   * product is about. A new mode picks a family and inherits a treatment
+   * instead of inventing a sixteenth one, so mode-specific *text* stays a
+   * table (MODE_LABEL above) and mode-specific *styling* stops existing.
+   *
+   * Family D is not listed: FLAGGED_MODES already is that set, and having it
+   * twice is how the two would drift apart.
+   */
+  const FAMILY = {
+    // A — asking. The body is a question and ends in a question mark.
+    hint: "ask",
+    reflect: "ask",
+    "predict-output": "ask",
+    "trace-check": "ask",
+    "review-exercise": "ask",
+    // B — showing. This family owns the code block, the numbered list and the
+    // trace grid: the only places the tutor puts material on screen.
+    "worked-example": "show",
+    translate: "show",
+    "subgoal-label": "show",
+    "explain-concept": "show",
+    "explain-error": "show",
+    // C — telling. One mode, and the end of a thread by construction.
+    answer: "tell",
+  };
+
+  function familyFor(mode) {
+    if (FLAGGED_MODES.has(mode)) return "withhold";
+    return FAMILY[mode] || "ask";
+  }
 
   /** Modes that occupy a rung on the hint ladder, so the card shows its depth. */
   const LADDER_MODES = new Set(["hint", "worked-example"]);
@@ -91,9 +131,8 @@
   // Rendered turns, mirrored to the extension so they survive a reload.
   let turns = [];
   // True only while "restoreChat" is rebuilding a saved transcript — lets
-  // buildTurn() mark those turns so their entrance (and their ladders'
-  // dot-fill/dot-ring) don't all fire at once. See buildTurn() and the
-  // "restoreChat" case below.
+  // buildTurn() mark those turns so their entrance (and every meter's grow)
+  // don't all fire at once. See buildTurn() and the "restoreChat" case below.
   let isRestoring = false;
 
   // ------------------------------------------------------------------ chat
@@ -159,47 +198,119 @@
     else showSignInState();
   }
 
+  /**
+   * The rung meter: four bars of increasing height, spent up to `level`.
+   *
+   * Height is depth, so how far in the student is reads without counting.
+   * The next bar is outlined rather than filled, which is what "the next rung
+   * costs something" looks like, and the fourth stays dashed until it is
+   * reached because rung 4 is a worked example — a different kind of help,
+   * not simply more of it.
+   */
+  function buildRungMeter(level, held) {
+    const meter = document.createElement("div");
+    meter.className = held ? "rung is-held" : "rung";
+
+    const bars = document.createElement("span");
+    bars.className = "rung__bars";
+    bars.setAttribute("aria-hidden", "true");
+    for (let i = 1; i <= MAX_LEVEL; i++) {
+      const bar = document.createElement("span");
+      bar.className = "rung__bar";
+      bar.dataset.rung = String(i);
+      if (i <= level) bar.classList.add("is-spent");
+      if (i === level) bar.classList.add("is-current");
+      if (i === level + 1) bar.classList.add("is-next");
+      if (i === MAX_LEVEL) bar.classList.add("is-final");
+      bars.appendChild(bar);
+    }
+    meter.appendChild(bars);
+
+    // Two visible readings, one for each width the panel is actually used at.
+    // Both are hidden from assistive tech: the sentence below is what gets
+    // announced, so the depth is stated once rather than token by token.
+    const read = document.createElement("span");
+    read.className = "rung__read";
+    read.setAttribute("aria-hidden", "true");
+    read.textContent = rungRead(level, held);
+    meter.appendChild(read);
+
+    const short = document.createElement("span");
+    short.className = "rung__short";
+    short.setAttribute("aria-hidden", "true");
+    short.textContent = held ? `still ${level}/${MAX_LEVEL}` : `${level}/${MAX_LEVEL}`;
+    meter.appendChild(short);
+
+    const spoken = document.createElement("span");
+    spoken.className = "visually-hidden";
+    spoken.textContent = rungLabel(level, held);
+    meter.appendChild(spoken);
+
+    return meter;
+  }
+
+  /** The visible line beside the bars, at any width above 220px. */
+  function rungRead(level, held) {
+    if (held) return `rung ${level} of ${MAX_LEVEL} · held`;
+    if (level >= MAX_LEVEL) return "deepest help — no rung 5";
+    return `rung ${level} of ${MAX_LEVEL} · next costs an attempt`;
+  }
+
+  /**
+   * What a screen reader hears: one sentence, so the meter is announced as a
+   * fact about depth rather than as four unlabelled graphics.
+   */
+  function rungLabel(level, held) {
+    const parts = [`Hint depth: rung ${level} of ${MAX_LEVEL}.`];
+    if (level >= MAX_LEVEL) {
+      parts.push("This is the worked example — the deepest help there is.");
+    } else {
+      const left = MAX_LEVEL - 1 - level;
+      if (left === 0) parts.push("The next rung is the worked example.");
+      else if (left === 1) parts.push("One rung remains before the worked example.");
+      else parts.push(`${left} rungs remain before the worked example.`);
+      parts.push("The next rung costs an attempt.");
+    }
+    if (held) {
+      parts.push(
+        `Held at rung ${level} — edit your code or explain your reasoning to go deeper.`
+      );
+    }
+    return parts.join(" ");
+  }
+
   function buildTurn(turn) {
     dropPlaceholder();
     const wrap = document.createElement("div");
     wrap.className = `turn turn--${turn.role === "student" ? "student" : "tutor"}`;
     if (turn.role === "error") wrap.classList.add("is-error");
-    if (turn.flagged) wrap.classList.add("is-flagged");
+    // One class per family. `turn.flagged` is the pre-1.7 shape: a transcript
+    // persisted by an older build restores through this fallback rather than
+    // coming back unclassified.
+    else if (turn.role !== "student") {
+      wrap.classList.add(`turn--${turn.family || (turn.flagged ? "withhold" : "ask")}`);
+    }
     // A restored transcript rebuilds every turn in one pass; without this,
-    // N cards would fire their entrance (and every ladder its dot-fill and
-    // dot-ring) all at once. Live turns are unaffected — isRestoring is only
-    // ever true while the "restoreChat" handler below is looping.
+    // N cards would fire their entrance and every meter its grow, all at
+    // once. Live turns are unaffected — isRestoring is only ever true while
+    // the "restoreChat" handler below is looping.
     if (isRestoring) wrap.classList.add("is-restored");
 
-    if (turn.eyebrow) {
-      const eyebrow = document.createElement("div");
-      eyebrow.className = "turn__eyebrow";
-      eyebrow.textContent = turn.eyebrow;
-      wrap.appendChild(eyebrow);
-    }
-
-    // The depth belongs with the hint it describes. It used to sit pinned
-    // above the composer, describing a hint that could be several turns up.
-    if (turn.level >= 1) {
-      const ladder = document.createElement("div");
-      ladder.className = "ladder";
-      const label = document.createElement("span");
-      label.className = "ladder__label";
-      label.textContent = `hint ${turn.level}`;
-      ladder.appendChild(label);
-      // Tracked so the held state (below) has a single dot to put its static
-      // ring on: the last filled one, i.e. the current depth.
-      let lastOnDot = null;
-      for (let i = 1; i <= 4; i++) {
-        const dot = document.createElement("span");
-        const on = i <= turn.level;
-        dot.className = on ? "ladder__dot is-on" : "ladder__dot";
-        dot.style.setProperty("--dot-index", String(i - 1));
-        if (on) lastOnDot = dot;
-        ladder.appendChild(dot);
+    // The eyebrow and the meter share one head row, so what the tutor is
+    // doing and how deep it is sit on the same line. The depth belongs with
+    // the hint it describes; it used to be pinned above the composer,
+    // describing a hint that could be several turns up.
+    if (turn.eyebrow || turn.level >= 1) {
+      const head = document.createElement("div");
+      head.className = "turn__head";
+      if (turn.eyebrow) {
+        const eyebrow = document.createElement("div");
+        eyebrow.className = "turn__eyebrow";
+        eyebrow.textContent = turn.eyebrow;
+        head.appendChild(eyebrow);
       }
-      if (lastOnDot) lastOnDot.classList.add("ladder__dot--anchor");
-      wrap.appendChild(ladder);
+      if (turn.level >= 1) head.appendChild(buildRungMeter(turn.level, !!turn.held));
+      wrap.appendChild(head);
     }
 
     const body = document.createElement("div");
@@ -250,6 +361,15 @@
     chatEl.querySelectorAll(".actions").forEach((row) => row.remove());
   }
 
+  /**
+   * Buttons that act on the card above them — "Submit my translation",
+   * "Label the steps".
+   *
+   * They go *inside* that card. As a sibling with a left pad they sat between
+   * the card and the composer and read as belonging to the composer, and a
+   * screen reader reached them after the card had already been left. Inside,
+   * they are in reading order and visibly attached to the thing they act on.
+   */
   function addActionRow(buttons) {
     const row = document.createElement("div");
     row.className = "actions";
@@ -263,7 +383,8 @@
       });
       row.appendChild(btn);
     }
-    chatEl.appendChild(row);
+    const cards = chatEl.querySelectorAll(".turn--tutor");
+    (cards[cards.length - 1] || chatEl).appendChild(row);
     scrollToEnd();
   }
 
@@ -680,28 +801,23 @@
     // or a prediction check is not a rung and must not light one.
     if (LADDER_MODES.has(mode)) setLevel(level);
 
+    // Asked again without editing: the gate card carries its own meter, at the
+    // depth the thread is actually at, with the held bracket on it. It used to
+    // reach backwards into the previous card and force a reflow so the nudge
+    // would replay — which meant three consecutive gates left two cards
+    // silent and one animating, and reduced motion left all three silent. The
+    // bracket is a resting style now, so a card that is held simply looks it.
+    const held = mode === "attempt-gate";
+
     addTurn({
       role: "tutor",
       text: msg.hint,
-      eyebrow: mode === "hint" ? undefined : MODE_LABEL[mode] || mode,
-      level: LADDER_MODES.has(mode) ? level : 0,
+      eyebrow: MODE_LABEL[mode] || mode,
+      level: held ? currentLevel : LADDER_MODES.has(mode) ? level : 0,
+      held,
       tags: msg.concept_tags || [],
-      flagged: FLAGGED_MODES.has(mode),
+      family: familyFor(mode),
     });
-
-    if (mode === "attempt-gate") {
-      // Asked again without editing. The ladder reports that it is holding
-      // rather than advancing — the same signal the old composer stepper gave,
-      // now on the card that owns the depth.
-      const ladders = chatEl.querySelectorAll(".ladder");
-      const last = ladders[ladders.length - 1];
-      if (last) {
-        last.classList.remove("is-held");
-        // Reflow so the animation restarts on consecutive holds.
-        void last.offsetWidth;
-        last.classList.add("is-held");
-      }
-    }
 
     if (mode === "hint" && level === 3) {
       addActionRow([
@@ -1003,8 +1119,8 @@
   // synchronous and local, so this runs on every webview init — sidebar
   // hidden/shown, moved to another container, extension host reload — not
   // just the "restoreChat" round-trip above. Same flag, same reason: without
-  // it every card here would fire its entrance and every ladder would
-  // re-fire dot-fill/dot-ring all at once.
+  // it every card here would fire its entrance and every meter would re-grow
+  // all at once.
   const saved = vscode.getState();
   if (saved && Array.isArray(saved.turns) && saved.turns.length) {
     turns = saved.turns;
