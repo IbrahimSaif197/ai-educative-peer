@@ -6,8 +6,19 @@ import { MAX_HINT_LEVEL } from "./pedagogy";
  *
  * Charts are hand-written SVG: no library, no network, and geometry lives in
  * element attributes rather than style attributes so the panel runs under a
- * strict CSP. Colour comes from VS Code chart tokens, and every series is also
- * labelled in text — hue never carries meaning on its own.
+ * strict CSP. Every series is also labelled in text — hue never carries
+ * meaning on its own.
+ *
+ * Colour comes from the panel's own token layer rather than from the
+ * workbench chart palette, and "how deep you went" uses the same four-value
+ * rung ramp the card meter does, ending in mint. That is what lets the
+ * distribution read without its legend: the legend is there anyway, for the
+ * reason above.
+ *
+ * The one thing this does not borrow is the bundled faces. Its CSP allows
+ * `style-src 'unsafe-inline'` and nothing else — no `font-src`, and the panel
+ * is created without `localResourceRoots` — so the display stack falls
+ * through to the workbench face, which is what the fallbacks are for.
  */
 
 function escapeHtml(text: string | number): string {
@@ -51,10 +62,17 @@ function conceptBars(items: ConceptStat[], maxLevel = MAX_HINT_LEVEL): string {
     .join("\n");
 }
 
+/**
+ * What each rung actually gave them, in the rung's own terms.
+ *
+ * Rung 3 used to read "needed pseudocode", which was the prompt's old rule
+ * rather than its goal — it asks for a skeleton with the answer punched out
+ * of it now, and pseudocode was only ever one way of producing that.
+ */
 const LEVEL_BLURBS = [
   "a question was enough",
   "needed the line pointed out",
-  "needed pseudocode",
+  "needed the shape of the fix",
   "needed a worked example",
 ];
 
@@ -79,11 +97,11 @@ function levelDistribution(counts: Record<string, number> | undefined): string {
     })
     .join("\n    ");
 
-  const label = values.map((n, i) => `${pct(n)}% at level ${i + 1}`).join(", ");
+  const label = values.map((n, i) => `${pct(n)}% at rung ${i + 1}`).join(", ");
   const legend = values
     .map(
       (n, i) =>
-        `<li><span class="key key--${i + 1}"></span>Level ${i + 1} — ${LEVEL_BLURBS[i]} · ${n} (${pct(n)}%)</li>`
+        `<li><span class="key key--${i + 1}"></span>Rung ${i + 1} — ${LEVEL_BLURBS[i]} · ${n} (${pct(n)}%)</li>`
     )
     .join("\n    ");
 
@@ -160,31 +178,91 @@ export function buildProgressHtml(progress: ProgressReport): string {
 <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline';" />
 <title>EduPeer progress</title>
 <style>
+  /* The panel's tokens, so the dashboard and the sidebar are the same
+     product. Same eight values, same four skins, same rung ramp. */
   :root {
-    color-scheme: light dark;
-    --ink: var(--vscode-foreground);
-    --dim: var(--vscode-descriptionForeground, var(--vscode-foreground));
-    --line: var(--vscode-panel-border, rgba(127,127,127,0.28));
-    --raised: var(--vscode-editorWidget-background, rgba(127,127,127,0.1));
-    --accent: var(--vscode-textLink-foreground, #3794ff);
+    color-scheme: dark;
+    --ground: #12101B;
+    --raised: #221E30;
+    --line: #504770;
+    --ink: #F2EFFA;
+    --dim: #9C93B8;
+    --accent: #FF6B4A;
+    --mint: #7CE0D3;
+    --concept: #A99BE8;
+    --c1: #FFB39F;
+    --c2: #FF8366;
+    --c3: #FF6B4A;
+    --c4: #7CE0D3;
+    --display: "Bricolage Grotesque", var(--vscode-font-family, ui-sans-serif), sans-serif;
     --mono: var(--vscode-editor-font-family, ui-monospace, Consolas, monospace);
-    --c1: var(--vscode-charts-blue, #3794ff);
-    --c2: var(--vscode-charts-purple, #b180d7);
-    --c3: var(--vscode-charts-orange, #d18616);
-    --c4: var(--vscode-charts-green, #89d185);
+  }
+
+  body.vscode-light {
+    color-scheme: light;
+    --ground: #FBFAFF;
+    --raised: #F1EDFA;
+    --line: #CFC7E4;
+    --ink: #221E30;
+    --dim: #5C5378;
+    --accent: #D9401A;
+    --mint: #1C8F80;
+    --concept: #6D5BC4;
+    --c1: #F2A08A;
+    --c2: #E4633C;
+    --c3: #D9401A;
+    --c4: #1C8F80;
+  }
+
+  body.vscode-high-contrast {
+    --ground: #000000;
+    --raised: #0D0B14;
+    --line: #FFFFFF;
+    --ink: #FFFFFF;
+    --dim: #FFFFFF;
+    --accent: #FF9B80;
+    --mint: #8FF3E5;
+    --concept: #C9BCFF;
+    --c1: #FFD2C4;
+    --c2: #FFB39F;
+    --c3: #FF9B80;
+    --c4: #8FF3E5;
+  }
+
+  body.vscode-high-contrast-light {
+    color-scheme: light;
+    --ground: #FFFFFF;
+    --raised: #F2F2F2;
+    --line: #000000;
+    --ink: #000000;
+    --dim: #000000;
+    --accent: #A32B0B;
+    --mint: #0F5F55;
+    --concept: #4A38A0;
+    --c1: #E08A6E;
+    --c2: #C4491F;
+    --c3: #A32B0B;
+    --c4: #0F5F55;
   }
   * { box-sizing: border-box; }
   body {
-    font-family: var(--vscode-font-family);
+    font-family: var(--vscode-font-family, ui-sans-serif), sans-serif;
     font-size: var(--vscode-font-size, 13px);
     line-height: 1.55;
     color: var(--ink);
-    background: var(--vscode-editor-background);
+    background: var(--ground);
     margin: 0 auto;
     padding: 32px 28px 64px;
     max-width: 760px;
   }
-  h1 { font-size: 1.5em; font-weight: 600; margin: 0 0 4px; letter-spacing: -0.01em; }
+  h1 {
+    font-family: var(--display);
+    font-size: 1.85em;
+    font-weight: 700;
+    margin: 0 0 4px;
+    letter-spacing: -0.02em;
+    line-height: 1.1;
+  }
   .lede { color: var(--dim); margin: 0 0 28px; }
   h2 {
     font-family: var(--mono);
@@ -198,16 +276,16 @@ export function buildProgressHtml(progress: ProgressReport): string {
   }
   .tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(96px, 1fr)); gap: 10px; }
   .tile { border: 1px solid var(--line); border-radius: 8px; padding: 12px 14px; }
-  .tile__value { font-family: var(--mono); font-size: 1.7em; font-weight: 600; line-height: 1.1; }
+  .tile__value { font-family: var(--display); font-size: 1.85em; font-weight: 700; line-height: 1.05; }
   .tile__label { font-size: 0.78em; color: var(--dim); }
   .badge {
     display: inline-block; font-family: var(--mono); font-size: 0.76em;
     padding: 2px 8px; margin: 0 4px 4px 0; border-radius: 4px;
-    background: var(--vscode-badge-background, var(--raised));
-    color: var(--vscode-badge-foreground, var(--ink));
+    background: var(--raised);
+    color: var(--ink);
   }
   .row { display: flex; align-items: center; gap: 12px; margin: 6px 0; }
-  .row__label { width: 140px; flex: none; font-family: var(--mono); font-size: 0.82em; }
+  .row__label { width: 140px; flex: none; font-family: var(--mono); font-size: 0.82em; color: var(--concept); }
   .row__track { flex: 1; height: 6px; display: block; }
   .row__track svg { display: block; width: 100%; height: 6px; }
   .row__meta { font-family: var(--mono); font-size: 0.74em; color: var(--dim); }
@@ -232,8 +310,10 @@ export function buildProgressHtml(progress: ProgressReport): string {
   .note pre { white-space: pre-wrap; font-family: inherit; margin: 2px 0 14px; }
   .empty { color: var(--dim); margin: 4px 0; }
   code { font-family: var(--mono); font-size: 0.9em; }
+  /* Mint, like everywhere else the tutor is offering material rather than
+     asking for it. */
   .review {
-    border-left: 2px solid var(--accent); padding: 4px 0 4px 12px;
+    border-left: 2px solid var(--mint); padding: 4px 0 4px 12px;
     margin: 18px 0 0; color: var(--ink);
   }
 </style>

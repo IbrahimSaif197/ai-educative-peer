@@ -41,8 +41,21 @@ export function errorStateFor(err: unknown, apiAvailable: boolean): LensState {
   return { kind: "error", reason: "unknown", message: "That didn't work" };
 }
 
+/**
+ * The standing offer on a definition line.
+ *
+ * Every lens title begins with the word EduPeer, which is what the emoji were
+ * really doing: giving the column a constant left-edge marker so it scans as
+ * one product rather than five moods. State is carried by the verb instead --
+ * asks, notes, is thinking, can't -- because a screen reader saying "light
+ * bulb Ask EduPeer" or "warning sign EduPeer can't help yet" is reading a
+ * glyph that carries nothing the words do not. They also render as tofu in
+ * some Linux workbench font stacks.
+ */
+export const IDLE_LENS_TITLE = "EduPeer — ask about this line";
+
 /** One home for the "working on it" wording, shared by the lens and the hover. */
-export const THINKING_LABEL = "⏳ EduPeer is thinking…";
+export const THINKING_LABEL = "EduPeer is thinking…";
 
 /** What the lens says. `fallback` is the idle title for this line. */
 export function lensTitle(state: LensState, fallback: string): string {
@@ -50,13 +63,13 @@ export function lensTitle(state: LensState, fallback: string): string {
     case "loading":
       return THINKING_LABEL;
     case "ready":
-      return `💡 ${state.hint}`;
+      return `EduPeer asks — ${state.hint}`;
     case "empty":
-      return "✓ Nothing to flag on this line";
+      return "EduPeer — nothing to flag here";
     case "error":
       return state.reason === "auth"
-        ? `⚠️ ${state.message} — click to sign in`
-        : `⚠️ ${state.message} — click to retry`;
+        ? "EduPeer can't help yet — sign in"
+        : `EduPeer can't help yet — ${state.message}, click to retry`;
     default:
       return fallback;
   }
@@ -66,8 +79,30 @@ function fingerprintLine(uri: string, lineNum: number, text: string): string {
   return `${uri}::${lineNum}::${text.trim()}`;
 }
 
-function flagEmoji(flag: LineFlag): string {
-  return flag.kind === "style" ? "🎨" : "🤔";
+/**
+ * What a flag's lens says.
+ *
+ * The question keeps its own capitalisation. Lowercasing the first letter
+ * would read slightly better after the dash, and would also turn a question
+ * that opens on an identifier -- "Items[i] is read one past the end" -- into
+ * one that names a variable the student does not have.
+ */
+function flagTitle(flag: LineFlag): string {
+  return flag.kind === "style"
+    ? `EduPeer notes — ${flagLabel(flag)}`
+    : `EduPeer asks — ${flagLabel(flag)}`;
+}
+
+/**
+ * The same flag without the product's name in front of it.
+ *
+ * Ghost text, diagnostics and the hover are each already attached to the line
+ * or already say EduPeer at the top, so the prefix the lens column needs in
+ * order to scan as one product would only be repetition in a space that has
+ * none to spare.
+ */
+function flagLabel(flag: LineFlag): string {
+  return flag.kind === "style" ? `style: ${flag.question}` : flag.question;
 }
 
 /** VS Code's content changes reduced to the line arithmetic the store needs. */
@@ -254,6 +289,28 @@ export class InlineTutor {
       )
     );
 
+    // The way to the definitions the gutter had to leave out. Capping the
+    // lens column at eight is only defensible if the ninth is still reachable.
+    this.disposables.push(
+      vscode.commands.registerCommand(
+        "edupeer.pickDefinition",
+        async (uri: vscode.Uri) => {
+          const doc = vscode.window.activeTextEditor?.document;
+          if (!doc || doc.uri.toString() !== uri.toString()) return;
+          const picked = await vscode.window.showQuickPick(
+            this.definitionLines(doc).map((line) => ({
+              label: doc.lineAt(line).text.trim(),
+              description: `line ${line + 1}`,
+              line,
+            })),
+            { placeHolder: "Which definition do you want to ask about?" }
+          );
+          if (!picked) return;
+          await vscode.commands.executeCommand("edupeer.nudgeLine", doc.uri, picked.line);
+        }
+      )
+    );
+
     this.disposables.push(
       vscode.commands.registerCommand(
         "edupeer.deepenLine",
@@ -340,10 +397,21 @@ export class InlineTutor {
     return store;
   }
 
-  private get lensMode(): "all" | "flagged" {
-    return vscode.workspace
+  /**
+   * How many definition lenses a file may carry before the rest move behind a
+   * quick pick. Forty functions is forty lenses and an unusable gutter, which
+   * is the state "every line" actually produced on a real file.
+   */
+  private static readonly MAX_DEFINITION_LENSES = 8;
+
+  private get lensMode(): "top8" | "flagged" {
+    const raw = vscode.workspace
       .getConfiguration("edupeer")
-      .get<"all" | "flagged">("lensMode", "all");
+      .get<string>("lensMode", "top8");
+    // "all" was this setting's first value and its default, so an existing
+    // install still has it written down. It migrates on read rather than by
+    // rewriting the student's settings file behind their back.
+    return raw === "flagged" ? "flagged" : "top8";
   }
 
   private scheduleLineHint(editor: vscode.TextEditor) {
@@ -429,7 +497,7 @@ export class InlineTutor {
       // guarantees the two overlap. A block longer than the digest budget
       // keeps its head, so a cursor in its tail would be asked about out of
       // code that was never sent — and the empty answer that comes back is
-      // rendered as "✓ Nothing to flag on this line".
+      // rendered as "EduPeer — nothing to flag here".
       const digest = digestFor(doc, focus, line);
       const res = await this.api.getLineHint(digest, line + 1, doc.languageId, {
         start_line: focus.startLine + 1,
@@ -508,13 +576,7 @@ export class InlineTutor {
     // map in the store without losing this ordering.
     const { flag, hint } = this.storeFor(doc.uri).annotationsAt(line);
     const contentText =
-      hint && !hint.local
-        ? `💡 ${hint.hint}`
-        : flag
-        ? `${flagEmoji(flag)} ${flag.question}`
-        : hint?.hint
-        ? `💡 ${hint.hint}`
-        : "";
+      hint && !hint.local ? hint.hint : flag ? flagLabel(flag) : hint?.hint || "";
 
     if (!contentText) {
       editor.setDecorations(this.ghostDecoration, []);
@@ -718,7 +780,7 @@ export class InlineTutor {
     return this.storeFor(doc.uri).flags().map((f) => {
       const diag = new vscode.Diagnostic(
         this.flagRange(doc, f),
-        `${flagEmoji(f)} ${f.question}`,
+        flagLabel(f),
         f.severity === "warning"
           ? vscode.DiagnosticSeverity.Warning
           : vscode.DiagnosticSeverity.Information
@@ -776,7 +838,11 @@ export class InlineTutor {
           arguments: [doc.uri, line],
         }),
         new vscode.CodeLens(range, {
-          title: "✕",
+          // A word, not a glyph. The deck proposed "Go deeper (rung 3 of 4)"
+          // for its sibling above, which would be false here: the inline
+          // surface deliberately holds no rung -- the ladder lives in the
+          // conversation -- so naming one would invent a number.
+          title: "Dismiss",
           command: "edupeer.dismissLine",
           arguments: [doc.uri, line],
         })
@@ -784,8 +850,10 @@ export class InlineTutor {
     };
 
     // A flag is an observation about this code and outranks a standing offer.
+    // Flags are capped at 7 by the scan and are never displaced by definition
+    // lenses: the two sets are ranked separately and rendered flags-first.
     for (const flag of store.flags()) {
-      add(this.flagRange(doc, flag).start.line, `${flagEmoji(flag)} ${flag.question}`);
+      add(this.flagRange(doc, flag).start.line, flagTitle(flag));
     }
 
     // A line the student nudged must show its state even when it is neither a
@@ -794,17 +862,70 @@ export class InlineTutor {
     // Ahead of the lensMode check on purpose: the mode governs unsolicited
     // offers, not the answer to a question the student actually asked.
     for (const line of store.activeLensLines()) {
-      if (line >= 0 && line < doc.lineCount) add(line, "💡 Ask EduPeer");
+      if (line >= 0 && line < doc.lineCount) add(line, IDLE_LENS_TITLE);
     }
 
     if (this.lensMode === "flagged") return lenses;
 
-    const lensRegex = SUPPORTED_LANGUAGES[doc.languageId]?.lensRegex;
-    if (!lensRegex) return lenses;
-    for (let i = 0; i < doc.lineCount; i++) {
-      if (lensRegex.test(doc.lineAt(i).text)) add(i, "💡 Ask EduPeer");
+    const definitions = this.definitionLines(doc);
+    const shown = this.rankDefinitions(doc, definitions);
+    for (const line of shown) add(line, IDLE_LENS_TITLE);
+
+    // The remainder is reachable rather than gone. One file-level lens on the
+    // first line opens a quick pick over every definition, so capping the
+    // gutter never costs the student access to a function.
+    if (definitions.length > shown.length) {
+      lenses.push(
+        new vscode.CodeLens(new vscode.Range(0, 0, 0, 0), {
+          title: `EduPeer — ask about any of ${definitions.length} definitions`,
+          command: "edupeer.pickDefinition",
+          arguments: [doc.uri],
+        })
+      );
     }
     return lenses;
+  }
+
+  /** Every line that opens a definition, in document order. */
+  private definitionLines(doc: vscode.TextDocument): number[] {
+    const lensRegex = SUPPORTED_LANGUAGES[doc.languageId]?.lensRegex;
+    if (!lensRegex) return [];
+    const lines: number[] = [];
+    for (let i = 0; i < doc.lineCount; i++) {
+      if (lensRegex.test(doc.lineAt(i).text)) lines.push(i);
+    }
+    return lines;
+  }
+
+  /**
+   * The eight definitions worth a lens, biggest first.
+   *
+   * Size stands in for "worth asking about": a forty-line function has more
+   * in it to get stuck on than a two-line accessor. It is measured as the gap
+   * to the next definition rather than by resolving each block, which is a
+   * proxy — a class immediately followed by its first method measures as one
+   * line — but a cheap and stable one, and the methods it under-counts the
+   * class in favour of are the substance anyway.
+   *
+   * Two properties matter more than the precision would. It depends only on
+   * the document, so the gutter does not reshuffle as the cursor moves, which
+   * ranking by proximity would have done on every keystroke. And it reads
+   * line numbers rather than the buffer, so it stays clear of the audit that
+   * keeps whole-document strings in this file away from the network.
+   *
+   * Returned in document order, so the gutter reads top to bottom.
+   */
+  private rankDefinitions(doc: vscode.TextDocument, definitions: number[]): number[] {
+    if (definitions.length <= InlineTutor.MAX_DEFINITION_LENSES) return definitions;
+    return definitions
+      .map((line, i) => ({
+        line,
+        size: (definitions[i + 1] ?? doc.lineCount) - line,
+      }))
+      .sort((a, b) => b.size - a.size || a.line - b.line)
+      .slice(0, InlineTutor.MAX_DEFINITION_LENSES)
+      .map((d) => d.line)
+      .sort((a, b) => a - b);
   }
 
   /**
@@ -866,7 +987,7 @@ export class InlineTutor {
     const store = this.storeFor(doc.uri);
     const { flag, hint } = store.annotationsAt(pos.line);
     // Spec A4: the hover reflects `loading` and `error` too, so hovering a
-    // line mid-request no longer says nothing while the lens says ⏳.
+    // line mid-request no longer says nothing while the lens says thinking.
     //
     // The condition only, never the lens's trailing "— click to retry" /
     // "— click to sign in": the hover has nothing to click. Its `isTrusted`
@@ -878,7 +999,7 @@ export class InlineTutor {
       state.kind === "loading"
         ? THINKING_LABEL
         : state.kind === "error"
-        ? `⚠️ ${state.message}`
+        ? `EduPeer can't help yet — ${state.message}`
         : "";
 
     if (!flag && !hint && !status) return undefined;
@@ -890,8 +1011,8 @@ export class InlineTutor {
     md.isTrusted = { enabledCommands: ["edupeer.nudgeLine", "edupeer.explainSelection"] };
     md.appendMarkdown("**EduPeer**\n\n");
     if (status) md.appendMarkdown(`${status}\n\n`);
-    if (hint?.hint) md.appendMarkdown(`💡 ${hint.hint}\n\n`);
-    if (flag) md.appendMarkdown(`${flagEmoji(flag)} ${flag.question}\n\n_concept: ${flag.concept}_\n\n`);
+    if (hint?.hint) md.appendMarkdown(`${hint.hint}\n\n`);
+    if (flag) md.appendMarkdown(`${flagLabel(flag)}\n\n_concept: ${flag.concept}_\n\n`);
     md.appendMarkdown(
       `[Ask for a deeper nudge](command:edupeer.nudgeLine?${encodeURIComponent(
         JSON.stringify([doc.uri.toString(), pos.line])

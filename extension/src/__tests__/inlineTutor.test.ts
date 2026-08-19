@@ -148,7 +148,7 @@ describe("provideCodeLenses", () => {
     const { doc } = activate(makeApi());
     const lenses = lensProvider().provideCodeLenses(doc);
     expect(lenses).toHaveLength(1);
-    expect(lenses[0].command.title).toBe("💡 Ask EduPeer");
+    expect(lenses[0].command.title).toBe("EduPeer — ask about this line");
     expect(lenses[0].command.command).toBe("edupeer.nudgeLine");
   });
 
@@ -177,11 +177,11 @@ describe("provideCodeLenses", () => {
     await runScheduledScan();
     const lenses = lensProvider().provideCodeLenses(doc);
     const titles = lenses.map((l: any) => l.command.title);
-    expect(titles).toContain("🤔 What is the last index this reaches?");
+    expect(titles).toContain("EduPeer asks — What is the last index this reaches?");
     jest.useRealTimers();
   });
 
-  it("uses the palette emoji for a style flag", async () => {
+  it("names a style flag as a note rather than a question", async () => {
     jest.useFakeTimers();
     const api = makeApi({
       scanCode: jest.fn(async () => ({ flags: [flag({ kind: "style", severity: "info" })] })),
@@ -190,7 +190,81 @@ describe("provideCodeLenses", () => {
     restCursor(editor);
     await runScheduledScan();
     const titles = lensProvider().provideCodeLenses(doc).map((l: any) => l.command.title);
-    expect(titles.some((t: string) => t.startsWith("🎨"))).toBe(true);
+    expect(titles).toContain("EduPeer notes — style: What is the last index this reaches?");
+    jest.useRealTimers();
+  });
+
+  /**
+   * Twelve functions, deliberately uneven: `f0` gets ten lines of body, and
+   * every later one gets one fewer, so the ranking has something to rank.
+   */
+  function manyDefinitions(count = 12): string {
+    const out: string[] = [];
+    for (let i = 0; i < count; i++) {
+      out.push(`def f${i}(n):`);
+      for (let j = 0; j < Math.max(1, count - i); j++) out.push(`    x = ${j}`);
+    }
+    return out.join("\n");
+  }
+
+  it("caps the definition lenses at eight, biggest first", () => {
+    const { doc } = activate(makeApi(), manyDefinitions());
+    const offers = lensProvider()
+      .provideCodeLenses(doc)
+      .filter((l: any) => l.command.title === "EduPeer — ask about this line");
+
+    // Twelve definitions, eight lenses. Forty of them was the state the old
+    // "every line" mode actually produced, and an unusable gutter with it.
+    expect(offers).toHaveLength(8);
+    // The eight biggest are f0..f7, and they come back in document order so
+    // the gutter reads top to bottom rather than by rank.
+    const lines = offers.map((l: any) => l.command.arguments[1]);
+    expect(lines).toEqual([...lines].sort((a: number, b: number) => a - b));
+    expect(lines[0]).toBe(0);
+  });
+
+  it("leaves the rest reachable rather than gone", () => {
+    const { doc } = activate(makeApi(), manyDefinitions());
+    const lenses = lensProvider().provideCodeLenses(doc);
+    const overflow = lenses.find((l: any) => l.command.command === "edupeer.pickDefinition");
+
+    // Capping the column is only defensible if the ninth definition is still
+    // one click away.
+    expect(overflow).toBeDefined();
+    expect(overflow.command.title).toBe("EduPeer — ask about any of 12 definitions");
+    expect(overflow.range.start.line).toBe(0);
+  });
+
+  it("adds no overflow lens when everything already fits", () => {
+    const { doc } = activate(makeApi(), manyDefinitions(4));
+    const lenses = lensProvider().provideCodeLenses(doc);
+    expect(lenses.filter((l: any) => l.command.command === "edupeer.pickDefinition")).toEqual([]);
+    expect(lenses).toHaveLength(4);
+  });
+
+  it("reads a pre-1.7 lensMode of \"all\" as top8", () => {
+    // The value shipped as the default, so an existing install has it written
+    // down. It must not fall through to "flagged" and silently take the
+    // student's definition lenses away.
+    mock.__state.configuration.lensMode = "all";
+    const { doc } = activate(makeApi(), manyDefinitions());
+    const offers = lensProvider()
+      .provideCodeLenses(doc)
+      .filter((l: any) => l.command.title === "EduPeer — ask about this line");
+    expect(offers).toHaveLength(8);
+  });
+
+  it("never lets definition lenses displace a scan flag", async () => {
+    jest.useFakeTimers();
+    const api = makeApi({ scanCode: jest.fn(async () => ({ flags: [flag()] })) });
+    const { doc, editor } = activate(api, manyDefinitions());
+    restCursor(editor);
+    await runScheduledScan();
+    const titles = lensProvider().provideCodeLenses(doc).map((l: any) => l.command.title);
+
+    // The two sets are ranked separately and rendered flags-first, so a
+    // capped gutter never costs the student an observation about their code.
+    expect(titles).toContain("EduPeer asks — What is the last index this reaches?");
     jest.useRealTimers();
   });
 
@@ -471,7 +545,7 @@ describe("line hints", () => {
     expect(language).toBe("python");
     expect(focus).toEqual({ start_line: 1, end_line: 5, label: "average" });
     const call = editor.setDecorations.mock.calls.at(-1);
-    expect(call[1][0].renderOptions.after.contentText).toBe("💡 Check the bound");
+    expect(call[1][0].renderOptions.after.contentText).toBe("Check the bound");
   });
 
   it("falls back to a local rule when the backend is unreachable", async () => {
@@ -485,7 +559,7 @@ describe("line hints", () => {
     // Line 3 is `for i in range(len(numbers) + 1):`, which the Python rule
     // table answers with the positions-versus-items question.
     expect(call[1][0].renderOptions.after.contentText).toBe(
-      "💡 Do you need the positions, or the items themselves?"
+      "Do you need the positions, or the items themselves?"
     );
   });
 
@@ -501,7 +575,7 @@ describe("line hints", () => {
     await mock.__runCommand("edupeer.nudgeLine", editor.document.uri, 2);
     let call = editor.setDecorations.mock.calls.at(-1);
     expect(call[1][0].renderOptions.after.contentText).toBe(
-      "💡 Do you need the positions, or the items themselves?"
+      "Do you need the positions, or the items themselves?"
     );
 
     // Backend comes back. The debounce path (unforced) must not be blocked by
@@ -515,7 +589,7 @@ describe("line hints", () => {
 
     expect(getLineHint).toHaveBeenCalledTimes(2);
     call = editor.setDecorations.mock.calls.at(-1);
-    expect(call[1][0].renderOptions.after.contentText).toBe("💡 Check the bound");
+    expect(call[1][0].renderOptions.after.contentText).toBe("Check the bound");
   });
 
   it("does not fall back to a local rule merely for being throttled", async () => {
@@ -532,7 +606,7 @@ describe("line hints", () => {
     // A 429 must read as a 429, not merely as "some error": nothing here
     // distinguished this from a plain 500 until the lens said the wait time.
     const titles = lensProvider().provideCodeLenses(doc).map((l: any) => l.command.title);
-    expect(titles).toContain("⚠️ Hint budget used up, back in 1m — click to retry");
+    expect(titles).toContain("EduPeer can't help yet — Hint budget used up, back in 1m, click to retry");
   });
 
   it("shows nothing when the backend errors but is still reachable", async () => {
@@ -572,7 +646,7 @@ describe("line hints", () => {
   it("sends the cursor's own line even when the block is longer than the digest", async () => {
     // Without the anchor the digest stops at file line 119 and the backend has
     // no line 191 to answer about: it returns an empty hint, and the lens
-    // renders that as "✓ Nothing to flag on this line" — the tutor reassuring
+    // renders that as "EduPeer — nothing to flag here" — the tutor reassuring
     // the student about code it was never shown.
     const api = makeApi({
       getLineHint: jest.fn(async () => ({ hint: "h", concept: "general" })),
@@ -602,7 +676,7 @@ describe("line hints", () => {
     // markers inside it, all without having seen where the student is.
     const api = makeApi();
     mock.__reset();
-    mock.__state.configuration = { inlineHints: true, lensMode: "all", autoScan: false };
+    mock.__state.configuration = { inlineHints: true, lensMode: "top8", autoScan: false };
     const doc = mock.__makeDocument(HUGE_BLOCK, "python", "/tmp/huge-block-scan/demo.py");
     const editor = mock.__makeEditor(doc, 190, 0);
     mock.window.activeTextEditor = editor;
@@ -620,35 +694,37 @@ describe("line hints", () => {
 
 describe("lensTitle", () => {
   it("shows the offer while idle", () => {
-    expect(lensTitle({ kind: "idle" }, "💡 Ask EduPeer")).toBe("💡 Ask EduPeer");
+    expect(lensTitle({ kind: "idle" }, "EduPeer — ask about this line")).toBe("EduPeer — ask about this line");
   });
 
   it("shows that it is working the moment it is clicked", () => {
-    expect(lensTitle({ kind: "loading" }, "💡 Ask EduPeer")).toBe("⏳ EduPeer is thinking…");
+    expect(lensTitle({ kind: "loading" }, "EduPeer — ask about this line")).toBe("EduPeer is thinking…");
   });
 
   it("shows the hint once it arrives", () => {
-    expect(lensTitle({ kind: "ready", hint: "what if n is empty?" }, "💡 Ask EduPeer")).toBe(
-      "💡 what if n is empty?"
+    expect(
+      lensTitle({ kind: "ready", hint: "what if n is empty?" }, "EduPeer — ask about this line")
+    ).toBe(
+      "EduPeer asks — what if n is empty?"
     );
   });
 
   it("says so when there is nothing to say", () => {
-    expect(lensTitle({ kind: "empty" }, "💡 Ask EduPeer")).toBe(
-      "✓ Nothing to flag on this line"
+    expect(lensTitle({ kind: "empty" }, "EduPeer — ask about this line")).toBe(
+      "EduPeer — nothing to flag here"
     );
   });
 
   it("offers a retry on failure", () => {
     expect(
       lensTitle({ kind: "error", reason: "llm", message: "The tutor couldn't answer that" }, "x")
-    ).toBe("⚠️ The tutor couldn't answer that — click to retry");
+    ).toBe("EduPeer can't help yet — The tutor couldn't answer that, click to retry");
   });
 
   it("sends an unauthenticated student to sign in, not to retry", () => {
     expect(
       lensTitle({ kind: "error", reason: "auth", message: "Sign in to get hints" }, "x")
-    ).toBe("⚠️ Sign in to get hints — click to sign in");
+    ).toBe("EduPeer can't help yet — sign in");
   });
 });
 
@@ -693,7 +769,7 @@ describe("InlineTutor — the lens is the feedback channel", () => {
    */
   function setup(api: any, path = "/tmp/demo.py") {
     vscode.__reset();
-    vscode.__state.configuration = { inlineHints: true, lensMode: "all", autoScan: false };
+    vscode.__state.configuration = { inlineHints: true, lensMode: "top8", autoScan: false };
     const doc = vscode.__makeDocument(SOURCE, "python", path);
     const editor = vscode.__makeEditor(doc, 1, 0);
     vscode.window.activeTextEditor = editor;
@@ -730,7 +806,7 @@ describe("InlineTutor — the lens is the feedback channel", () => {
     // Zero ticks: the lens must have flipped before anything was awaited.
     // Flushing first would let a `showState` moved after `await resolveFocus`
     // pass just as easily, which is the regression this test exists to catch.
-    expect(lensTitles(doc)).toContain("⏳ EduPeer is thinking…");
+    expect(lensTitles(doc)).toContain("EduPeer is thinking…");
     expect(thinking[0]).toBe(true);
 
     // fetchLineHint now awaits resolveFocus() before calling getLineHint,
@@ -742,7 +818,7 @@ describe("InlineTutor — the lens is the feedback channel", () => {
     release({ hint: "what is n here?", concept: "division" });
     await pending;
 
-    expect(lensTitles(doc)).toContain("💡 what is n here?");
+    expect(lensTitles(doc)).toContain("EduPeer asks — what is n here?");
     expect(thinking[thinking.length - 1]).toBe(false);
   });
 
@@ -755,7 +831,7 @@ describe("InlineTutor — the lens is the feedback channel", () => {
 
     await vscode.__runCommand("edupeer.nudgeLine", doc.uri, 1);
 
-    expect(lensTitles(doc)).toContain("⚠️ The tutor couldn't answer that — click to retry");
+    expect(lensTitles(doc)).toContain("EduPeer can't help yet — The tutor couldn't answer that, click to retry");
   });
 
   it("shows the empty state when the model has nothing to say", async () => {
@@ -767,14 +843,14 @@ describe("InlineTutor — the lens is the feedback channel", () => {
 
     await vscode.__runCommand("edupeer.nudgeLine", doc.uri, 1);
 
-    expect(lensTitles(doc)).toContain("✓ Nothing to flag on this line");
+    expect(lensTitles(doc)).toContain("EduPeer — nothing to flag here");
   });
 
   it("offers rather than accuses on definition lines", () => {
     const { doc } = setup({ isAvailable: true, getLineHint: jest.fn() });
 
     const titles = lensTitles(doc);
-    expect(titles).toContain("💡 Ask EduPeer");
+    expect(titles).toContain("EduPeer — ask about this line");
     expect(titles.join(" ")).not.toContain("Get a hint");
   });
 
@@ -796,7 +872,7 @@ describe("InlineTutor — the lens is the feedback channel", () => {
     await vscode.__runCommand("edupeer.nudgeLine", doc.uri, 1);
 
     // Line 1 is neither a definition nor flagged. The student asked anyway.
-    expect(lensTitles(doc)).toContain("💡 what is n here?");
+    expect(lensTitles(doc)).toContain("EduPeer asks — what is n here?");
   });
 
   it("does not paint a lens for an unsolicited hint, but still updates the ghost text", async () => {
@@ -818,7 +894,7 @@ describe("InlineTutor — the lens is the feedback channel", () => {
 
     expect(lensTitles(doc)).toEqual([]);
     const call = editor.setDecorations.mock.calls.at(-1);
-    expect(call[1][0].renderOptions.after.contentText).toBe("💡 what is n here?");
+    expect(call[1][0].renderOptions.after.contentText).toBe("what is n here?");
     jest.useRealTimers();
   });
 
@@ -829,7 +905,7 @@ describe("InlineTutor — the lens is the feedback channel", () => {
     };
     const { doc } = setup(api);
     await vscode.__runCommand("edupeer.nudgeLine", doc.uri, 1);
-    expect(lensTitles(doc)).toContain("💡 what is n here?");
+    expect(lensTitles(doc)).toContain("EduPeer asks — what is n here?");
 
     for (const listener of vscode.__state.listeners.textDocument) {
       listener({
@@ -848,7 +924,7 @@ describe("InlineTutor — the lens is the feedback channel", () => {
     };
     const { doc, editor } = setup(api);
     await vscode.__runCommand("edupeer.nudgeLine", doc.uri, 1);
-    expect(lensTitles(doc)).toContain("💡 what is n here?");
+    expect(lensTitles(doc)).toContain("EduPeer asks — what is n here?");
     expect(editor.setDecorations.mock.calls.at(-1)[1]).not.toEqual([]);
 
     await vscode.__runCommand("edupeer.dismissLine", doc.uri, 1);
@@ -887,14 +963,14 @@ describe("InlineTutor — the lens is the feedback channel", () => {
 
     await vscode.__runCommand("edupeer.nudgeLine", doc.uri, 1);
     expect(editor.setDecorations.mock.calls.at(-1)[1][0].renderOptions.after.contentText).toBe(
-      "💡 what is n here?"
+      "what is n here?"
     );
 
     await vscode.__runCommand("edupeer.nudgeLine", doc.uri, 1);
 
     // Spec A4: a lens reading "nothing to flag" beside ghost text still
     // describing the line is the two surfaces disagreeing.
-    expect(lensTitles(doc)).toContain("✓ Nothing to flag on this line");
+    expect(lensTitles(doc)).toContain("EduPeer — nothing to flag here");
     expect(editor.setDecorations.mock.calls.at(-1)[1]).toEqual([]);
   });
 
@@ -910,14 +986,16 @@ describe("InlineTutor — the lens is the feedback channel", () => {
     for (let i = 0; i < 10; i++) await Promise.resolve();
 
     expect(hoverProvider().provideHover(doc, new vscode.Position(1, 0)).contents.value).toContain(
-      "⏳ EduPeer is thinking…"
+      "EduPeer is thinking…"
     );
 
     release({ hint: "what is n here?", concept: "division" });
     await pending;
 
+    // The hover already says **EduPeer** on its first line, so the hint below
+    // it carries no second copy of the name.
     expect(hoverProvider().provideHover(doc, new vscode.Position(1, 0)).contents.value).toContain(
-      "💡 what is n here?"
+      "what is n here?"
     );
   });
 
@@ -931,7 +1009,7 @@ describe("InlineTutor — the lens is the feedback channel", () => {
     await vscode.__runCommand("edupeer.nudgeLine", doc.uri, 1);
 
     const value = hoverProvider().provideHover(doc, new vscode.Position(1, 0)).contents.value;
-    expect(value).toContain("⚠️ The tutor couldn't answer that");
+    expect(value).toContain("EduPeer can't help yet — The tutor couldn't answer that");
     // The lens's trailing action clause does not belong here: the hover has
     // nothing to click.
     expect(value).not.toContain("click to retry");
@@ -947,7 +1025,7 @@ describe("InlineTutor — the lens is the feedback channel", () => {
     await vscode.__runCommand("edupeer.nudgeLine", doc.uri, 1);
 
     const hover = hoverProvider().provideHover(doc, new vscode.Position(1, 0));
-    expect(hover.contents.value).toContain("⚠️ Sign in to get hints");
+    expect(hover.contents.value).toContain("EduPeer can't help yet — Sign in to get hints");
     expect(hover.contents.value).not.toContain("click to sign in");
     // Widening the allow-list to make that clause true would widen it for the
     // model-authored text appended below it as well.
@@ -955,7 +1033,7 @@ describe("InlineTutor — the lens is the feedback channel", () => {
       enabledCommands: ["edupeer.nudgeLine", "edupeer.explainSelection"],
     });
     // The lens is where the action lives, and it is unchanged.
-    expect(lensTitles(doc)).toContain("⚠️ Sign in to get hints — click to sign in");
+    expect(lensTitles(doc)).toContain("EduPeer can't help yet — sign in");
   });
 
   it("asks about the student's live selection, the same block the panel resolves", async () => {
@@ -1045,7 +1123,7 @@ describe("InlineTutor — the lens is the feedback channel", () => {
       // `applyChanges` drops the flag, the hint and the state — and the reply
       // must not put any of them back.
       edit(doc, [{ range: new vscode.Range(1, 4, 1, 18), text: "return 0" }]);
-      expect(lensTitles(doc)).not.toContain("⏳ EduPeer is thinking…");
+      expect(lensTitles(doc)).not.toContain("EduPeer is thinking…");
 
       releases[0]({ hint: "what is n here?", concept: "division" });
       await pending;
@@ -1054,13 +1132,13 @@ describe("InlineTutor — the lens is the feedback channel", () => {
       expect(editor.setDecorations.mock.calls.at(-1)[1]).toEqual([]);
     });
 
-    it("never strands a ⏳ lens that nothing will ever resolve", async () => {
+    it("never strands a thinking lens that nothing will ever resolve", async () => {
       const { api, releases } = pendingApi();
       const { doc } = setup(api, "/tmp/stale-below/demo.py");
 
       const pending = vscode.__runCommand("edupeer.nudgeLine", doc.uri, 1);
       await flush();
-      expect(lensTitles(doc)).toContain("⏳ EduPeer is thinking…");
+      expect(lensTitles(doc)).toContain("EduPeer is thinking…");
 
       // An edit BELOW the line. `applyChanges` correctly leaves the loading
       // state exactly where it was — but the revision guard is store-wide, so
@@ -1071,7 +1149,7 @@ describe("InlineTutor — the lens is the feedback channel", () => {
       releases[0]({ hint: "what is n here?", concept: "division" });
       await pending;
 
-      expect(lensTitles(doc)).not.toContain("⏳ EduPeer is thinking…");
+      expect(lensTitles(doc)).not.toContain("EduPeer is thinking…");
       expect(lensTitles(doc).join(" ")).not.toContain("what is n here?");
     });
 
@@ -1095,7 +1173,7 @@ describe("InlineTutor — the lens is the feedback channel", () => {
 
       releases[0]({ hint: "what is n here?", concept: "division" });
       await forced;
-      expect(lensTitles(doc)).toContain("💡 what is n here?");
+      expect(lensTitles(doc)).toContain("EduPeer asks — what is n here?");
 
       // ✕ — `clearLine` wipes the hint and the lens state.
       await vscode.__runCommand("edupeer.dismissLine", doc.uri, 1);
@@ -1149,7 +1227,7 @@ describe("InlineTutor — stripping fixed bug markers", () => {
     mock.__reset();
     mock.__state.configuration = {
       inlineHints: true,
-      lensMode: "all",
+      lensMode: "top8",
       autoScan: false,
       ...config,
     };
@@ -1320,7 +1398,7 @@ describe("InlineTutor — the seeded marker never reaches the tutor", () => {
 
   function setup(api: any, source = MARKED) {
     mock.__reset();
-    mock.__state.configuration = { inlineHints: true, lensMode: "all", autoScan: false };
+    mock.__state.configuration = { inlineHints: true, lensMode: "top8", autoScan: false };
     const doc = mock.__makeDocument(source, "python", "/tmp/seeded.py");
     const editor = mock.__makeEditor(doc, 1, 0);
     mock.window.activeTextEditor = editor;

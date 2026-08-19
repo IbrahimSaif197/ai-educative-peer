@@ -1058,7 +1058,10 @@ export class EduPeerSidebarProvider implements vscode.WebviewViewProvider {
       values: {
         inlineHints: cfg.get<boolean>("inlineHints", true),
         autoScan: cfg.get<boolean>("autoScan", true),
-        lensMode: cfg.get<string>("lensMode", "all"),
+        // "all" is the pre-1.7 value and migrates on read, here as in
+        // inlineTutor, so the popover never shows a segment that no longer
+        // exists to a student who has not changed the setting since.
+        lensMode: cfg.get<string>("lensMode", "top8") === "flagged" ? "flagged" : "top8",
         debounceMs: cfg.get<number>("debounceMs", 1800),
         removeFixedBugComments: cfg.get<boolean>("removeFixedBugComments", true),
       },
@@ -1085,7 +1088,7 @@ export class EduPeerSidebarProvider implements vscode.WebviewViewProvider {
       if (!Number.isFinite(n)) return;
       value = Math.max(MIN_DEBOUNCE_MS, Math.round(n));
     }
-    if (key === "lensMode" && value !== "all" && value !== "flagged") return;
+    if (key === "lensMode" && value !== "top8" && value !== "flagged") return;
     await vscode.workspace
       .getConfiguration("edupeer")
       .update(key, value, vscode.ConfigurationTarget.Global);
@@ -1194,9 +1197,11 @@ export class EduPeerSidebarProvider implements vscode.WebviewViewProvider {
           <span class="tog" aria-hidden="true"><i></i></span>
         </button>
         <button class="row" data-pref="lensMode">
-          <span class="row__label">Show “Ask EduPeer” on</span>
+          <span class="row__label">Ask-anywhere lenses
+            <span class="row__sub">Top 8 by size, never one per definition</span>
+          </span>
           <span class="seg" id="lensSeg" aria-hidden="true">
-            <span data-value="all">every line</span><span data-value="flagged">flagged</span>
+            <span data-value="top8">top 8</span><span data-value="flagged">flagged</span>
           </span>
         </button>
         <div class="row row--static">

@@ -23,6 +23,7 @@ const EXPECTED_COMMANDS = [
   "edupeer.scanFile",
   "edupeer.deepenLine",
   "edupeer.dismissLine",
+  "edupeer.pickDefinition",
 ];
 
 const PY = "def add(a, b):\n    return a - b\n";

@@ -124,6 +124,10 @@
       {
         "command": "edupeer.dismissLine",
         "title": "EduPeer: Dismiss This Line Hint"
+      },
+      {
+        "command": "edupeer.pickDefinition",
+        "title": "EduPeer: Ask About a Definition"
       }
     ],
     "menus": {
@@ -175,6 +179,10 @@
         },
         {
           "command": "edupeer.dismissLine",
+          "when": "false"
+        },
+        {
+          "command": "edupeer.pickDefinition",
           "when": "false"
         }
       ]
@@ -244,15 +252,15 @@
         "edupeer.lensMode": {
           "type": "string",
           "enum": [
-            "all",
+            "top8",
             "flagged"
           ],
           "enumDescriptions": [
-            "Offer a hint on every function and class, and show flagged lines.",
+            "Offer a hint on the eight largest definitions, plus one entry on line 1 for the rest, and show flagged lines.",
             "Only show lines EduPeer has actually flagged."
           ],
-          "default": "all",
-          "description": "Which CodeLens entries EduPeer shows above your code. Set edupeer.inlineHints to false to turn the inline surface off entirely."
+          "default": "top8",
+          "description": "Which CodeLens entries EduPeer shows above your code. \"top8\" replaces the old \"all\", which put a lens on every definition and made the gutter unusable on a large file; an existing \"all\" is read as \"top8\". Set edupeer.inlineHints to false to turn the inline surface off entirely."
         },
         "edupeer.removeFixedBugComments": {
           "type": "boolean",

@@ -120,12 +120,12 @@ describe("hint level distribution", () => {
     expect(html).toContain("60%");
   });
 
-  it("labels every level in text, not only by colour", () => {
+  it("labels every rung in text, not only by colour", () => {
     const html = buildProgressHtml(report({ hint_level_counts: { "1": 1, "2": 1, "3": 1 } }));
-    expect(html).toContain("Level 1");
-    expect(html).toContain("Level 2");
-    expect(html).toContain("Level 3");
-    expect(html).toContain("Level 4");
+    expect(html).toContain("Rung 1");
+    expect(html).toContain("Rung 2");
+    expect(html).toContain("Rung 3");
+    expect(html).toContain("Rung 4");
   });
 
   it("survives an all-zero distribution", () => {
@@ -133,15 +133,15 @@ describe("hint level distribution", () => {
     expect(html).toContain("no depth to report");
   });
 
-  it("counts a fourth-level hint in its own segment, not folded into level 3", () => {
+  it("counts a rung-four hint in its own segment, not folded into rung 3", () => {
     const html = buildProgressHtml(
       report({ hint_level_counts: { "1": 0, "2": 0, "3": 0, "4": 1 } })
     );
     expect(html).toContain("seg--4");
     expect(html).toContain("needed a worked example");
-    expect(html).toContain("Level 4 — needed a worked example · 1 (100%)");
+    expect(html).toContain("Rung 4 — needed a worked example · 1 (100%)");
     // The level-3 bucket must stay untouched by the level-4 ask.
-    expect(html).toContain("Level 3 — needed pseudocode · 0 (0%)");
+    expect(html).toContain("Rung 3 — needed the shape of the fix · 0 (0%)");
   });
 });
 

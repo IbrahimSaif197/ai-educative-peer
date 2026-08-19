@@ -795,7 +795,7 @@ describe("the preferences popover", () => {
     post({
       type: "preferences",
       values: {
-        inlineHints: true, autoScan: true, lensMode: "all",
+        inlineHints: true, autoScan: true, lensMode: "top8",
         debounceMs: 1800, removeFixedBugComments: true, ...over,
       },
       backendUrl: "https://edupeer-backend.onrender.com",
@@ -870,12 +870,21 @@ describe("the preferences popover", () => {
   });
 
   it("cycles the lens mode between its two values", () => {
-    prefs({ lensMode: "all" });
+    prefs({ lensMode: "top8" });
     rowFor("lensMode").click();
     expect(lastSent("setPreference").value).toBe("flagged");
     prefs({ lensMode: "flagged" });
     rowFor("lensMode").click();
-    expect(lastSent("setPreference").value).toBe("all");
+    expect(lastSent("setPreference").value).toBe("top8");
+  });
+
+  it("shows a pre-1.7 lensMode of \"all\" as the value that replaced it", () => {
+    // The host migrates on read, so the popover never offers a segment that
+    // no longer exists to a student who has not touched the setting.
+    prefs({ lensMode: "all" });
+    expect(el("lensSeg").querySelector('[data-value="top8"]')!.getAttribute("data-on")).toBe(
+      "true"
+    );
   });
 
   it("steps the hint delay and stops at the floor", () => {

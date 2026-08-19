@@ -1002,7 +1002,7 @@
     const key = row.getAttribute("data-pref");
     row.addEventListener("click", () => {
       if (key === "lensMode") {
-        setPref(key, prefs.lensMode === "all" ? "flagged" : "all");
+        setPref(key, prefs.lensMode === "top8" ? "flagged" : "top8");
       } else {
         setPref(key, !prefs[key]);
       }
@@ -1063,7 +1063,7 @@
       const tog = row.querySelector(".tog");
       if (tog) tog.setAttribute("data-on", String(on));
     });
-    const mode = prefs.lensMode === "flagged" ? "flagged" : "all";
+    const mode = prefs.lensMode === "flagged" ? "flagged" : "top8";
     lensSegEl.querySelectorAll("[data-value]").forEach((seg) => {
       seg.setAttribute("data-on", String(seg.getAttribute("data-value") === mode));
     });
