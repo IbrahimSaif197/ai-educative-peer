@@ -1,8 +1,11 @@
 /* EduPeer sidebar.
  *
  * This panel has its own identity rather than deriving from the workbench
- * theme, so it matches the hosted sign-in page. The consequence is recorded
- * in the spec: VS Code's high-contrast themes no longer affect this panel.
+ * theme, so it matches the hosted sign-in page. What it no longer does is
+ * ignore the workbench: VS Code puts one of `vscode-light`,
+ * `vscode-high-contrast` or `vscode-high-contrast-light` on <body>, and each
+ * one re-points the token values below. Same layout, same brand, four skins
+ * — only the tokens move, so no selector past the :root block is skin-aware.
  *
  * The one exception is the code preview, which keeps the editor's own
  * monospace face. It shows the student's code; rendering that in a UI face
@@ -26,31 +29,54 @@
 :root {
   color-scheme: dark;
 
-  /* Surfaces */
+  /* ---- Surfaces, lines and ink: the eight shipped values, unchanged ---- */
   --ground: #12101B;
   --card: #1B1826;
   --card-lit: #221E30;
 
-  /* Lines */
   --line: #6D6198;
-  /* Grouping only (never a control boundary or a state signal — those use
-     --line, which clears 3:1). Raised from #2E2940 (1.35:1 on --ground,
+  /* Panel-level dividers only. Raised from #2E2940 (1.35:1 on --ground,
      1.25:1 on --card — invisible) to ~2:1 on both, enough for a card or a
      code block to read as bounded without claiming the 3:1 a control needs. */
   --line-soft: #504770;
+  /* Dividers *inside* a card. Grouping only; never a boundary, never a
+     state signal. Splitting this off --line-soft is what stops the top bar
+     reading as three stacked bands. */
+  --hair: #2A2438;
 
-  /* Ink */
   --ink: #F2EFFA;
   --muted: #9C93B8;
   --coral: #FF6B4A;
   --coral-lit: #FF8366;
-  /* Foreground for text sitting on --coral. */
+  /* Foreground for text sitting on --coral. 8.9:1. */
   --coral-ink: #1A0A05;
   --mint: #7CE0D3;
+  /* Foreground for text sitting on --mint. 9.1:1. */
+  --mint-ink: #0C2A26;
   --warn: #FFC46B;
   --danger: #FF8E7A;
 
-  /* Space — a 4px rhythm */
+  /* ---- Pedagogy semantics: one hue per stance the tutor can take ----
+     Cards are styled by family, not by mode. Fifteen modes, four families,
+     so a new mode inherits a treatment instead of inventing one. */
+  --ask: var(--coral);        /* A — the tutor asking          */
+  --show: var(--mint);        /* B — material it puts on screen */
+  --tell: var(--coral-lit);   /* C — the answer, terminal       */
+  --withhold: var(--warn);    /* D — holding the ladder         */
+  /* Family D is a wash, not a card fill, so it never reads as teaching. */
+  --withhold-wash: rgba(255, 196, 107, 0.07);
+  --error: var(--danger);
+  --concept: #A99BE8;         /* concept tags. 5.4:1 on --card  */
+
+  /* Hint depth. Ends in --show because rung 4 IS the worked example — the
+     ramp changes hue at the top to say the last rung differs in kind. */
+  --rung-off: var(--line);
+  --rung-1: #FFB39F;
+  --rung-2: #FF8366;
+  --rung-3: #FF6B4A;
+  --rung-4: var(--mint);
+
+  /* Space — a 4px rhythm, with a 32 for section breaks */
   --s1: 2px;
   --s2: 4px;
   --s3: 6px;
@@ -58,21 +84,38 @@
   --s5: 12px;
   --s6: 16px;
   --s7: 24px;
+  --s8: 32px;
 
-  /* Type — anchored to the workbench size so it tracks the user's zoom */
-  --t-micro: calc(var(--vscode-font-size, 13px) * 0.72);
-  --t-small: calc(var(--vscode-font-size, 13px) * 0.82);
-  --t-body: calc(var(--vscode-font-size, 13px) * 0.94);
-  --t-lead: var(--vscode-font-size, 13px);
-  --t-display: calc(var(--vscode-font-size, 13px) * 1.7);
+  /* Type — anchored to the workbench size so it tracks the user's zoom.
+     Micro rises from 0.72 to 0.77: 9.4px mono is where the line-number
+     gutter and the eyebrows stopped being readable. --t-title is new, and
+     fills the 13 -> 22 gap that left the empty-state headline with no
+     relatives. */
+  --t-micro: calc(var(--vscode-font-size, 13px) * 0.77);   /* 10.0px */
+  --t-small: calc(var(--vscode-font-size, 13px) * 0.85);   /* 11.0px */
+  --t-body: calc(var(--vscode-font-size, 13px) * 0.96);    /* 12.5px */
+  --t-lead: var(--vscode-font-size, 13px);                 /* 13.0px */
+  --t-title: calc(var(--vscode-font-size, 13px) * 1.23);   /* 16.0px */
+  --t-display: calc(var(--vscode-font-size, 13px) * 1.85); /* 24.0px */
 
-  --radius-sm: 3px;
-  --radius-md: 6px;
-  --radius-lg: 10px;
+  --radius-sm: 4px;
+  --radius-md: 8px;
+  --radius-lg: 12px;
   --radius-pill: 999px;
 
-  --display: "Bricolage Grotesque", var(--vscode-font-family), sans-serif;
-  --sans: "Geist", var(--vscode-font-family), sans-serif;
+  /* Elevation is three steps and mostly unused: a sidebar 320px wide has no
+     room for a z-axis. Cards get --e1, the popover --e3, nothing else
+     floats. Both high-contrast skins flatten all three to `none`. */
+  --e1: 0 1px 0 rgba(0, 0, 0, 0.4);
+  --e2: 0 6px 16px -6px rgba(0, 0, 0, 0.55);
+  --e3: 0 14px 34px rgba(0, 0, 0, 0.55);
+
+  /* The bundled faces come first; the workbench face is the fallback. The
+     final `sans-serif` also covers the case where --vscode-font-family is
+     unset — outside VS Code a bare var() with no fallback is invalid at
+     computed-value time, which would silently drop the whole stack. */
+  --display: "Bricolage Grotesque", var(--vscode-font-family, ui-sans-serif), sans-serif;
+  --sans: "Geist", var(--vscode-font-family, ui-sans-serif), sans-serif;
   --mono: var(--vscode-editor-font-family, ui-monospace, "Cascadia Mono", Consolas, monospace);
 
   /* Motion. One signature curve carries about 80% of the panel; the overshoot
@@ -81,18 +124,112 @@
      rare rewarding moments get overshoot, anything that fires on a keystroke
      does not. */
   --ease-signature: cubic-bezier(0.34, 1.26, 0.64, 1);
-  /* Reserved for the banner exit (spec: "slide + fade, 160ms, --ease-exit").
-     Banners hide via the `[hidden]` attribute, which is an instant
-     `display: none` — animating the exit needs that hide to be deferred
-     until the animation ends (a class + animationend/timeout, or a
-     transition-on-remove pattern), and that's a structural change to how
-     banners are dismissed, not a one-line style fix. Left unused rather than
-     risked in a final fix wave; still available for whoever restructures it. */
   --ease-exit: cubic-bezier(0.3, 0, 1, 1);
   --ease-loop: cubic-bezier(0.4, 0, 0.6, 1);
   --t-quick: 140ms;
   --t-standard: 240ms;
+  --t-enter: 300ms;
   --t-slow: 420ms;
+}
+
+/* VS Code sets one of these classes on <body>. The same layout in four
+   skins: the brand survives, the contrast debt does not. Only the token
+   values move — no selector below this block is skin-aware. */
+
+body.vscode-light {
+  color-scheme: light;
+  --ground: #FBFAFF;
+  --card: #FFFFFF;
+  --card-lit: #F1EDFA;
+  --line: #A79CC6;
+  --line-soft: #CFC7E4;
+  --hair: #E3DDF2;
+  --ink: #221E30;
+  --muted: #5C5378;
+  --coral: #D9401A;
+  --coral-lit: #C1360F;
+  --coral-ink: #FFF6F3;
+  --mint: #1C8F80;
+  --mint-ink: #FFFFFF;
+  --warn: #8A5A00;
+  --withhold-wash: rgba(138, 90, 0, 0.07);
+  --danger: #B3301A;
+  --concept: #6D5BC4;
+  --rung-1: #F2A08A;
+  --rung-2: #E4633C;
+  --rung-3: #D9401A;
+  --rung-4: #1C8F80;
+  --e1: 0 1px 2px rgba(34, 30, 48, 0.07);
+  --e2: 0 6px 16px -6px rgba(34, 30, 48, 0.18);
+  --e3: 0 14px 34px rgba(34, 30, 48, 0.2);
+}
+
+body.vscode-high-contrast {
+  --ground: #000000;
+  --card: #000000;
+  --card-lit: #0D0B14;
+  --line: #FFFFFF;
+  --line-soft: #FFFFFF;
+  --hair: #FFFFFF;
+  --ink: #FFFFFF;
+  --muted: #FFFFFF;
+  --coral: #FF9B80;
+  --coral-lit: #FFB39F;
+  --coral-ink: #000000;
+  --mint: #8FF3E5;
+  --mint-ink: #000000;
+  --warn: #FFD98A;
+  /* No fills in high contrast: the dashed border is the whole signal. */
+  --withhold-wash: transparent;
+  --danger: #FFA694;
+  --concept: #C9BCFF;
+  --rung-1: #FFD2C4;
+  --rung-2: #FFB39F;
+  --rung-3: #FF9B80;
+  --rung-4: #8FF3E5;
+  --e1: none;
+  --e2: none;
+  --e3: none;
+}
+
+body.vscode-high-contrast-light {
+  color-scheme: light;
+  --ground: #FFFFFF;
+  --card: #FFFFFF;
+  --card-lit: #F2F2F2;
+  --line: #000000;
+  --line-soft: #000000;
+  --hair: #000000;
+  --ink: #000000;
+  --muted: #000000;
+  --coral: #A32B0B;
+  --coral-lit: #7F2108;
+  --coral-ink: #FFFFFF;
+  --mint: #0F5F55;
+  --mint-ink: #FFFFFF;
+  --warn: #5C3C00;
+  --withhold-wash: transparent;
+  --danger: #8A2210;
+  --concept: #4A38A0;
+  --rung-1: #E08A6E;
+  --rung-2: #C4491F;
+  --rung-3: #A32B0B;
+  --rung-4: #0F5F55;
+  --e1: none;
+  --e2: none;
+  --e3: none;
+}
+
+/* Both high-contrast skins: every boundary is a real line, never a fill. */
+body[class*="high-contrast"] .card,
+body[class*="high-contrast"] .turn--tutor,
+body[class*="high-contrast"] .btn {
+  border: 1px solid var(--line);
+}
+
+body[class*="high-contrast"] :focus-visible {
+  outline: 2px solid var(--coral);
+  outline-offset: 2px;
 }
 
 * {
@@ -171,7 +308,7 @@ body {
 
 .topbar {
   padding: var(--s4) var(--s5) var(--s3);
-  border-bottom: 1px solid var(--line);
+  border-bottom: 1px solid var(--line-soft);
   /* Anchors the preferences popover, which is positioned against the header
      rather than the avatar so it can right-align to the panel edge. */
   position: relative;
@@ -606,7 +743,7 @@ body {
 /* --------------------------------------------------------------- filecard */
 
 .filecard {
-  border-bottom: 1px solid var(--line);
+  border-bottom: 1px solid var(--line-soft);
   padding: var(--s3) var(--s5) var(--s4);
   display: flex;
   flex-direction: column;
@@ -748,7 +885,18 @@ body {
    the panel — this and .signin are the first thing a new or signed-out
    student sees, and were the one card shape with no entrance at all. */
 .empty {
-  margin: auto 0;
+  /* Bottom-anchored, not centred. `margin: auto 0` split the free space
+     above and below, so on a tall panel the headline floated in the middle
+     of a void with nothing to belong to. An auto top margin alone hands all
+     of it to the top, which pins the block against the composer it is
+     telling the student to use.
+
+     `.chat { justify-content: flex-end }` would do the same job, but it is
+     the wrong tool here: .chat is the scroll container, and justify-content
+     pushes overflowing content past the top edge where scrollTop cannot
+     reach it. An auto margin on the item has no such failure mode, and the
+     placeholder is always .chat's only child anyway (clearPlaceholder). */
+  margin-top: auto;
   padding: var(--s6) var(--s2);
   color: var(--muted);
   font-size: var(--t-small);
@@ -788,9 +936,14 @@ body {
 .turn--tutor {
   background: var(--card);
   border: 1px solid var(--line-soft);
-  border-radius: var(--radius-lg);
+  /* The rail the family classes colour. Square on the rail side and round
+     on the other three, so 2px reads as the card's edge rather than as a
+     stripe laid on top of it. */
+  border-left-width: 2px;
+  border-radius: var(--radius-sm) var(--radius-lg) var(--radius-lg)
+    var(--radius-sm);
   padding: var(--s5);
-  box-shadow: 0 1px 0 rgba(0, 0, 0, 0.4);
+  box-shadow: var(--e1);
   /* Both, because `animation` is a shorthand and `.turn` already sets it.
      The shadow lands 60ms after the card so the entrance reads as an object
      arriving rather than a flat slab sliding. */
@@ -803,6 +956,50 @@ body {
   border-color: var(--line);
 }
 
+/* ---------------------------------------------------------- card families
+
+   Fifteen modes, four families. The axis is the tutor's stance, because
+   that is the axis the product is about: is it asking, showing, telling, or
+   refusing? A new mode picks a family and inherits a treatment instead of
+   inventing a sixteenth one. Mode-specific *text* stays a per-mode table in
+   main.js; mode-specific *styling* stops existing here.
+
+   Applied by buildTurn() from the FAMILY table. */
+
+/* A — the tutor asking. The default stance, and the only one whose body
+   ends in a question mark. */
+.turn--ask {
+  border-left-color: var(--ask);
+}
+
+/* B — material the tutor puts on screen: the worked example, a translation,
+   a concept explained. Mint is "here is something to work with" throughout,
+   which is why rung 4 is mint on the meter too. */
+.turn--show {
+  border-left-color: var(--show);
+}
+
+/* C — the answer, given directly. The only card with a hairline all the way
+   round rather than a rail: it is the end of a thread by construction, so it
+   is drawn as a closed shape rather than one with an open edge. */
+.turn--tell {
+  border-color: var(--tell);
+  border-left-width: 1px;
+  border-radius: var(--radius-lg);
+}
+
+/* D — holding back. No card fill and no rail, because a refusal is not
+   teaching and should not be dressed as it. A dashed edge on a 7% wash. */
+.turn--withhold {
+  background: var(--withhold-wash);
+  border: 1px dashed var(--withhold);
+  border-radius: var(--radius-lg);
+  box-shadow: none;
+}
+
+/* Retired by T6, when .turn--withhold takes over the four flagged modes.
+   Kept until then so the flagged treatment survives the gap between the
+   families being defined and being applied. */
 .turn--tutor.is-flagged {
   border-left-color: var(--warn);
 }
@@ -863,14 +1060,11 @@ body {
    run-on line and then visibly reflows when the final render lands. */
 .turn__body--streaming {
   white-space: pre-wrap;
-  /* Ambient: while the tutor is mid-sentence its text breathes very slightly,
-     which says "working" without a second spinner. */
-  animation: streaming-breathe 2s var(--ease-loop) infinite;
-}
-
-@keyframes streaming-breathe {
-  0%, 100% { opacity: 1; }
-  50% { opacity: 0.96; }
+  /* The text used to breathe on a 2s opacity loop to say "working". It was
+     removed rather than tuned: it animated the one element on screen the
+     student is actively reading, so it competed with the reading it was
+     decorating. The caret below already says the same thing, next to the
+     place the next character will land. */
 }
 
 .turn--student .turn__body {
@@ -972,7 +1166,7 @@ body {
 /* ---------------------------------------------------------- trace exercise */
 
 .trace {
-  border: 1px solid var(--line);
+  border: 1px solid var(--line-soft);
   border-radius: var(--radius-md);
   padding: var(--s4);
   display: flex;
@@ -1066,7 +1260,7 @@ input[type="text"].trace__cell {
 
 .composer {
   flex: none;
-  border-top: 1px solid var(--line);
+  border-top: 1px solid var(--line-soft);
   padding: var(--s4) var(--s5) var(--s5);
   display: flex;
   flex-direction: column;
@@ -1235,11 +1429,29 @@ textarea::placeholder {
   }
 }
 
+/* Fade-only entrances, for reduced motion. Separate keyframes rather than
+   a translate-suppressing override, so the replacement is a real animation
+   with a real duration instead of a collapsed one. */
+@keyframes fade-in {
+  from {
+    opacity: 0;
+  }
+}
+
+/* The celebration band, held rather than travelled. */
+@keyframes sweep-hold {
+  to {
+    opacity: 0;
+  }
+}
+
 @media (prefers-reduced-motion: reduce) {
-  /* Reduced motion means no movement, not no feedback: the ladder dots still
-     fill, the sweep still tints, banners still appear. Durations collapse
-     rather than animations being removed, so `animationend` handlers still
-     fire and nothing waits forever on an event that never arrives. */
+  /* The blanket collapse is the floor, not the policy. It handles everything
+     whose movement is decoration over a change that is legible anyway — a
+     hover tint, a card whose arrival is obvious because its text is now
+     there. Anything whose *only* signal is the movement is named below and
+     given a static replacement instead, because collapsing those to 0.01ms
+     does not calm them down, it deletes them. */
   *,
   *::before,
   *::after {
@@ -1249,13 +1461,50 @@ textarea::placeholder {
     scroll-behavior: auto !important;
   }
 
-  /* The sweep travels, so a collapsed duration lands it off-screen and the
-     student gets nothing. Hold it still instead: reduced motion means no
-     movement, not no feedback. */
+  /* Card entrance: fade, no rise. The shadow layer goes entirely — it exists
+     to land 60ms behind the rise that is no longer happening. */
+  .turn {
+    animation: fade-in 120ms linear both !important;
+  }
+
+  .turn--tutor {
+    animation: fade-in 120ms linear both !important;
+  }
+
+  /* Empty state and sign-in: same fade, and the 80ms delay goes with the
+     stagger it was there to lead. */
+  .empty,
+  .signin {
+    animation: fade-in 120ms linear both !important;
+  }
+
+  /* Streaming caret: solid, not blinking. A caret that is simply present
+     still marks where the next character lands, which is the whole job. */
+  .caret {
+    animation: none !important;
+    opacity: 1;
+  }
+
+  /* Banner arrival: fade, no slide. A banner that slides in from -100% at
+     0.01ms has travelled its whole distance before the first frame, so the
+     student sees nothing arrive — only a banner that was suddenly there. */
+  .banner {
+    animation: fade-in 160ms linear both !important;
+  }
+
+  /* The celebration sweep travels the full width, so a collapsed duration
+     lands it off-screen and there is no payoff at all. Hold the band still
+     at full mint and fade it out inside the 900ms the class is on the body. */
   body.is-celebrating::before {
     transform: none !important;
     background: var(--mint) !important;
+    animation: sweep-hold 400ms linear both !important;
   }
+
+  /* The held ladder needs no rule here: `.ladder.is-held .ladder__dot--anchor`
+     is a static ring outside this block, so the refusal is already readable
+     without the nudge. The nudge (`dot-held`) collapses, which is correct —
+     it was the decoration, not the signal. */
 }
 
 /* ----------------------------------------------------------------- signin */
@@ -1263,12 +1512,14 @@ textarea::placeholder {
 /* Same entrance as .empty above, and for the same reason: rise + fade,
    300ms, 80ms delay, per the spec's motion inventory. */
 .signin {
+  /* Bottom-anchored for the same reason as .empty above. */
+  margin-top: auto;
   display: grid;
   gap: var(--s4);
   justify-items: start;
   padding: var(--s6);
   background: var(--card);
-  border: 1px solid var(--line);
+  border: 1px solid var(--line-soft);
   border-radius: var(--radius-md);
   animation: turn-in 300ms var(--ease-signature) 80ms both;
 }
