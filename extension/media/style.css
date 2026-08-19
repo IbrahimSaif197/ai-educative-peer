@@ -829,6 +829,14 @@ body {
   background: var(--show);
 }
 
+/* The file moved under us. Amber rather than danger: nothing is broken, the
+   panel is simply describing a version of the file that is no longer there,
+   and one click fixes it. The Refresh button beside it carries the same fact
+   in words — this dot is aria-hidden geometry and cannot be the only signal. */
+.ctx__dot.is-stale {
+  background: var(--warn);
+}
+
 .ctx__file,
 .ctx__symbol,
 .ctx__range,

@@ -46,6 +46,7 @@
   const ctxCodeEl = el("ctxCode");
   const ctxMoreEl = el("ctxMore");
   const ctxOpenEl = el("ctxOpen");
+  const ctxRefreshEl = el("ctxRefresh");
   const composerEl = document.querySelector(".composer");
   const modeStripEl = el("modeStrip");
   const modeLabelEl = el("modeLabel");
@@ -659,6 +660,20 @@
   }
 
   ctxOpenEl.addEventListener("click", () => vscode.postMessage({ type: "openFile" }));
+  ctxRefreshEl.addEventListener("click", () => vscode.postMessage({ type: "refreshCode" }));
+
+  /**
+   * The file changed somewhere the panel could not see.
+   *
+   * The dot going amber is the glance-level signal, but a dot is aria-hidden
+   * geometry, so it cannot be the only one: the Refresh button appearing is
+   * what a screen reader gets, and it is also the way out. It sits in the
+   * slot "Open a file" uses, which is empty whenever a file is open.
+   */
+  function setContextStale(stale) {
+    ctxDotEl.classList.toggle("is-stale", stale);
+    ctxRefreshEl.hidden = !stale;
+  }
 
   /**
    * Paint the context row from a focus message.
@@ -680,6 +695,10 @@
     ctxSepEl.hidden = !symbol;
     focusSymbol = symbol;
     ctxDotEl.classList.toggle("is-live", hasFile);
+    // A fresh focus message is by definition not stale; the host clears its
+    // own flag on the same path, so this only keeps the two in step when the
+    // panel is rebuilt from state the host did not just send.
+    setContextStale(false);
     // Nothing to disclose, and nothing to say about a file that is not there:
     // the strip states it once, in one component, and offers the fix. The
     // panel used to say it twice, in two.
@@ -1432,6 +1451,10 @@
 
       case "offline":
         setBanner(offlineBannerEl, !!msg.value);
+        break;
+
+      case "contextStale":
+        setContextStale(!!msg.value);
         break;
 
       case "authTrouble":

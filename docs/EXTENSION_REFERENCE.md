@@ -918,6 +918,7 @@ Sent through `post()` (`sidebarProvider.ts:1000`), handled in the switch at
 | `error` | `message` | `:821` | Error-styled turn |
 | `loading` | `value` | six ask sites, plus `resetSession` | Toggles the thinking indicator and disables Ask, Quiz me, Reset and Review. Reset used to be the one entry point that never sent it, so its own `isLoading` guard never fired and a second click started a second round trip |
 | `offline` | `value` | `:210` | Offline banner (amber, transient, carries Retry) |
+| `contextStale` | `value` | `onDidChangeTextDocument`; cleared by `sendFocus` | The file the strip describes changed while a different editor was active. Everything the panel knows about a file arrives through `sendFocus`, which only reads the *active* editor — so a branch switch or a format-on-save in another group leaves the strip naming lines that have moved, with nothing correcting it until the student returns. The dot goes amber and a Refresh appears in the slot "Open a file" uses. Posted on the transition only, never per keystroke |
 | `authTrouble` | `value` | `:219` | Sign-in banner — a separate banner, and a separate *tier*, because "server down" and "auth broken" send the student to two different places. Drawn as danger with a square dot, carries "Fix it", and sets the avatar pip, which outlives the banner being dismissed |
 | `streak` | `days` | `:229` | The ledger's streak, and its separator |
 | `scanClean` | — | `:234` | 900 ms celebration flash |
@@ -1798,9 +1799,7 @@ Facts about the current tree, not recommendations.
     "no control reads a decorative mark aloud" holds that line; it found the
     Ask button announcing "Ask↵" on its first run.
 
-    Still open: **C3's stale-context state** (the dot goes amber after an
-    external edit) — which needs a host-side file-watcher signal that the
-    message protocol does not carry.
+    C3's stale-context state landed 2026-08-19 and was the last of them.
 15. **The redesign's own preview is a paint check, not a render.**
     `docs/mockups/make-preview.py` lifts the markup from `getHtml()` and points
     it at the real stylesheet, but runs no script — so it shows the chrome and

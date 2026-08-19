@@ -2012,6 +2012,98 @@ describe("the explain-first gate judges what the student typed", () => {
  * while the transcript correctly held. The ladder now rides the same sticky
  * key the conversation does.
  */
+/**
+ * The file changing where the panel cannot see it.
+ *
+ * Everything the panel knows about a file arrives through `sendFocus`, and
+ * `sendFocus` only ever reads `window.activeTextEditor`. So a git checkout, a
+ * format-on-save in another editor group, or a task writing the file leaves
+ * the context strip naming lines that have moved and the preview showing code
+ * that is gone \u2014 and nothing corrects it until the student happens to come
+ * back to that tab.
+ */
+describe("the context strip says when the file moved under it", () => {
+  /** Fire a document change the way VS Code would. */
+  function change(doc: any) {
+    for (const listener of mock.__state.listeners.textDocument) {
+      listener({ document: doc, contentChanges: [{ range: new mock.Range(0, 0, 0, 1), text: "x" }] });
+    }
+  }
+
+  /**
+   * A provider that is actually describing a file.
+   *
+   * `setupProvider` builds one but never drives a focus, and until it has read
+   * a document the panel is describing nothing — so there is nothing for a
+   * change to make stale. That guard is the behaviour, not an obstacle: "says
+   * nothing about a file the panel was never describing" is one of the cases
+   * below, and it passes for exactly this reason.
+   */
+  async function focused(path = "/tmp/stale/demo.py") {
+    const h = await setupProvider(undefined, 1, path);
+    await (h.provider as any).sendFocus({ force: true });
+    h.posted.length = 0;
+    return h;
+  }
+
+  /** Move the student to another file, leaving theirs in the background. */
+  function lookAway() {
+    mock.window.activeTextEditor = mock.__makeEditor(
+      mock.__makeDocument("x = 1\n", "python", "/tmp/stale/other.py"),
+      0
+    );
+  }
+
+  it("marks the context stale when its own file changes while another is active", async () => {
+    const { posted, doc } = await focused();
+    lookAway();
+
+    change(doc);
+
+    expect(posted.filter((m) => m.type === "contextStale").map((m) => m.value)).toEqual([true]);
+  });
+
+  it("says nothing about a file the panel was never describing", async () => {
+    const { posted } = await focused();
+    lookAway();
+
+    change(mock.__makeDocument("y = 2\n", "python", "/tmp/stale/stranger.py"));
+
+    expect(posted.filter((m) => m.type === "contextStale")).toEqual([]);
+  });
+
+  it("does not mark the active document stale — that one refreshes itself", async () => {
+    const { posted, doc } = await focused();
+
+    change(doc); // still the active editor
+
+    expect(posted.filter((m) => m.type === "contextStale")).toEqual([]);
+  });
+
+  it("says it once, not once per keystroke", async () => {
+    const { posted, doc } = await focused();
+    lookAway();
+
+    change(doc);
+    change(doc);
+    change(doc);
+
+    expect(posted.filter((m) => m.type === "contextStale")).toHaveLength(1);
+  });
+
+  it("clears it as soon as the file is read again", async () => {
+    const { provider, posted, doc } = await focused();
+    lookAway();
+    change(doc);
+    posted.length = 0;
+
+    mock.window.activeTextEditor = mock.__makeEditor(doc, 1);
+    await (provider as any).sendFocus({ force: true });
+
+    expect(posted.filter((m) => m.type === "contextStale").map((m) => m.value)).toEqual([false]);
+  });
+});
+
 describe("the hint ladder follows the sticky thread key", () => {
   beforeEach(() => mock.__reset());
 

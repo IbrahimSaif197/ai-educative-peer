@@ -18,6 +18,12 @@
 - **Dragged wide, lines stop running the full width.** Past about 420px the
   text settles to a comfortable measure; the extra width goes to the language
   chip and the spelled-out ledger instead of to longer lines.
+- **The panel says when the file moved without it.** If something rewrites the
+  file you were asking about while you are looking at another tab — a branch
+  switch, a formatter, a build step — the panel used to carry on naming lines
+  that had moved and showing code that was gone. The dot beside the file name
+  turns amber now and a Refresh appears next to it; one click and it is
+  reading the file as it is.
 - **The hint depth survives the panel being put away.** Hiding and reopening
   the sidebar, or reloading the window, left the ring around your picture
   empty even though the conversation beside it still said you were three

@@ -86,6 +86,24 @@ export class EduPeerSidebarProvider implements vscode.WebviewViewProvider {
   private pendingThreadSwap = false;
   private lastLanguageId = "python";
   /**
+   * The document the context strip is currently describing.
+   *
+   * Not `lastDocumentKey`, which carries the block's label too: staleness is
+   * a property of the file, and an edit anywhere in it can move the lines the
+   * strip is naming.
+   */
+  private focusedDocUri = "";
+  /**
+   * That document changed while the student was looking at something else.
+   *
+   * Everything the panel knows about a file arrives through `sendFocus`, and
+   * `sendFocus` only ever runs for the *active* editor. So a git checkout, a
+   * format-on-save in another group, or a task writing the file leaves the
+   * strip naming lines that have moved and the preview showing code that is
+   * gone, with nothing on screen admitting it.
+   */
+  private contextStale = false;
+  /**
    * The block the cursor is literally in, `uri#label` or `uri`.
    *
    * No longer the hint ladder's key — that follows `threadKey` now, so the
@@ -374,6 +392,18 @@ export class EduPeerSidebarProvider implements vscode.WebviewViewProvider {
           e.document === vscode.window.activeTextEditor.document
         ) {
           this.scheduleFocus();
+          return;
+        }
+        // A change to the file the panel is describing, made while the
+        // student is elsewhere. `sendFocus` only ever reads the active
+        // editor, so nothing here will correct itself until they come back:
+        // say so instead of showing them a block that has moved.
+        if (
+          e.contentChanges.length &&
+          this.focusedDocUri &&
+          e.document.uri.toString() === this.focusedDocUri
+        ) {
+          this.setContextStale(true);
         }
       }),
       vscode.window.onDidChangeTextEditorSelection(() => this.scheduleFocus()),
@@ -912,6 +942,8 @@ export class EduPeerSidebarProvider implements vscode.WebviewViewProvider {
       this.lastFocusSignature = "";
       this.lastCursorLine = 0;
       this.lastDocumentKey = "";
+      this.focusedDocUri = "";
+      this.setContextStale(false);
       // `threadKey` and `threadBlockCode` are left exactly as they were, for
       // the same reason and as a pair — clearing the text but not the key
       // would make the next ask diff the block against "" and report the
@@ -925,6 +957,12 @@ export class EduPeerSidebarProvider implements vscode.WebviewViewProvider {
     }
 
     const doc = editor.document;
+    // Ahead of the unchanged-signature early return below on purpose: getting
+    // here at all means this document has just been re-read, so whatever the
+    // panel is showing for it is current \u2014 including when the edit landed
+    // outside the focus block and the signature therefore did not move.
+    this.focusedDocUri = doc.uri.toString();
+    this.setContextStale(false);
     const languageId = doc.languageId;
     if (isSupportedLanguage(languageId)) {
       this.lastLanguageId = languageId;
@@ -1025,6 +1063,13 @@ export class EduPeerSidebarProvider implements vscode.WebviewViewProvider {
   }
 
   /** Coalesce the keystroke storm into one resolve. */
+  /** Say the context is out of date, once, rather than on every keystroke. */
+  private setContextStale(value: boolean) {
+    if (this.contextStale === value) return;
+    this.contextStale = value;
+    this.post({ type: "contextStale", value });
+  }
+
   private scheduleFocus() {
     if (this.focusDebounce) clearTimeout(this.focusDebounce);
     this.focusDebounce = setTimeout(() => {
@@ -1268,6 +1313,8 @@ export class EduPeerSidebarProvider implements vscode.WebviewViewProvider {
         </span>
       </button>
       <button id="ctxOpen" class="btn btn--ghost btn--sm">Open a file</button>
+      <button id="ctxRefresh" class="btn btn--ghost btn--sm" hidden
+              aria-label="This file changed elsewhere \u2014 re-read it">Refresh</button>
       <button id="reviewBtn" class="btn btn--accent btn--sm" hidden title="A spaced-review exercise is ready">Review</button>
     </div>
     <div class="ctx__code" id="ctxCode" hidden>

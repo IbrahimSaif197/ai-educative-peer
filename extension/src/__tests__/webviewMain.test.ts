@@ -1637,6 +1637,65 @@ describe("webview — the stylesheet and the DOM agree on class names", () => {
  * Every one of those left the ring empty beside a transcript that still said
  * rung 3.
  */
+/**
+ * The file moved under the panel.
+ *
+ * Everything the panel knows about a file arrives through `focus`, and the
+ * host only ever sends that for the active editor — so a git checkout or a
+ * format-on-save in another group leaves the strip naming lines that have
+ * moved, with nothing on screen admitting it.
+ */
+describe("webview — the context strip admits when it is out of date", () => {
+  const focus = {
+    type: "focus",
+    focusCode: "def f():\n    pass",
+    breadcrumb: "demo.py \u203a f",
+    startLine: 12,
+    endLine: 13,
+    cursorLine: 12,
+    fileName: "/tmp/demo.py",
+    language: "Python",
+    totalLines: 40,
+  };
+
+  it("turns the dot amber and offers a way out", () => {
+    post(focus);
+    expect(el("ctxDot").classList.contains("is-stale")).toBe(false);
+    expect((el("ctxRefresh") as HTMLElement).hidden).toBe(true);
+
+    post({ type: "contextStale", value: true });
+    expect(el("ctxDot").classList.contains("is-stale")).toBe(true);
+    // The dot is aria-hidden geometry, so it cannot be the only signal. The
+    // button appearing is what a screen reader gets, and it says why.
+    expect((el("ctxRefresh") as HTMLElement).hidden).toBe(false);
+    expect(el("ctxRefresh").getAttribute("aria-label")).toContain("changed elsewhere");
+  });
+
+  it("re-reads the file when asked", () => {
+    post(focus);
+    post({ type: "contextStale", value: true });
+    (el("ctxRefresh") as HTMLButtonElement).click();
+    expect(lastSent("refreshCode")).toBeDefined();
+  });
+
+  it("clears itself when a fresh focus arrives", () => {
+    post(focus);
+    post({ type: "contextStale", value: true });
+    post(focus);
+
+    expect(el("ctxDot").classList.contains("is-stale")).toBe(false);
+    expect((el("ctxRefresh") as HTMLElement).hidden).toBe(true);
+  });
+
+  it("keeps the dot live as well as stale, so both facts show", () => {
+    // Stale is about freshness, live is about whether there is a file at all.
+    post(focus);
+    post({ type: "contextStale", value: true });
+    expect(el("ctxDot").classList.contains("is-live")).toBe(true);
+    expect(el("ctxDot").classList.contains("is-stale")).toBe(true);
+  });
+});
+
 describe("webview — the depth survives a restore", () => {
   const thread = [
     { role: "student", text: "why does it crash?" },
