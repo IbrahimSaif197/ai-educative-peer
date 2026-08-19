@@ -47,6 +47,34 @@ def _avg_level(entry: Dict[str, Any]) -> float:
     return int(entry.get("level_sum", 0)) / rated
 
 
+def normalise_goal_concepts(raw: Any) -> List[str]:
+    """The goal's concept tags, cleaned, deduped, and order preserved.
+
+    `map_goal_to_concepts` already filters to the language's known vocabulary,
+    but the value read back here has been through Firestore and a client, so it
+    is treated as untrusted shape rather than assumed.
+    """
+    seen: List[str] = []
+    for tag in raw if isinstance(raw, list) else []:
+        if not isinstance(tag, str):
+            continue
+        clean = tag.strip().lower()
+        if clean and clean not in seen:
+            seen.append(clean)
+    return seen
+
+
+def goal_concepts_of(profile: Optional[Dict[str, Any]]) -> List[str]:
+    """The goal concepts on a users document, or []."""
+    goal = (profile or {}).get("goal")
+    if not isinstance(goal, dict):
+        return []
+    # A goal with no text is a cleared goal; its tags do not outlive it.
+    if not str(goal.get("text", "")).strip():
+        return []
+    return normalise_goal_concepts(goal.get("concepts"))
+
+
 def concept_struggles(concept_stats: Optional[Dict[str, Any]], limit: int = 5) -> List[dict]:
     items = []
     for tag, entry in (concept_stats or {}).items():
@@ -75,7 +103,11 @@ def concept_strengths(concept_stats: Optional[Dict[str, Any]], limit: int = 5) -
     return items[:limit]
 
 
-def pacing_summary(concept_stats: Optional[Dict[str, Any]], goal_text: str = "") -> str:
+def pacing_summary(
+    concept_stats: Optional[Dict[str, Any]],
+    goal_text: str = "",
+    goal_concepts: Optional[List[str]] = None,
+) -> str:
     """One paragraph of tutor-facing context, or "" when there is no signal."""
     struggles = concept_struggles(concept_stats, limit=3)
     strengths = concept_strengths(concept_stats, limit=3)
@@ -93,7 +125,27 @@ def pacing_summary(concept_stats: Optional[Dict[str, Any]], goal_text: str = "")
             "Stay terse there."
         )
     if goal_text:
-        parts.append(f"The student's stated learning goal: {goal_text}.")
+        line = f"The student's stated learning goal: {goal_text}."
+        tags = normalise_goal_concepts(goal_concepts)
+        if tags:
+            # The tags come from the same vocabulary the tutor tags its own
+            # replies with, so naming them connects the goal to the concept
+            # system rather than leaving it as a sentence the model has to
+            # interpret afresh every call.
+            #
+            # The last clause is the important one. A student whose goal is
+            # "recursion" asking about a string-formatting bug must not be
+            # answered about recursion: a goal is a preference between honest
+            # framings of the code in front of them, never a reason to reach
+            # for code that is not there.
+            line += (
+                " In concept tags, that is: "
+                + ", ".join(tags)
+                + ". When the student's code genuinely touches one of those,"
+                " prefer that framing and scaffold it one step more slowly."
+                " Never steer towards a concept the code does not raise."
+            )
+        parts.append(line)
     if not parts:
         return ""
     return "Tutor pacing context (never mention this to the student): " + " ".join(parts)
@@ -144,9 +196,20 @@ def _parse_iso(value: Any) -> Optional[date]:
 
 
 def review_due_concepts(
-    concept_stats: Optional[Dict[str, Any]], today: date, limit: int = 3
+    concept_stats: Optional[Dict[str, Any]],
+    today: date,
+    limit: int = 3,
+    goal_concepts: Optional[List[str]] = None,
 ) -> List[str]:
-    """Concepts struggled with 3-7 days ago, ripest (most encounters) first."""
+    """Concepts struggled with 3-7 days ago: goal concepts first, then ripest.
+
+    The goal re-ranks the due set. It deliberately does not widen it: the 3-7
+    day window is the spacing interval the whole feature rests on, and pulling
+    a concept forward because the student said they cared about it would make
+    the review worse at the one thing it is for. A goal decides *which* of the
+    concepts that are ready get the three slots, not which are ready.
+    """
+    goal = set(normalise_goal_concepts(goal_concepts))
     due = []
     for tag, entry in (concept_stats or {}).items():
         if not isinstance(entry, dict):
@@ -156,9 +219,10 @@ def review_due_concepts(
             continue
         age = (today - struggled).days
         if REVIEW_MIN_DAYS <= age <= REVIEW_MAX_DAYS:
-            due.append((int(entry.get("encounters", 0)), tag))
+            due.append((1 if tag.strip().lower() in goal else 0,
+                        int(entry.get("encounters", 0)), tag))
     due.sort(reverse=True)
-    return [tag for _, tag in due[:limit]]
+    return [tag for _, _, tag in due[:limit]]
 
 
 ACTIVITY_WINDOW_DAYS = 14

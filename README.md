@@ -111,7 +111,7 @@ set to `16`.
 | `edupeer.reflectQuiz`           | One-question reflection quiz after you fix a bug.                  |
 | `edupeer.traceCode`             | Desk-check exercise: fill in a variable trace, get it marked.      |
 | `edupeer.showProgress`          | Progress dashboard: badges, streak, concepts, session notes.       |
-| `edupeer.setGoal`               | Set (or clear) a free-text learning goal that biases the tutor.    |
+| `edupeer.setGoal`               | Set (or clear) a learning goal. Mapped to concept tags that steer pacing and review. |
 | `edupeer.nudgeLine`             | Hint on the line under the cursor (`Ctrl+Alt+H` / `Cmd+Alt+H`).    |
 | `edupeer.scanFile`              | Scan the block the cursor is in and flag suspicious lines in the Problems panel. Titled "EduPeer: Scan This Block". |
 
@@ -384,6 +384,40 @@ guards parsing). Per-concept stats feed:
   Review button in the sidebar.
 - **Session summaries** — resetting a session stores a 3-bullet "what you
   learned" note.
+
+### What a learning goal actually does
+
+`EduPeer: Set Learning Goal` takes a sentence — "get comfortable with
+recursion". `POST /goal` maps it onto up to four tags from the language's known
+concept vocabulary, the same vocabulary the tutor labels its own replies with,
+and stores both.
+
+Those tags then steer two things:
+
+1. **The pacing paragraph.** The hidden context appended to the `hint` system
+   prompt names them: *"In concept tags, that is: recursion, base-case. When
+   the student's code genuinely touches one of those, prefer that framing and
+   scaffold it one step more slowly."* Naming tags rather than repeating the
+   sentence connects the goal to the concept system instead of leaving the
+   model to reinterpret free text on every call.
+2. **Which concepts come back for spaced review.** A goal concept sorts ahead
+   of riper ones, so it takes one of the three slots first.
+
+Two limits, both deliberate:
+
+- **A goal never invents a topic.** The pacing paragraph ends *"Never steer
+  towards a concept the code does not raise."* A goal is a preference between
+  honest framings of the code in front of you; a student whose goal is
+  recursion asking about a string-formatting bug gets an answer about string
+  formatting.
+- **A goal never changes the review schedule.** It re-ranks the concepts that
+  are already due at 3–7 days; it does not pull one forward. That window is
+  the spacing interval the whole feature rests on, and bending it for a
+  preference would make the review worse at the one thing it is for.
+
+Before 1.7.0 the mapping ran on every `/goal` call and nothing read the
+result — the tags were stored, shown once in a toast, rendered on the
+dashboard, and never consulted. Only the free-text sentence reached the tutor.
 
 The dashboard renders as inline SVG with no chart library and no network: a
 rung distribution, a 14-day activity strip and per-concept mastery bars. Its

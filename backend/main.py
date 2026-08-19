@@ -38,7 +38,12 @@ from cache import TtlCache
 from hinting_engine import build_engine, effective_mode, CodeView
 from firebase_service import FirebaseService
 from languages import normalize_language
-from progress import build_progress, pacing_summary, review_due_concepts
+from progress import (
+    build_progress,
+    goal_concepts_of,
+    pacing_summary,
+    review_due_concepts,
+)
 from ratelimit import RateLimiterRegistry
 from session_store import build_session_store, code_fingerprint, raw_code_hash
 
@@ -229,6 +234,7 @@ async def _pacing_for(req: HintRequest, uid: str) -> str:
     return pacing_summary(
         profile.get("concept_stats"),
         goal_text=str(goal.get("text", "")) if isinstance(goal, dict) else "",
+        goal_concepts=goal_concepts_of(profile),
     )
 
 
@@ -392,7 +398,9 @@ async def get_review(
     uid: str = Depends(rate_limited("review")),
 ):
     data = await _cached_profile(uid)
-    concepts = review_due_concepts(data.get("concept_stats"), _utc_today())
+    concepts = review_due_concepts(
+        data.get("concept_stats"), _utc_today(), goal_concepts=goal_concepts_of(data)
+    )
     if not concepts:
         return {"due": False, "concepts": [], "exercise": ""}
     text = ""

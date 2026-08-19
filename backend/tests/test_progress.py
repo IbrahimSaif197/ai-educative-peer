@@ -8,7 +8,9 @@ from progress import (
     classify_calibration,
     concept_strengths,
     concept_struggles,
+    goal_concepts_of,
     hint_level_counts,
+    normalise_goal_concepts,
     pacing_summary,
     review_due_concepts,
 )
@@ -97,6 +99,106 @@ class TestReviewDue:
     def test_never_struggled_ignored(self):
         stats = {"loops": entry(5, 5, None)}
         assert review_due_concepts(stats, TODAY) == []
+
+
+class TestGoalConcepts:
+    """The tags `/goal` mapped, read back off a users document.
+
+    Until 1.7.0 these were computed by an LLM call, stored, shown once in a
+    toast, and then read by nothing. These tests exist because the way that
+    happens again is for the reading end to have no coverage.
+    """
+
+    def test_reads_the_tags_off_a_goal(self):
+        profile = {"goal": {"text": "get better at recursion", "concepts": ["recursion"]}}
+        assert goal_concepts_of(profile) == ["recursion"]
+
+    def test_a_cleared_goal_takes_its_tags_with_it(self):
+        # `set_goal_sync` writes None for empty text, but a document written
+        # by an older build can carry tags beside blank text. They are stale.
+        profile = {"goal": {"text": "  ", "concepts": ["recursion"]}}
+        assert goal_concepts_of(profile) == []
+
+    def test_no_goal_is_no_tags(self):
+        assert goal_concepts_of({}) == []
+        assert goal_concepts_of(None) == []
+        assert goal_concepts_of({"goal": "recursion"}) == []
+
+    def test_normalises_case_whitespace_and_duplicates(self):
+        assert normalise_goal_concepts([" Loops ", "loops", "RECURSION"]) == [
+            "loops",
+            "recursion",
+        ]
+
+    def test_survives_a_shape_it_did_not_write(self):
+        # The value has been through Firestore and a client since it was
+        # produced, so it is treated as untrusted shape.
+        assert normalise_goal_concepts(None) == []
+        assert normalise_goal_concepts("recursion") == []
+        assert normalise_goal_concepts([1, None, {"a": 1}, "loops"]) == ["loops"]
+
+
+class TestGoalSteersPacing:
+    def test_names_the_tags_in_the_tutor_vocabulary(self):
+        out = pacing_summary(None, goal_text="get better at recursion",
+                             goal_concepts=["recursion", "base-case"])
+        assert "get better at recursion" in out
+        assert "In concept tags, that is: recursion, base-case." in out
+
+    def test_tells_the_tutor_it_may_not_reach_for_them(self):
+        # The whole risk of steering: a student whose goal is recursion asking
+        # about a string-formatting bug must not be answered about recursion.
+        out = pacing_summary(None, goal_text="recursion", goal_concepts=["recursion"])
+        assert "Never steer towards a concept the code does not raise." in out
+
+    def test_goal_text_alone_still_works(self):
+        out = pacing_summary(None, goal_text="get better at recursion")
+        assert "get better at recursion" in out
+        assert "In concept tags" not in out
+
+    def test_no_goal_adds_nothing(self):
+        assert pacing_summary(None, goal_text="", goal_concepts=["recursion"]) == ""
+
+
+class TestGoalSteersReview:
+    def test_a_goal_concept_outranks_a_riper_one(self):
+        stats = {
+            "loops": entry(9, 20, "2026-06-30"),
+            "recursion": entry(2, 5, "2026-06-30"),
+        }
+        # Without the goal, ripeness wins.
+        assert review_due_concepts(stats, TODAY) == ["loops", "recursion"]
+        # With it, the goal concept leads and the other still comes.
+        assert review_due_concepts(stats, TODAY, goal_concepts=["recursion"]) == [
+            "recursion",
+            "loops",
+        ]
+
+    def test_a_goal_does_not_make_a_concept_due(self):
+        # The 3-7 day window is the spacing interval the feature rests on.
+        # Pulling a concept forward because the student said they cared about
+        # it would make the review worse at the one thing it is for.
+        stats = {"recursion": entry(2, 5, "2026-07-03")}  # yesterday
+        assert review_due_concepts(stats, TODAY, goal_concepts=["recursion"]) == []
+
+    def test_a_goal_concept_never_struggled_with_is_not_invented(self):
+        stats = {"loops": entry(2, 4, "2026-06-30")}
+        assert review_due_concepts(stats, TODAY, goal_concepts=["monads"]) == ["loops"]
+
+    def test_goal_ranking_respects_the_limit(self):
+        stats = {
+            "a": entry(9, 20, "2026-06-30"),
+            "b": entry(8, 20, "2026-06-30"),
+            "c": entry(7, 20, "2026-06-30"),
+            "recursion": entry(1, 3, "2026-06-30"),
+        }
+        out = review_due_concepts(stats, TODAY, goal_concepts=["recursion"])
+        assert len(out) == 3
+        assert out[0] == "recursion"
+
+    def test_matching_is_case_insensitive(self):
+        stats = {"Recursion": entry(2, 5, "2026-06-30"), "loops": entry(9, 20, "2026-06-30")}
+        assert review_due_concepts(stats, TODAY, goal_concepts=["RECURSION"])[0] == "Recursion"
 
 
 class TestBuildProgress:

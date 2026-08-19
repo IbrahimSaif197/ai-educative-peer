@@ -2,6 +2,23 @@
 
 ## 1.7.0
 
+### Your learning goal now actually does something
+
+Setting a goal has always turned your sentence into concept tags — say "get
+comfortable with recursion" and it works out that you mean `recursion` and
+`base-case`. Those tags were then shown to you once and quietly ignored. Only
+the sentence itself reached the tutor.
+
+They now steer two things. The tutor is told which concepts you are working
+towards in its own vocabulary, and leans towards those framings **when your
+code genuinely touches them** — it will not answer a string-formatting
+question with recursion because you asked it to care about recursion. And when
+a spaced review comes due, concepts from your goal get the slots first.
+
+What a goal still will not do is change *when* something comes back for
+review. Things resurface 3–7 days after you struggled with them because that
+is roughly when it helps; wanting it sooner would not make it work better.
+
 ### EduPeer no longer edits your code. At all.
 
 There was one exception, and it is gone: a setting that tidied away `bug:`

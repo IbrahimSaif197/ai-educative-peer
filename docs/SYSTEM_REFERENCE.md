@@ -534,7 +534,9 @@ from Firestore, which is why it is fully unit-tested.
 | `_avg_level(entry) -> float` | 41 | `level_sum` divided by the **rated** encounter count (`0.0` when there are none), so turns from non-`hint` modes cannot drag the average down. |
 | `concept_struggles(concept_stats, limit=5) -> List[dict]` | 48 | `{concept, encounters, avg_level}` where `encounters` is the rated count, gated on `rated >= STRUGGLE_MIN_ENCOUNTERS`, sorted by avg level descending then encounters descending. |
 | `concept_strengths(concept_stats, limit=5) -> List[dict]` | 61 | Same shape and same rated-encounter gate, sorted by avg level ascending then encounters descending. |
-| `pacing_summary(concept_stats, goal_text="") -> str` | 76 | The tutor-facing pacing paragraph, `""` when there is no signal. |
+| `pacing_summary(concept_stats, goal_text="", goal_concepts=None) -> str` | 76 | The tutor-facing pacing paragraph, `""` when there is no signal. |
+| `goal_concepts_of(profile) -> List[str]` | — | The goal's mapped tags off a users document, `[]` when the goal is absent or its text is blank. |
+| `normalise_goal_concepts(raw) -> List[str]` | — | Lower-cased, deduped, order preserved; tolerant of the shape, since the value has been through Firestore and a client. |
 | `classify_calibration(confidence, hint_level) -> Optional[str]` | 100 | `"overconfident"`, `"underconfident"`, `"calibrated"` or `None`. |
 | `calibration_summary(data) -> Dict` | 116 | `{samples, score, calibrated, overconfident, underconfident, enough_data}`. |
 | `review_due_concepts(concept_stats, today, limit=3) -> List[str]` | 144 | Concept tags struggled with 3–7 days ago, most encounters first. |
@@ -895,9 +897,10 @@ LLM call fails (`backend/main.py:354-355`).
 **Response 200:** `{"status": "ok", "goal": <trimmed text>, "concepts": [...]}`.
 
 **Errors:** 401; 429 (`session` bucket); 422 when `text` exceeds 500 characters.
-A failure in `map_goal_to_concepts` is caught and printed
-(`backend/main.py:368-369`), and the goal is still saved with an empty concept
-list.
+A failure in `map_goal_to_concepts` is caught and printed, and the goal is
+still saved with an empty concept list — which since 1.7.0 costs the student
+the concept-level steering while leaving the free-text sentence, rather than
+costing nothing as it used to.
 
 ### `GET /badges`
 
@@ -1448,7 +1451,7 @@ the end of this section.
 | `calibration` | `{calibrated, overconfident, underconfident}` (ints) | same | `calibration_summary:116` | Confidence-vs-outcome counters; only `hint` mode contributes a verdict (`firebase_service.py:314-317`). |
 | `hint_level_counts` | `{"1","2","3","4"}` → int | same | `hint_level_counts:165` | Depth distribution for the dashboard, one key per rung (`LEVEL_KEYS`, derived from `MAX_HINT_LEVEL`); only `hint` mode increments it (`firebase_service.py:318-322`). |
 | `activity` | map of ISO date → int | same, trimmed to 30 days | `activity_strip:178` | Per-day question counts. |
-| `goal` | `{text, concepts, set_at}` or `null` | `set_goal_sync:451` | `build_progress:200`, `_pacing_for:218` | Free-text learning goal and its mapped tags. |
+| `goal` | `{text, concepts, set_at}` or `null` | `set_goal_sync:451` | `build_progress`, `_pacing_for`, `get_review` | Free-text learning goal and its mapped tags. Since 1.7.0 `concepts` steers both the pacing paragraph and the spaced-review ordering; before it, nothing read it. |
 | `session_summaries` | array of `{text, date}`, last 20 kept | `append_session_summary_sync:485` | `build_progress:213` (last 5) | Three-bullet session notes. |
 | `updated_at` | server timestamp | every write | nothing | Audit only. |
 
@@ -1665,12 +1668,31 @@ The exact sentence templates are:
 
 - Struggles: `"The student has repeatedly needed deep hints on: {names}. Scaffold these concepts more gently."`
 - Strengths: `"The student usually solves these at the first question: {names}. Stay terse there."`
-- Goal: `"The student's stated learning goal: {goal_text}."`
+- Goal: `"The student's stated learning goal: {goal_text}."` — and, when the
+  goal has mapped concept tags, that sentence continues:
+  `" In concept tags, that is: {tags}. When the student's code genuinely
+  touches one of those, prefer that framing and scaffold it one step more
+  slowly. Never steer towards a concept the code does not raise."`
+
+**Why the tags and not just the text** *(1.7.0)*. `/goal` has always spent an
+LLM call mapping the free text onto the language's known concept vocabulary,
+and until 1.7.0 nothing read the result: it was stored, returned to the client
+for a toast, rendered on the dashboard, and never consulted again. The tags are
+the same vocabulary the tutor labels its own replies with, so naming them joins
+the goal to the concept system instead of leaving the model to reinterpret a
+sentence on every call.
+
+**The last clause is the guard rail, not decoration.** A goal is a preference
+between honest framings of the code in front of the student — never a licence
+to answer about something the code does not contain. A student whose goal is
+"recursion" asking about a string-formatting bug gets an answer about string
+formatting.
 
 If none of the three applies the function returns `""` and nothing is appended
-to the system prompt. It is computed only for `hint` mode
-(`backend/main.py:214-222`) and reads from the 60-second profile cache, so a
-newly earned struggle can take up to a minute to influence pacing.
+to the system prompt. It is computed only for `hint` mode and reads from the
+60-second profile cache, so a newly set goal can take up to a minute to
+influence pacing — except immediately after `POST /goal`, which evicts that
+user's cache entry.
 
 ### Confidence calibration
 
@@ -1692,8 +1714,17 @@ more data instead of a percentage (`extension/src/progressPanel.ts:111-116`).
 
 ### Spaced review
 
-`review_due_concepts(concept_stats, today, limit=3)`
-(`backend/progress.py:144-159`):
+`review_due_concepts(concept_stats, today, limit=3, goal_concepts=None)`:
+
+- **The goal re-ranks the due set, and only that** *(1.7.0)*. A concept named
+  by the student's goal sorts ahead of riper ones, so it takes one of the three
+  slots first. It deliberately does **not** widen the window: 3-7 days is the
+  spacing interval the whole feature rests on, and pulling a concept forward
+  because the student said they cared about it would make the review worse at
+  the one thing it is for. A goal decides *which* of the concepts that are
+  ready get reviewed, never *which are ready*. A goal concept the student has
+  never struggled with is not invented.
+
 
 - Only concepts with a parseable `last_struggled` date are considered
   (`_parse_iso`, `backend/progress.py:135-141`, reads the first 10 characters

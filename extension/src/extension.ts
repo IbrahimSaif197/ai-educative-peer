@@ -353,7 +353,15 @@ export async function activate(context: vscode.ExtensionContext) {
         const concepts = await api.setGoal(text, language);
         vscode.window.showInformationMessage(
           text.trim()
-            ? `EduPeer: goal set${concepts.length ? ` (focus: ${concepts.join(", ")})` : ""}.`
+            ? // The tags are worth naming because they now do something: they
+              // lead the spaced review and they tell the tutor which honest
+              // framing of your code to prefer. Before 1.7.0 this line was the
+              // only place they were ever used.
+              `EduPeer: goal set.${
+                concepts.length
+                  ? ` Hints will lean towards ${concepts.join(", ")} where your code touches them.`
+                  : ""
+              }`
             : "EduPeer: goal cleared."
         );
       } catch (err: any) {

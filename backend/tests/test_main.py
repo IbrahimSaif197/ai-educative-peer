@@ -338,6 +338,62 @@ class TestProgressEndpoints:
         assert res.json()["concepts"] == ["recursion"]
         assert saved["text"] == "get better at recursion"
 
+    def test_goal_concepts_reach_the_tutor(self, client, monkeypatch):
+        """The whole point of mapping a goal to tags.
+
+        Until 1.7.0 `/goal` spent an LLM call turning free text into concept
+        tags, stored them, showed them in a toast, and then read them from
+        nowhere. The unit tests cover the shaping; this is the one that fails
+        if the wiring is ever dropped again.
+        """
+        import main as app_main
+        app_main._profile_cache.clear()
+        monkeypatch.setattr(
+            app_main.firebase,
+            "try_get_user_profile_sync",
+            lambda uid: {"goal": {"text": "get better at recursion",
+                                  "concepts": ["recursion", "base-case"]}},
+        )
+        seen = {}
+
+        def fake_stream(code, question, level, language, history, mode, pacing,
+                        edit_summary="", focus=None, view=None):
+            seen["pacing"] = pacing
+            yield {"type": "done", "hint": "h", "concept_tags": []}
+
+        monkeypatch.setattr(app_main.engine, "stream_hint", fake_stream)
+        res = client.post("/hint/stream", json=VALID_HINT_PAYLOAD)
+        assert res.status_code == 200
+
+        assert "get better at recursion" in seen["pacing"]
+        assert "In concept tags, that is: recursion, base-case." in seen["pacing"]
+        # And the guard rail travels with them.
+        assert "Never steer towards a concept the code does not raise." in seen["pacing"]
+
+    def test_a_goal_reorders_what_comes_back_for_review(self, client, monkeypatch,
+                                                        _patch_groq_client):
+        import main as app_main
+        from datetime import timedelta
+        app_main._profile_cache.clear()
+        struggled = (app_main._utc_today() - timedelta(days=4)).isoformat()
+
+        def stat(encounters):
+            return {"encounters": encounters, "level_sum": encounters * 3, "max_level": 3,
+                    "last_seen": struggled, "last_struggled": struggled}
+
+        monkeypatch.setattr(
+            app_main.firebase,
+            "try_get_user_profile_sync",
+            lambda uid: {
+                "concept_stats": {"loops": stat(9), "recursion": stat(2)},
+                "goal": {"text": "recursion", "concepts": ["recursion"]},
+            },
+        )
+        res = client.get("/review?language=python")
+        assert res.status_code == 200
+        # `loops` is far riper; the goal is what puts recursion first.
+        assert res.json()["concepts"] == ["recursion", "loops"]
+
     def test_reset_returns_summary_field(self, client):
         res = client.post("/reset")
         assert res.status_code == 200
