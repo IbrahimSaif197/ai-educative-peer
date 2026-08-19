@@ -1772,11 +1772,13 @@ Facts about the current tree, not recommendations.
 13. **The composer has no "Sending…" verb.** The component spec lists it as a
     per-mode state; the thinking row directly above already says "EduPeer is
     thinking…", so a third copy of the same fact was left out.
-14. **Four things the deck specifies have no ticket, and three are still
-    unbuilt.** T1-T15 name C1-C7; **C8 ("Accessibility, the parts that need
-    words") is referenced by no ticket at all**, and neither is §2's icon
-    grid. From C8, the trace table's caption/scope and the popover's focus
-    trap landed 2026-08-19; the "2 of 3 rows correct" announcement did not,
+14. **Several things the deck specifies have no ticket. Two are deliberately
+    not built, and both reasons are below.** T1-T15 name C1-C7; **C8
+    ("Accessibility, the parts that need words") is referenced by no ticket at
+    all**, and neither is §2's icon grid, M11's measure cap, M12's short-panel
+    layout or C3's stale state. All of those landed 2026-08-19 except two.
+    From C8, the trace table's caption/scope and the popover's focus trap
+    landed; the "2 of 3 rows correct" announcement did not,
     because nothing produces that count — `trace-check` comes back as prose
     from the model, and deriving a number client-side would be inventing one.
     **§2's "eleven inline SVGs"** is not being chased, and the reason is worth
@@ -1799,7 +1801,8 @@ Facts about the current tree, not recommendations.
     "no control reads a decorative mark aloud" holds that line; it found the
     Ask button announcing "Ask↵" on its first run.
 
-    C3's stale-context state landed 2026-08-19 and was the last of them.
+    So the two standing deviations are the icon count and the trace
+    announcement. Everything else the deck asks for is built.
 15. **The redesign's own preview is a paint check, not a render.**
     `docs/mockups/make-preview.py` lifts the markup from `getHtml()` and points
     it at the real stylesheet, but runs no script — so it shows the chrome and
