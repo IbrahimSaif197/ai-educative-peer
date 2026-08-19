@@ -1628,6 +1628,58 @@ describe("webview — the stylesheet and the DOM agree on class names", () => {
  * Marks are fine — they just have to be in an aria-hidden wrapper, where the
  * accessible name never reaches them.
  */
+/**
+ * A restored thread knows how deep it is.
+ *
+ * `currentLevel` is otherwise only ever set by a live hint, and a restore
+ * happens far more often than it looks: hiding and showing the sidebar,
+ * reloading the host, and moving to another block and back all replay one.
+ * Every one of those left the ring empty beside a transcript that still said
+ * rung 3.
+ */
+describe("webview — the depth survives a restore", () => {
+  const thread = [
+    { role: "student", text: "why does it crash?" },
+    { role: "tutor", text: "rung 1", eyebrow: "Asking", level: 1, family: "ask" },
+    { role: "tutor", text: "rung 3", eyebrow: "Asking", level: 3, family: "ask" },
+  ];
+
+  it("lights the ring to the depth the transcript shows", () => {
+    post({ type: "restoreChat", messages: thread });
+
+    expect($$(".rung__bar.is-spent")).toHaveLength(1 + 3);   // one meter each
+    expect($$(".avatar__arc.is-on")).toHaveLength(3);
+  });
+
+  it("takes the depth from the last levelled turn, not the highest", () => {
+    // Nothing walks a thread backwards today, but "where it currently is" is
+    // the property that stays true if anything ever does.
+    post({
+      type: "restoreChat",
+      messages: [
+        { role: "tutor", text: "deep", eyebrow: "Asking", level: 3, family: "ask" },
+        { role: "tutor", text: "off-ladder", eyebrow: "Concept", level: 0, family: "show" },
+      ],
+    });
+    expect($$(".avatar__arc.is-on")).toHaveLength(3);
+  });
+
+  it("gives a gate right after a restore a meter to hold", () => {
+    post({ type: "restoreChat", messages: thread });
+    post({ type: "hint", hint: "not yet", hint_level: 0, concept_tags: [], mode: "attempt-gate" });
+
+    const meter = lastTurn().querySelector(".rung")!;
+    expect(meter).not.toBeNull();
+    expect(meter.classList.contains("is-held")).toBe(true);
+    expect(meter.querySelectorAll(".rung__bar.is-spent")).toHaveLength(3);
+  });
+
+  it("empties the ring for a thread that never reached a rung", () => {
+    post({ type: "restoreChat", messages: [{ role: "student", text: "hello" }] });
+    expect($$(".avatar__arc.is-on")).toHaveLength(0);
+  });
+});
+
 describe("webview — no control reads a decorative mark aloud", () => {
   // Everything outside plain ASCII, minus the marks that are genuinely part
   // of a sentence rather than furniture.

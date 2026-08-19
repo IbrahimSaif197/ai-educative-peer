@@ -18,6 +18,12 @@
 - **Dragged wide, lines stop running the full width.** Past about 420px the
   text settles to a comfortable measure; the extra width goes to the language
   chip and the spelled-out ledger instead of to longer lines.
+- **The hint depth survives the panel being put away.** Hiding and reopening
+  the sidebar, or reloading the window, left the ring around your picture
+  empty even though the conversation beside it still said you were three
+  rungs in. It reads the depth back off the conversation now — which also
+  means that if you ask again without changing anything right after
+  reopening, the tutor can still show you it is holding.
 - **Three bits of decoration stopped being read aloud.** The Ask button
   announced itself as "Ask, return-arrow"; the progress link in the footer
   read out the chevron on the end of it. Those marks are still there to look

@@ -475,6 +475,76 @@ describe("a spaced-review exercise can be answered", () => {
  * Both were carried in `docs/EXTENSION_REFERENCE.md` §20 as "kept in step by a
  * comment, not by a test". A comment is not a mechanism.
  */
+/**
+ * Constants and tables declared once per language.
+ *
+ * A VS Code extension and a FastAPI service share no build step, so anything
+ * both halves need is written down twice. `pedagogy.test.ts` already does this
+ * for `MAX_HINT_LEVEL`; these are the rest of them.
+ */
+describe("the two halves agree about the things they both declare", () => {
+  const SRC = path.join(__dirname, "..");
+  const BACKEND = path.join(SRC, "..", "..", "backend");
+  const read = (...parts: string[]) => fs.readFileSync(path.join(...parts), "utf8");
+
+  it("caps the digest at the same number of lines the server will accept", () => {
+    // Send more than the server takes and the overflow is silently dropped
+    // somewhere neither side reports.
+    const client = /MAX_DIGEST_LINES = (\d+)/.exec(read(SRC, "codeDigest.ts"));
+    const server = /^MAX_CODE_LINES_SENT = (\d+)$/m.exec(read(BACKEND, "hinting_engine.py"));
+
+    expect(client).not.toBeNull();
+    expect(server).not.toBeNull();
+    expect(Number(client![1])).toBe(Number(server![1]));
+  });
+
+  it("knows a label and a family for every mode the server can send", () => {
+    // A mode the panel has never heard of falls back to the `ask` family and
+    // renders its own id as an eyebrow. That is a deliberate soft landing, not
+    // a plan: this is what says so out loud when the server gains a mode.
+    const engine = read(BACKEND, "hinting_engine.py");
+    const templates = /MODE_SYSTEM_TEMPLATES\s*=\s*\{([\s\S]*?)\n\}/.exec(engine);
+    expect(templates).not.toBeNull();
+    const serverModes = [...templates![1].matchAll(/"([a-z-]+)":\s*[A-Z_]+/g)].map((m) => m[1]);
+    expect(serverModes.length).toBeGreaterThan(5);
+
+    const js = read(SRC, "..", "media", "main.js");
+    const table = (name: string) =>
+      new RegExp(`const ${name} = \\{([\\s\\S]*?)\\n  \\};`).exec(js)?.[1] ?? "";
+    const labelled = new Set(
+      [...table("MODE_LABEL").matchAll(/^\s*"?([a-z-]+)"?:\s*"/gm)].map((m) => m[1])
+    );
+    const familied = new Set(
+      [...table("FAMILY").matchAll(/^\s*"?([a-z-]+)"?:\s*"(?:ask|show|tell)"/gm)].map((m) => m[1])
+    );
+    const flagged = new Set(
+      [...(/FLAGGED_MODES = new Set\(\[([\s\S]*?)\]\)/.exec(js)?.[1] ?? "").matchAll(
+        /"([a-z-]+)"/g
+      )].map((m) => m[1])
+    );
+
+    expect(serverModes.filter((m) => !labelled.has(m))).toEqual([]);
+    expect(serverModes.filter((m) => !familied.has(m) && !flagged.has(m))).toEqual([]);
+  });
+
+  it("floors the hint delay at the same value in all three places", () => {
+    // The manifest bounds what Settings will store, the host re-floors what
+    // the webview asks for, and the webview disables its own stepper. Three
+    // copies of one number; a low one lets a value through that the next
+    // layer silently raises, so the panel shows what the editor does not have.
+    const manifest = JSON.parse(read(SRC, "..", "package.json"));
+    const declared =
+      manifest.contributes.configuration.properties["edupeer.debounceMs"].minimum;
+    const host = /MIN_DEBOUNCE_MS = (\d+)/.exec(read(SRC, "sidebarProvider.ts"));
+    const webview = /DEBOUNCE_MIN = (\d+)/.exec(read(SRC, "..", "media", "main.js"));
+
+    expect(host).not.toBeNull();
+    expect(webview).not.toBeNull();
+    expect(Number(host![1])).toBe(declared);
+    expect(Number(webview![1])).toBe(declared);
+  });
+});
+
 describe("duplicated constants stay in step", () => {
   const SRC = path.join(__dirname, "..");
 

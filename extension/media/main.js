@@ -971,6 +971,27 @@
     accountPipEl.classList.toggle("is-danger", authBroken);
   }
 
+  /**
+   * The depth a restored thread is at.
+   *
+   * `currentLevel` is otherwise only ever set by a live hint, so every restore
+   * — a hidden/shown sidebar, a host reload, moving to another block and back
+   * — left the avatar ring empty while the transcript beside it still read
+   * "rung 3 of 4". Since the attempt gate started carrying its own meter at
+   * `currentLevel`, it also meant a gate right after a restore had no depth to
+   * report and rendered none.
+   *
+   * The last turn that carries a level, not the highest: a thread's depth is
+   * where it currently is.
+   */
+  function levelFromTurns(list) {
+    for (let i = list.length - 1; i >= 0; i--) {
+      const level = Number(list[i] && list[i].level) || 0;
+      if (level >= 1) return level;
+    }
+    return 0;
+  }
+
   function setLevel(level) {
     currentLevel = Math.max(0, Math.min(MAX_LEVEL, Number(level) || 0));
     paintRing();
@@ -1244,6 +1265,7 @@
           turns.push(turn);
         }
         isRestoring = false;
+        setLevel(levelFromTurns(turns));
         refreshPlaceholder();
         // The transcript on screen is now a different conversation, so the
         // composer must be too. clearChat() removed the explain-first card and
@@ -1517,6 +1539,7 @@
     isRestoring = true;
     for (const turn of turns) buildTurn(turn);
     isRestoring = false;
+    setLevel(levelFromTurns(turns));
   } else {
     showEmptyState();
   }

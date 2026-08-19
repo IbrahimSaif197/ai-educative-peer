@@ -1936,11 +1936,12 @@ textarea::placeholder {
   body {
     display: grid;
     grid-template-columns: 1fr 250px;
-    grid-template-rows: auto auto 1fr auto auto;
+    grid-template-rows: auto auto 1fr auto auto auto;
     grid-template-areas:
       "banners banners"
       "topbar  topbar"
       "chat    ctx"
+      "chat    thinking"
       "chat    composer"
       "chat    ledger";
   }
@@ -1979,12 +1980,13 @@ textarea::placeholder {
     padding-inline: var(--s5);
   }
 
-  /* The thinking row belongs to the composer's column, under the transcript
-     it describes; in a grid it has no area of its own, so it rides the chat
-     cell's end rather than claiming a row nothing budgeted for. */
+  /* Its own row above the composer, not laid over the end of the transcript:
+     the chat scrolls, so anything sharing that cell covers the message the
+     student is waiting on. `[hidden]` collapses the row to nothing while
+     there is no request in flight. */
   .thinking {
-    grid-area: chat;
-    align-self: end;
+    grid-area: thinking;
+    border-left: 1px solid var(--line-soft);
   }
 }
 
