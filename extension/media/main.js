@@ -181,6 +181,8 @@
   let focusSymbol = "";
   /** Sign-in is failing. Outlives the banner, on the avatar pip. */
   let authBroken = false;
+  /** A trace was just submitted, so its marking should take focus. */
+  let expectTraceResult = false;
   let signedIn = false;
   /** The rung the current thread has reached, mirrored onto the avatar ring.
    *  It is the only always-visible readout of the thing EduPeer is about. */
@@ -719,16 +721,34 @@
     const table = document.createElement("table");
     table.className = "trace__grid";
 
+    // A caption rather than a heading: a screen reader announces it on
+    // entering the table, which is where the student needs to know how big
+    // the thing they have just landed in is.
+    const caption = document.createElement("caption");
+    caption.className = "visually-hidden";
+    caption.textContent =
+      `Variable trace \u2014 ${steps} step${steps === 1 ? "" : "s"}, ` +
+      `${variables.length} variable${variables.length === 1 ? "" : "s"}`;
+    table.appendChild(caption);
+
+    const thead = document.createElement("thead");
     const head = document.createElement("tr");
     const stepHead = document.createElement("th");
+    stepHead.scope = "col";
     stepHead.textContent = "#";
     head.appendChild(stepHead);
     for (const name of variables) {
       const th = document.createElement("th");
+      // Without this a cell's own aria-label is all a screen reader has to go
+      // on; with it the column is announced as the student arrows across.
+      th.scope = "col";
       th.textContent = name;
       head.appendChild(th);
     }
-    table.appendChild(head);
+    thead.appendChild(head);
+    table.appendChild(thead);
+
+    const tbody = document.createElement("tbody");
 
     const inputs = [];
     for (let step = 0; step < steps; step++) {
@@ -750,8 +770,9 @@
         rowInputs[column] = input;
       });
       inputs.push(rowInputs);
-      table.appendChild(row);
+      tbody.appendChild(row);
     }
+    table.appendChild(tbody);
     panel.appendChild(table);
 
     const submit = document.createElement("button");
@@ -761,6 +782,10 @@
       const rows = inputs.map((row) => row.map((input) => input.value));
       panel.remove();
       addTurn({ role: "student", text: "Here's my trace." });
+      // Submitting destroys the thing that had focus, so the marking has to
+      // take it. Without this, focus falls back to <body> and a keyboard
+      // student has to hunt for the reply they just asked for.
+      expectTraceResult = true;
       vscode.postMessage({ type: "traceAnswer", rows });
     });
     panel.appendChild(submit);
@@ -1022,8 +1047,23 @@
     closePopover(false);
   });
 
-  // Arrow keys walk the menu, as a menu is expected to.
+  // Arrow keys walk the menu, as a menu is expected to; Tab is trapped,
+  // because a dialog whose Tab walks out into the panel behind it leaves a
+  // keyboard student operating controls they cannot see, with the popover
+  // still open over them.
   prefsPop.addEventListener("keydown", (e) => {
+    if (e.key === "Tab") {
+      const items = menuItems();
+      if (!items.length) return;
+      e.preventDefault();
+      const at = items.indexOf(document.activeElement);
+      // From outside the list (-1), Tab enters at the top and Shift+Tab at
+      // the bottom, which is what a trap that has just been entered should do.
+      const next = e.shiftKey ? (at <= 0 ? items.length - 1 : at - 1)
+                              : (at === -1 || at === items.length - 1 ? 0 : at + 1);
+      items[next].focus();
+      return;
+    }
     if (e.key !== "ArrowDown" && e.key !== "ArrowUp") return;
     const items = menuItems();
     if (!items.length) return;
@@ -1137,7 +1177,10 @@
     // bracket is a resting style now, so a card that is held simply looks it.
     const held = mode === "attempt-gate";
 
-    addTurn({
+    const takeFocus = expectTraceResult && mode === "trace-check";
+    expectTraceResult = false;
+
+    const card = addTurn({
       role: "tutor",
       text: msg.hint,
       eyebrow: MODE_LABEL[mode] || mode,
@@ -1146,6 +1189,13 @@
       tags: msg.concept_tags || [],
       family: familyFor(mode),
     });
+
+    if (takeFocus && card) {
+      // -1 rather than 0: the card is a destination for this one move, not a
+      // stop every subsequent Tab has to pass through.
+      card.wrap.setAttribute("tabindex", "-1");
+      card.wrap.focus();
+    }
 
     if (mode === "hint" && level === 3) {
       addActionRow([

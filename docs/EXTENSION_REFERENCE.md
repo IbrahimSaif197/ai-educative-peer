@@ -1754,20 +1754,36 @@ Facts about the current tree, not recommendations.
    token layer from the `vscode-light` / `vscode-high-contrast` /
    `vscode-high-contrast-light` class VS Code puts on `<body>`, keeping the
    brand in all four skins. Nothing past the `:root` block is skin-aware.
-10. **`extension.ts` and `package.json` each declare the default backend URL.**
-    Kept in step by a comment, not by a test.
+10. *(Closed 2026-08-19.)* `extension.ts` and `package.json` each declare the
+    default backend URL, and were kept in step by a comment rather than a
+    test. `auditRegressions.test.ts`'s "duplicated constants stay in step"
+    now parses both and compares them.
 11. **The banner exit is timed, not event-driven.** `setBanner` hides on a
     160 ms `setTimeout` rather than `animationend`, because that event does not
     fire for a webview hidden mid-animation and a banner that never hides is
-    worse than one that hides abruptly. The timer and the CSS duration are kept
-    in step by hand.
+    worse than one that hides abruptly. The timer and the CSS duration are now
+    compared by the same audit as item 10, so they can no longer drift
+    silently — a short timer cuts the exit off, a long one leaves the banner
+    finished but present.
 12. **`--e2` and `--s8` are declared and unused.** Both came in with the
     redesign's token layer; the elevation scale is deliberately near-unused
     (only the popover and the badge sheet float at all).
 13. **The composer has no "Sending…" verb.** The component spec lists it as a
     per-mode state; the thinking row directly above already says "EduPeer is
     thinking…", so a third copy of the same fact was left out.
-14. **The redesign's own preview is a paint check, not a render.**
+14. **Four things the deck specifies have no ticket, and three are still
+    unbuilt.** T1-T15 name C1-C7; **C8 ("Accessibility, the parts that need
+    words") is referenced by no ticket at all**, and neither is §2's icon
+    grid. From C8, the trace table's caption/scope and the popover's focus
+    trap landed 2026-08-19; the "2 of 3 rows correct" announcement did not,
+    because nothing produces that count — `trace-check` comes back as prose
+    from the model, and deriving a number client-side would be inventing one.
+    Still open: **§2's "eleven inline SVGs"** (the panel ships two, the avatar
+    ring and the sheet close; the rest of its marks are typographic, not
+    emoji), and **C3's stale-context state** (the dot goes amber after an
+    external edit) — which needs a host-side file-watcher signal that the
+    message protocol does not carry.
+15. **The redesign's own preview is a paint check, not a render.**
     `docs/mockups/make-preview.py` lifts the markup from `getHtml()` and points
     it at the real stylesheet, but runs no script — so it shows the chrome and
     never a card. It exits non-zero when a substitution stops matching, which

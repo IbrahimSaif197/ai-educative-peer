@@ -2,6 +2,26 @@
 
 ## 1.7.0
 
+### Smaller things
+
+- **A clean scan celebrates again.** The streak moved to the footer in this
+  same release and the little flourish that pops it when a file comes back
+  clean did not move with it, so it was animating something that no longer
+  existed. Nothing looked broken; there was simply nothing there.
+- **Tab stays inside the preferences popover.** It used to walk out into the
+  panel behind it, leaving you operating controls you could not see with the
+  popover still open over them.
+- **The trace grid reads properly aloud.** It now says how many steps and
+  variables it has as you enter it, and each column header is tied to its
+  column. Submitting hands focus to the marking, instead of dropping it and
+  leaving you to hunt for the reply you just asked for.
+- **Dragged wide, lines stop running the full width.** Past about 420px the
+  text settles to a comfortable measure; the extra width goes to the language
+  chip and the spelled-out ledger instead of to longer lines.
+- **Dragged into the bottom dock, the panel goes two-column** — conversation
+  on the left, everything else on the right — rather than stacking three
+  horizontal bands into a strip too short for any of them.
+
 ### Your learning goal now actually does something
 
 Setting a goal has always turned your sentence into concept tags — say "get

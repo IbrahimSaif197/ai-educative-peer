@@ -1539,6 +1539,187 @@ describe("webview — signed-out state", () => {
  * that the meter, the families, the context strip, the composer strip, the
  * ledger and the placeholder all agree about what is happening at each step.
  */
+/**
+ * Selectors that outlive the thing they point at.
+ *
+ * The redesign renamed the streak from `.streak` to `.ledger__streak` and the
+ * celebration's rule did not move with it, so for one release a clean scan
+ * popped nothing. Nothing failed; the animation simply had no subject. This
+ * catches the whole class of it: every class the stylesheet styles has to be
+ * a class something actually produces.
+ */
+describe("webview — the stylesheet and the DOM agree on class names", () => {
+  const CSS = fs.readFileSync(path.join(MEDIA, "style.css"), "utf8");
+
+  /** Class tokens the panel can actually put on an element. */
+  function producedClasses(): Set<string> {
+    const html = providerHtml();
+    const js = fs.readFileSync(path.join(MEDIA, "main.js"), "utf8");
+    const md = fs.readFileSync(path.join(MEDIA, "markdown.js"), "utf8");
+    const out = new Set<string>();
+    for (const m of html.matchAll(/class="([^"]+)"/g)) {
+      m[1].split(/\s+/).forEach((c) => c && out.add(c));
+    }
+    for (const src of [js, md]) {
+      for (const m of src.matchAll(/className\s*=\s*[`"']([^`"']+)/g)) {
+        m[1].split(/[\s${}]+/).forEach((c) => c && out.add(c));
+      }
+      // `className = held ? "rung is-held" : "rung"` and friends: every string
+      // literal on a className assignment line, not only the first.
+      for (const line of src.split("\n")) {
+        if (!/className\s*=|classList\.(add|toggle|remove)/.test(line)) continue;
+        for (const m of line.matchAll(/[`"']([a-zA-Z][\w-]*(?:\s+[a-zA-Z][\w-]*)*)[`"']/g)) {
+          m[1].split(/\s+/).forEach((c) => out.add(c));
+        }
+      }
+      for (const m of src.matchAll(/querySelector(?:All)?\(\s*[`"']([^`"']+)/g)) {
+        for (const c of m[1].matchAll(/\.([a-zA-Z][\w-]*)/g)) out.add(c[1]);
+      }
+      // Template-literal names like `turn--${family}` contribute their prefix.
+      for (const m of src.matchAll(/[`"']([a-z][\w-]*--)\$\{/g)) out.add(m[1]);
+    }
+    return out;
+  }
+
+  it("styles no class the panel never produces", () => {
+    // VS Code puts these on <body>, and a font format is not a class.
+    const FROM_THE_HOST = new Set([
+      "vscode-light",
+      "vscode-high-contrast",
+      "vscode-high-contrast-light",
+      "woff2",
+    ]);
+    const produced = producedClasses();
+    const styled = new Set(
+      [...CSS.replace(/\/\*[\s\S]*?\*\//g, "").matchAll(/\.([a-zA-Z][\w-]*)/g)].map((m) => m[1])
+    );
+
+    const orphans = [...styled].filter(
+      (c) =>
+        !produced.has(c) &&
+        !FROM_THE_HOST.has(c) &&
+        ![...produced].some((p) => p.endsWith("--") && c.startsWith(p))
+    );
+
+    expect(orphans.sort()).toEqual([]);
+  });
+
+  it("keeps the celebration pointed at the streak it is meant to pop", () => {
+    // The specific one that got away. Named separately so a future rename
+    // fails with the reason rather than as one entry in a list.
+    post({ type: "streak", days: 3 });
+    expect(CSS).toContain("body.is-celebrating .ledger__streak");
+    expect(el("streakChip").classList.contains("ledger__streak")).toBe(true);
+  });
+});
+
+/**
+ * The parts of the accessibility spec that are structure rather than styling.
+ */
+describe("webview — the trace grid is a real table", () => {
+  function trace() {
+    post({
+      type: "traceTable",
+      snippet: "for i in range(3): total += i",
+      variables: ["i", "total"],
+      steps: 3,
+      prompt: "Walk the loop.",
+    });
+  }
+
+  it("captions itself with its own size", () => {
+    trace();
+    const caption = $(".trace__grid caption")!;
+    expect(caption).not.toBeNull();
+    // Announced on entering the table, which is when the student needs to
+    // know how big the thing they have landed in is.
+    expect(caption.textContent).toBe("Variable trace — 3 steps, 2 variables");
+    expect(caption.classList.contains("visually-hidden")).toBe(true);
+  });
+
+  it("singularises a one-step, one-variable trace", () => {
+    post({ type: "traceTable", snippet: "x = 1", variables: ["x"], steps: 1, prompt: "p" });
+    expect($(".trace__grid caption")!.textContent).toBe("Variable trace — 1 step, 1 variable");
+  });
+
+  it("scopes every header to its column", () => {
+    trace();
+    const heads = $$(".trace__grid thead th");
+    expect(heads.map((h) => h.getAttribute("scope"))).toEqual(["col", "col", "col"]);
+    expect(heads.map((h) => h.textContent)).toEqual(["#", "i", "total"]);
+  });
+
+  it("separates the header row from the body rows", () => {
+    trace();
+    expect($$(".trace__grid thead tr")).toHaveLength(1);
+    expect($$(".trace__grid tbody tr")).toHaveLength(3);
+    // The per-cell label survives the restructure — it is what a screen
+    // reader reads inside a cell, where the column header alone is not enough.
+    expect($(".trace__cell")!.getAttribute("aria-label")).toBe("i after step 1");
+  });
+
+  it("hands focus to the marking, which replaced what had it", () => {
+    trace();
+    ($(".trace .btn--primary") as HTMLButtonElement).click();
+    // Submitting removes the grid, so without this focus falls to <body> and
+    // a keyboard student has to hunt for the reply they just asked for.
+    post({ type: "hint", hint: "two of three", hint_level: 0, concept_tags: [], mode: "trace-check" });
+
+    expect(document.activeElement).toBe(lastTurn());
+    // -1, not 0: a destination for one move, not a permanent tab stop.
+    expect(lastTurn().getAttribute("tabindex")).toBe("-1");
+  });
+
+  it("does not steal focus for a reply the student did not just submit", () => {
+    post({ type: "hint", hint: "h", hint_level: 1, concept_tags: [], mode: "hint" });
+    expect(document.activeElement).not.toBe(lastTurn());
+  });
+});
+
+describe("webview — the preferences popover traps Tab", () => {
+  function openPop() {
+    (el("accountBtn") as HTMLButtonElement).click();
+  }
+  const tab = (shiftKey = false) =>
+    el("prefsPop").dispatchEvent(
+      new KeyboardEvent("keydown", { key: "Tab", shiftKey, bubbles: true })
+    );
+
+  it("cycles forward round the rows rather than out of the dialog", () => {
+    openPop();
+    const rows = $$("#prefsPop button").filter((b) => !(b as HTMLButtonElement).disabled);
+    const reachable = rows.filter((b) => !b.closest("[hidden]"));
+
+    (reachable[reachable.length - 1] as HTMLElement).focus();
+    tab();
+    // A dialog whose Tab walks out leaves a keyboard student operating the
+    // panel behind it with the popover still open over the top.
+    expect(document.activeElement).toBe(reachable[0]);
+  });
+
+  it("cycles backward on Shift+Tab", () => {
+    openPop();
+    const reachable = $$("#prefsPop button")
+      .filter((b) => !(b as HTMLButtonElement).disabled)
+      .filter((b) => !b.closest("[hidden]"));
+
+    (reachable[0] as HTMLElement).focus();
+    tab(true);
+    expect(document.activeElement).toBe(reachable[reachable.length - 1]);
+  });
+
+  it("never lets focus reach a row inside a hidden wrapper", () => {
+    // Sign in is hidden by its wrapper rather than by its own attribute, so
+    // `:not([hidden])` alone would send focus into a display:none block.
+    post({ type: "authState", signedIn: true, label: "Ada", email: "a@u.edu", initials: "A" });
+    openPop();
+    for (let i = 0; i < 24; i++) {
+      tab();
+      expect(document.activeElement!.closest("[hidden]")).toBeNull();
+    }
+  });
+});
+
 describe("webview — a whole session holds together", () => {
   const focus = (symbol: string) => ({
     type: "focus",

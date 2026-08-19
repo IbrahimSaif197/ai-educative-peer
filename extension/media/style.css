@@ -1802,6 +1802,22 @@ textarea::placeholder {
      making it a bracket instead of a nudge. */
 }
 
+/* A comfortable measure, once the sidebar is dragged wide.
+
+   The cap is on the column, not on each turn. An auto inline margin on the
+   items themselves would override `align-self` and centre the student's
+   bubble along with everything else — padding on the scroller keeps the
+   bubble right and the card left *inside* the narrower column, which is what
+   the wide mockup shows. Extra width buys the language chip and the
+   spelled-out ledger, not wider paragraphs. */
+@media (min-width: 420px) {
+  .chat,
+  .composer,
+  .ledger {
+    padding-inline: max(var(--s5), calc((100% - 46rem) / 2));
+  }
+}
+
 /* ----------------------------------------------------------------- ledger
 
    Where gamification belongs: 28px under the composer. Last in reading order
@@ -1899,6 +1915,73 @@ textarea::placeholder {
 
 .sheet__close:hover {
   color: var(--ink);
+}
+
+/* ------------------------------------------------------------- short panel
+
+   Dragged into the bottom dock, the panel is wide and shallow. Three stacked
+   horizontal bands — context, composer, ledger — leave nothing for the
+   conversation, so under 360px tall it goes two-column: transcript left,
+   everything that is not the transcript right. No script; the grid areas are
+   the whole mechanism.
+
+   The ledger goes in the right column rather than staying a full-width band,
+   which is the same reasoning at one more remove: at 250px tall there is no
+   room for a third row across the panel. */
+@media (max-height: 359px) and (min-width: 460px) {
+  body {
+    display: grid;
+    grid-template-columns: 1fr 250px;
+    grid-template-rows: auto auto 1fr auto auto;
+    grid-template-areas:
+      "banners banners"
+      "topbar  topbar"
+      "chat    ctx"
+      "chat    composer"
+      "chat    ledger";
+  }
+
+  .banners {
+    grid-area: banners;
+  }
+
+  .topbar {
+    grid-area: topbar;
+  }
+
+  .ctx {
+    grid-area: ctx;
+    border-bottom: 0;
+    border-left: 1px solid var(--line-soft);
+  }
+
+  .chat {
+    grid-area: chat;
+    /* The measure cap is for a tall wide panel. Here the column is already
+       narrow and the cap would only waste it. */
+    padding-inline: var(--s5);
+  }
+
+  .composer {
+    grid-area: composer;
+    border-top: 0;
+    border-left: 1px solid var(--line-soft);
+    padding-inline: var(--s5);
+  }
+
+  .ledger {
+    grid-area: ledger;
+    border-left: 1px solid var(--line-soft);
+    padding-inline: var(--s5);
+  }
+
+  /* The thinking row belongs to the composer's column, under the transcript
+     it describes; in a grid it has no area of its own, so it rides the chat
+     cell's end rather than claiming a row nothing budgeted for. */
+  .thinking {
+    grid-area: chat;
+    align-self: end;
+  }
 }
 
 /* ----------------------------------------------------------------- signin */
@@ -2065,7 +2148,11 @@ body.is-celebrating {
   animation: ground-lift 400ms var(--ease-loop) both;
 }
 
-body.is-celebrating .streak {
+/* The streak moved from a top-bar chip to the ledger in 1.7.0 and this
+   selector did not move with it, so for one release the clean-scan
+   celebration popped nothing. It is a flex item of .ledger, which blockifies
+   it, so the scale actually applies. */
+body.is-celebrating .ledger__streak {
   animation: chip-pop 300ms var(--ease-signature) 200ms both;
 }
 

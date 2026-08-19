@@ -469,6 +469,46 @@ describe("a spaced-review exercise can be answered", () => {
 
 // ------------------------------------------------- the file stays on the machine
 
+/**
+ * Two constants that have to agree and had nothing making them.
+ *
+ * Both were carried in `docs/EXTENSION_REFERENCE.md` §20 as "kept in step by a
+ * comment, not by a test". A comment is not a mechanism.
+ */
+describe("duplicated constants stay in step", () => {
+  const SRC = path.join(__dirname, "..");
+
+  it("declares the same default backend URL in the manifest and the source", () => {
+    // Disagree and the student's effective backend depends on whether they
+    // have ever opened the setting — a difference nothing in the UI shows.
+    const manifest = JSON.parse(
+      fs.readFileSync(path.join(SRC, "..", "package.json"), "utf8")
+    );
+    const declared =
+      manifest.contributes.configuration.properties["edupeer.backendUrl"].default;
+    const source = fs.readFileSync(path.join(SRC, "extension.ts"), "utf8");
+    const literal = /const DEFAULT_BACKEND_URL = "([^"]+)"/.exec(source);
+
+    expect(literal).not.toBeNull();
+    expect(literal![1]).toBe(declared);
+  });
+
+  it("times the banner exit to the duration the stylesheet animates it for", () => {
+    // `[hidden]` is an instant display:none, so main.js defers the hide behind
+    // a timer. A timer shorter than the animation cuts the exit off; longer,
+    // and the banner sits finished-but-present.
+    const js = fs.readFileSync(path.join(SRC, "..", "media", "main.js"), "utf8");
+    const css = fs.readFileSync(path.join(SRC, "..", "media", "style.css"), "utf8");
+
+    const timer = /const BANNER_EXIT_MS = (\d+)/.exec(js);
+    const animation = /\.banner\.is-leaving \{\s*animation: banner-out (\d+)ms/.exec(css);
+
+    expect(timer).not.toBeNull();
+    expect(animation).not.toBeNull();
+    expect(Number(timer![1])).toBe(Number(animation![1]));
+  });
+});
+
 describe("no source file writes to the student's code", () => {
   const SRC = path.join(__dirname, "..");
 
