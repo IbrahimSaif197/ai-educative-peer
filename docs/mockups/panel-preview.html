@@ -24,14 +24,22 @@
 </style>
 </head>
 <body style="width:400px;height:780px;border:1px solid #504770">
-  <div id="offlineBanner" class="banner banner--warn" hidden>
-    <span class="banner__dot" aria-hidden="true"></span>
-    <span>Backend unreachable — retrying. Nudges are local for now.</span>
-  </div>
+  <!-- Two tiers, stacked in severity order and never merged: offline is
+       amber and transient, a broken sign-in is danger and needs the student
+       to do something. One role="status" wrapper, so two arriving at once is
+       one announcement rather than two interruptions. -->
+  <div class="banners" id="banners" role="status" aria-live="polite">
+    <div id="offlineBanner" class="banner banner--warn" hidden>
+      <span class="banner__dot" aria-hidden="true"></span>
+      <span class="banner__text">Can't reach the tutor server. Retrying — hints are local for now.</span>
+      <button class="banner__action" id="offlineRetry">Retry</button>
+    </div>
 
-  <div id="authBanner" class="banner banner--warn" hidden>
-    <span class="banner__dot" aria-hidden="true"></span>
-    <span>Can't sign in — the tutor server is up, but Firebase auth is refusing. Nudges are local for now.</span>
+    <div id="authBanner" class="banner banner--danger" hidden>
+      <span class="banner__dot banner__dot--square" aria-hidden="true"></span>
+      <span class="banner__text">Your sign-in is broken. Your streak and badges won't save until you sign in again.</span>
+      <button class="banner__action" id="authFix">Fix it</button>
+    </div>
   </div>
 
   <header class="topbar">
@@ -40,7 +48,6 @@
         <span class="brand__mark" aria-hidden="true"></span>
         <span class="brand__name">EduPeer</span>
       </span>
-      <span id="streakChip" class="streak"><span aria-hidden="true">🔥</span><span id="streakDays">3</span></span>
       <span class="topbar__spacer"></span>
       <button id="accountBtn" class="avatar" aria-haspopup="dialog" aria-expanded="false"
               aria-controls="prefsPop" title="Account and preferences">
@@ -81,14 +88,16 @@
           <span class="tog" aria-hidden="true"><i></i></span>
         </button>
         <button class="row" data-pref="lensMode">
-          <span class="row__label">Show “Ask EduPeer” on</span>
+          <span class="row__label">Ask-anywhere lenses
+            <span class="row__sub">Top 8 by size, never one per definition</span>
+          </span>
           <span class="seg" id="lensSeg" aria-hidden="true">
-            <span data-value="all" data-on="true">every line</span><span data-value="flagged" data-on="false">flagged</span>
+            <span data-value="top8" data-on="true">top 8</span><span data-value="flagged" data-on="false">flagged</span>
           </span>
         </button>
         <div class="row row--static">
           <span class="row__label" id="debounceLabel">Wait before hinting</span>
-          <span class="step">
+          <span class="step" role="group" aria-labelledby="debounceLabel">
             <button class="step__btn" id="debounceDown" aria-label="Wait less before hinting">−</button>
             <b id="debounceValue">1800 ms</b>
             <button class="step__btn" id="debounceUp" aria-label="Wait longer before hinting">+</button>
@@ -124,29 +133,37 @@
         </div>
       </div>
     </div>
-    <details class="badges" id="badgesWrap">
-      <summary class="badges__summary">
-        <span id="badgeCount">No badges yet</span>
-      </summary>
-      <div class="badges__list" id="badges"></div>
-    </details>
   </header>
 
-  <section class="filecard">
-    <div class="filecard__head">
-      <span class="filecard__name" id="fileName">demo.py</span>
-      <span id="langChip" class="chip" hidden></span>
-      <span class="topbar__spacer"></span>
+  <!-- One row that answers "what is EduPeer looking at" — file, symbol, line
+       range, language — because that is the question the editor eight pixels
+       away cannot answer. The preview itself is a disclosure, collapsed by
+       default: a second copy of code the student is already looking at does
+       not earn 18vh of a 320px panel. -->
+  <section class="ctx">
+    <div class="ctx__bar">
+      <button class="ctx__row" id="collapseCode" aria-expanded="false" aria-controls="ctxCode"
+              title="Show or hide the code preview">
+        <span class="ctx__dot is-live" id="ctxDot" aria-hidden="true"></span>
+        <span class="ctx__file" id="fileName">demo.py</span>
+        <span class="ctx__sep" id="ctxSep" aria-hidden="true">›</span>
+        <span class="ctx__symbol" id="ctxSymbol">last_index</span>
+        <span id="focusRange" class="ctx__range">12–19</span>
+        <span id="langChip" class="chip">Python</span>
+        <span class="ctx__chev" aria-hidden="true">⌄</span>
+      </button>
+      <button id="ctxOpen" class="btn btn--ghost btn--sm" hidden>Open a file</button>
       <button id="reviewBtn" class="btn btn--accent btn--sm" hidden title="A spaced-review exercise is ready">Review</button>
-      <button id="collapseCode" class="btn btn--ghost btn--sm" title="Show or hide the code preview" aria-expanded="true">Hide</button>
-      <button id="refreshCode" class="btn btn--ghost btn--sm" title="Re-read the active file">Refresh</button>
     </div>
-    <div class="filecard__scope" id="scopeRow">
-      <span id="focusRange" class="filecard__range"></span>
-      <span class="topbar__spacer"></span>
-      <button id="scopeToggle" class="btn btn--ghost btn--sm" aria-pressed="false" hidden>Whole file</button>
+    <div class="ctx__code" id="ctxCode">
+      <pre id="codeSnippet" class="ctx__pre" tabindex="0"><span class="ln"><span class="ln__no">12</span><span class="ln__text">def last_index(items):</span></span><span class="ln"><span class="ln__no">13</span><span class="ln__text">    n = len(items)</span></span><span class="ln is-cursor"><span class="ln__no">14</span><span class="ln__text">    for i in range(n):</span></span><span class="ln"><span class="ln__no">15</span><span class="ln__text">        if items[i + 1] == 0:</span></span><span class="ln"><span class="ln__no">16</span><span class="ln__text">            return i</span></span></pre>
+      <div class="ctx__foot" id="scopeRow">
+        <span class="ctx__more" id="ctxMore">3 more lines</span>
+        <span class="topbar__spacer"></span>
+        <button id="scopeToggle" class="btn btn--ghost btn--sm" aria-pressed="false">Whole file</button>
+        <button id="refreshCode" class="btn btn--ghost btn--sm" title="Re-read the active file">Refresh</button>
+      </div>
     </div>
-    <pre id="codeSnippet" class="filecard__code" tabindex="0"></pre>
   </section>
 
   <section class="chat" id="chat" role="log" aria-live="polite" aria-label="Tutor conversation"></section>
@@ -157,14 +174,46 @@
   </div>
 
   <footer class="composer">
+    <!-- The strip names how the next submission will be read, and carries the
+         way out. It is always rendered, including in the default mode, because
+         it is teaching a mechanic the student has to be able to trust. -->
+    <div class="mode" id="modeStrip">
+      <span class="mode__arrow" aria-hidden="true">↳</span>
+      <span class="mode__label" id="modeLabel">sent as a question</span>
+      <button class="mode__exit" id="modeExit" hidden>back to a question ✕</button>
+    </div>
     <label class="visually-hidden" for="input">Your question</label>
-    <textarea id="input" rows="3" placeholder="Describe your error or ask a question…"></textarea>
+    <textarea id="input" rows="3" aria-describedby="modeLabel" placeholder="What's going wrong?"></textarea>
     <div class="composer__actions">
       <button id="send" class="btn btn--primary">Ask<span class="btn__hint">↵</span></button>
       <button id="quiz" class="btn btn--ghost" title="Answer one question about why your fix works">Quiz me</button>
       <button id="reset" class="btn btn--ghost" title="Clear the conversation and start at hint 1">Reset</button>
     </div>
+    <span class="visually-hidden" id="modeStatus" role="status" aria-live="polite"></span>
   </footer>
+
+  <!-- Gamification lives here, under the composer: last in reading order
+       rather than above a tutor that has not spoken yet, but permanently
+       visible, which the collapsed <details> in the top bar never was. -->
+  <footer class="ledger">
+    <span class="ledger__streak" id="streakChip">streak <span id="streakDays">3</span></span>
+    <span class="ledger__dot" id="ledgerSep" aria-hidden="true">·</span>
+    <button class="ledger__badges" id="badgesWrap" aria-expanded="false" aria-controls="badgesSheet">
+      <span id="badgeCount">7 badges</span>
+    </button>
+    <span class="topbar__spacer"></span>
+    <button class="ledger__link" id="ledgerProgress">progress ›</button>
+  </footer>
+
+  <!-- Over the chat, not pushing it down: opening the badge list must not
+       move the conversation the student is reading. -->
+  <div class="sheet" id="badgesSheet" role="dialog" aria-label="Badges" hidden>
+    <div class="sheet__head">
+      <span class="sheet__title">Badges</span>
+      <button class="sheet__close" id="badgesClose" aria-label="Close badges">✕</button>
+    </div>
+    <div class="badges__list" id="badges" role="list"></div>
+  </div>
 
   
   

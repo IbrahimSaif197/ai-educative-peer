@@ -47,14 +47,32 @@ VSCODE_STUBS = """
 </style>
 """
 
+# A few real rows, so the disclosure is showing something with a gutter rather
+# than an empty box. `renderLines()` builds these at runtime; this is the same
+# shape by hand, because the preview runs no script.
+PREVIEW_LINES = (
+    '<pre id="codeSnippet" class="ctx__pre" tabindex="0">'
+    + "".join(
+        '<span class="ln%s"><span class="ln__no">%d</span>'
+        '<span class="ln__text">%s</span></span>'
+        % (" is-cursor" if n == 14 else "", n, text)
+        for n, text in [
+            (12, "def last_index(items):"),
+            (13, "    n = len(items)"),
+            (14, "    for i in range(n):"),
+            (15, "        if items[i + 1] == 0:"),
+            (16, "            return i"),
+        ]
+    )
+    + "</pre>"
+)
+
 # (find, replace). Everything here is presentation state that `main.js` would
 # normally set from a message; none of it changes the markup under review.
 SUBSTITUTIONS = [
     ('${asset("style.css")}', "../../extension/media/style.css"),
     ('<div class="pop" id="prefsPop" role="dialog" aria-label="Account and preferences" hidden>',
      '<div class="pop" id="prefsPop" role="dialog" aria-label="Account and preferences">'),
-    ('<span id="streakChip" class="streak" hidden>', '<span id="streakChip" class="streak">'),
-    ('<span id="streakDays">0</span>', '<span id="streakDays">3</span>'),
     ('id="accountInitials" aria-hidden="true">?<', 'id="accountInitials" aria-hidden="true">IS<'),
     ('<span class="avatar__pip" id="accountPip" aria-hidden="true"></span>',
      '<span class="avatar__pip" id="accountPip" aria-hidden="true" hidden></span>'),
@@ -65,17 +83,45 @@ SUBSTITUTIONS = [
      '<div class="pop__signin" id="popSignInWrap" hidden>'),
     ('id="signOutBtn" hidden>', 'id="signOutBtn">'),
     ('id="popBackend"></span>', 'id="popBackend">edupeer-backend.onrender.com</span>'),
-    # Two rungs spent.
+    # Two rungs spent, so the ring shows the ramp rather than four blanks.
     ('class="avatar__arc" cx="13" cy="13" r="12" stroke-dashoffset="0"',
      'class="avatar__arc is-on" cx="13" cy="13" r="12" stroke-dashoffset="0"'),
     ('class="avatar__arc" cx="13" cy="13" r="12" stroke-dashoffset="-20.42"',
      'class="avatar__arc is-on" cx="13" cy="13" r="12" stroke-dashoffset="-20.42"'),
     ('<span class="tog" aria-hidden="true">', '<span class="tog" data-on="true" aria-hidden="true">'),
-    ('<span data-value="all">every line</span>',
-     '<span data-value="all" data-on="true">every line</span>'),
+    ('<span data-value="top8">top 8</span>', '<span data-value="top8" data-on="true">top 8</span>'),
     ('<span data-value="flagged">flagged</span>',
      '<span data-value="flagged" data-on="false">flagged</span>'),
-    ('id="fileName">No active file<', 'id="fileName">demo.py<'),
+    # The context strip, with a file open and the preview disclosed.
+    ('id="fileName">no file open<', 'id="fileName">demo.py<'),
+    ('<span class="ctx__dot" id="ctxDot" aria-hidden="true"></span>',
+     '<span class="ctx__dot is-live" id="ctxDot" aria-hidden="true"></span>'),
+    ('<span class="ctx__sep" id="ctxSep" aria-hidden="true" hidden>', '<span class="ctx__sep" id="ctxSep" aria-hidden="true">'),
+    ('<span class="ctx__symbol" id="ctxSymbol"></span>',
+     '<span class="ctx__symbol" id="ctxSymbol">last_index</span>'),
+    ('<span id="focusRange" class="ctx__range"></span>',
+     '<span id="focusRange" class="ctx__range">12\u201319</span>'),
+    ('<span id="langChip" class="chip" hidden></span>',
+     '<span id="langChip" class="chip">Python</span>'),
+    ('<button id="ctxOpen" class="btn btn--ghost btn--sm">Open a file</button>',
+     '<button id="ctxOpen" class="btn btn--ghost btn--sm" hidden>Open a file</button>'),
+    ('title="Show or hide the code preview" disabled>', 'title="Show or hide the code preview">'),
+    ('<div class="ctx__code" id="ctxCode" hidden>', '<div class="ctx__code" id="ctxCode">'),
+    ('<pre id="codeSnippet" class="ctx__pre" tabindex="0"></pre>',
+     PREVIEW_LINES),
+    ('<span class="ctx__more" id="ctxMore"></span>',
+     '<span class="ctx__more" id="ctxMore">3 more lines</span>'),
+    ('<button id="scopeToggle" class="btn btn--ghost btn--sm" aria-pressed="false" hidden>',
+     '<button id="scopeToggle" class="btn btn--ghost btn--sm" aria-pressed="false">'),
+    # The footer ledger, with something in it.
+    ('<span class="ledger__streak" id="streakChip" hidden>',
+     '<span class="ledger__streak" id="streakChip">'),
+    ('<span id="streakDays">0</span>', '<span id="streakDays">3</span>'),
+    ('<span class="ledger__dot" id="ledgerSep" aria-hidden="true" hidden>',
+     '<span class="ledger__dot" id="ledgerSep" aria-hidden="true">'),
+    ('id="badgesWrap" aria-expanded="false" aria-controls="badgesSheet" disabled>',
+     'id="badgesWrap" aria-expanded="false" aria-controls="badgesSheet">'),
+    ('<span id="badgeCount">No badges yet</span>', '<span id="badgeCount">7 badges</span>'),
     # Reviewed at the width it ships at.
     ("<body>", '<body style="width:400px;height:780px;border:1px solid #504770">'),
 ]

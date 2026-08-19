@@ -347,7 +347,21 @@ describe("the code preview", () => {
   });
 
   it("opens and closes the preview on the context row", () => {
+    // A file has to be open first: with nothing to disclose the row is inert,
+    // which is what stops the very first render offering an empty preview.
+    post({
+      type: "focus",
+      focusCode: "x = 1",
+      breadcrumb: "a.py",
+      startLine: 1,
+      endLine: 1,
+      cursorLine: 1,
+      fileName: "a.py",
+      language: "Python",
+      totalLines: 1,
+    });
     const button = el("collapseCode") as HTMLButtonElement;
+    expect(button.disabled).toBe(false);
     // Closed by default: the editor is eight pixels away, so a second copy of
     // the same code does not get 18vh of a 320px panel for free.
     expect((el("ctxCode") as HTMLElement).hidden).toBe(true);
@@ -698,19 +712,46 @@ describe("guided exercises", () => {
 });
 
 describe("panel chrome", () => {
-  it("toggles the offline banner", () => {
+  it("toggles the offline banner, letting its exit run first", () => {
+    jest.useFakeTimers();
     post({ type: "offline", value: true });
     expect((el("offlineBanner") as HTMLElement).hidden).toBe(false);
+
     post({ type: "offline", value: false });
+    // `[hidden]` is an instant display:none, so hiding immediately is the one
+    // thing that guarantees the exit is never seen. It leaves first.
+    expect(el("offlineBanner").classList.contains("is-leaving")).toBe(true);
+    expect((el("offlineBanner") as HTMLElement).hidden).toBe(false);
+
+    jest.advanceTimersByTime(200);
     expect((el("offlineBanner") as HTMLElement).hidden).toBe(true);
+    expect(el("offlineBanner").classList.contains("is-leaving")).toBe(false);
+    jest.useRealTimers();
+  });
+
+  it("cancels a pending exit when the banner comes back", () => {
+    jest.useFakeTimers();
+    post({ type: "offline", value: true });
+    post({ type: "offline", value: false });
+    // Back up before the timer fires: without clearing it, the banner would
+    // hide itself a moment after being shown again.
+    post({ type: "offline", value: true });
+    jest.advanceTimersByTime(200);
+
+    expect((el("offlineBanner") as HTMLElement).hidden).toBe(false);
+    expect(el("offlineBanner").classList.contains("is-leaving")).toBe(false);
+    jest.useRealTimers();
   });
 
   it("toggles the sign-in banner without claiming the backend is down", () => {
+    jest.useFakeTimers();
     post({ type: "authTrouble", value: true });
     expect((el("authBanner") as HTMLElement).hidden).toBe(false);
     expect((el("offlineBanner") as HTMLElement).hidden).toBe(true);
     post({ type: "authTrouble", value: false });
+    jest.advanceTimersByTime(200);
     expect((el("authBanner") as HTMLElement).hidden).toBe(true);
+    jest.useRealTimers();
   });
 
   it("shows the thinking indicator and disables Ask while loading", () => {
@@ -1606,8 +1647,10 @@ describe("webview — banners carry a destination", () => {
     post({ type: "offline", value: true });
     expect((el("offlineBanner") as HTMLElement).hidden).toBe(false);
 
+    // Re-probes the backend, not the file: a Retry that re-reads demo.py has
+    // not retried the thing the banner is about.
     (el("offlineRetry") as HTMLButtonElement).click();
-    expect(lastSent("refreshCode")).toBeDefined();
+    expect(lastSent("retryConnection")).toBeDefined();
   });
 
   it("sends a broken sign-in somewhere it can be fixed", () => {
@@ -1804,8 +1847,7 @@ describe("webview — the rung meter lives in the card", () => {
       "rung 3 of 4 · next costs an attempt"
     );
     expect($(".turn--tutor .rung .visually-hidden")!.textContent).toBe(
-      "Hint depth: rung 3 of 4. The next rung is the worked example. " +
-        "The next rung costs an attempt."
+      "Hint depth: rung 3 of 4. The next rung is the worked example, and it costs an attempt."
     );
   });
 

@@ -14,7 +14,9 @@ not exhaustively:
    `extension/src/focusScope.ts`.
 3. **Two commands this document does not mention at all:**
    `edupeer.deepenLine`, `edupeer.dismissLine`.
-4. **One setting this document does not mention at all:** `edupeer.lensMode`.
+4. **One setting this document does not mention at all:** `edupeer.lensMode`
+   — whose values are `"top8"` and `"flagged"` as of 2026-08-19, not the
+   `"all"` and `"flagged"` any surviving reference below implies.
 5. **`backend/static/auth.html` was rewritten**, from the 131 lines this
    document's file-size table and file listing still report, to a much
    larger file. Every `auth.html:N` line citation below is wrong, and the
@@ -48,11 +50,47 @@ working tree and rewritten where they had become wrong:
    `openSettings` messages that came with the account avatar and its
    preferences popover.
 
+### Refreshed 2026-08-19 — the panel redesign
+
+The whole sidebar was rebuilt against a design deck (commits `387a701`,
+`8a60a3f`, `22efb50`, `f46122b`). **Every extension-side description of the
+panel's structure in this document is now wrong**, including the parts
+refreshed a day earlier. Specifically:
+
+- **Four skins.** The panel re-points its tokens from the `vscode-light`,
+  `vscode-high-contrast` and `vscode-high-contrast-light` classes VS Code puts
+  on `<body>`. Any statement here that the panel ignores the workbench theme
+  is out of date.
+- **Cards are drawn by family, not by mode.** Fifteen modes map onto four
+  stances — ask, show, tell, withhold — and `FLAGGED_MODES` is the withhold
+  lookup.
+- **The four-dot ladder is a rung meter**: four bars of increasing height,
+  with the next one outlined and the fourth dashed mint until reached. The
+  attempt gate carries its own held meter instead of reaching backwards into
+  the previous card and forcing a reflow.
+- **The file card is a context strip.** One row — file, symbol, range,
+  language — with the code preview as a *collapsed* disclosure behind it.
+- **One `COMPOSER` table** drives the strip label, placeholder and button verb
+  for all seven modes; `setComposerMode` takes only a mode.
+- **Gamification moved to a footer ledger** under the composer; the badges
+  `<details>` became a sheet over the chat.
+- **Two banner tiers**, each with an action, and an avatar pip that outlives
+  the auth banner.
+- **The CodeLens emoji are gone.** Every title starts with the word EduPeer
+  and the state is carried by the verb. `lensMode` is `"top8" | "flagged"`;
+  a stored `"all"` is read as `"top8"`.
+- **The progress dashboard** uses the panel's tokens and the same rung ramp.
+
+The message-protocol tables below were updated for the four messages this
+added (`startPredict`, `startTrace`, `openFile`, `retryConnection`) and the
+rows whose effect changed; the prose sections describing panel *structure*
+were not, and are superseded by `docs/EXTENSION_REFERENCE.md`.
+
 **For the extension half, prefer `docs/EXTENSION_REFERENCE.md`.** It was
-generated 2026-08-18 against the current tree and is verified; the
-extension-side sections here still carry pre-1.6.0 drift beyond the banner
-above — they describe an `activeCode` message that is now `focus`, a
-`confidence` field and depth stepper the composer no longer has, and an "I
+generated 2026-08-18 and refreshed 2026-08-19 against the current tree, and is
+verified; the extension-side sections here still carry pre-1.6.0 drift beyond
+the banner above — they describe an `activeCode` message that is now `focus`,
+a `confidence` field and depth stepper the composer no longer has, and an "I
 fixed it" button now called "Quiz me".
 
 The backend half of this document has no such replacement, which is why the
@@ -2140,6 +2178,10 @@ Sent via `vscode.postMessage(...)`, handled in the `switch` at
 | `setPreference` | `key`, `value` | popover rows | Writes to `ConfigurationTarget.Global`, then re-posts `preferences`. Keys outside `WRITABLE_PREFERENCES` are dropped, `debounceMs` is floored at 600 and `lensMode` is checked against its two values — `update()` will otherwise create a setting no `package.json` declares, and the webview is the least trusted thing that talks to this class |
 | `showProgress` / `setGoal` | — | popover rows | Executes the matching command |
 | `openSettings` | — | popover row | Opens the Settings UI at `@ext:edupeer.edupeer`, for `backendUrl` — the one setting the popover shows but will not edit |
+| `startPredict` | — | empty-state chip | `edupeer.predictOutput` |
+| `startTrace` | — | empty-state chip | `edupeer.traceCode` |
+| `openFile` | — | context strip, when no file is open | `workbench.action.quickOpen` |
+| `retryConnection` | — | the offline banner's Retry | `api.health()`, then re-posts `offline`. Not `refreshCode`: re-reading the file does not re-probe the backend, and the background health poll is on a 30 s timer the student cannot see |
 | `refreshCode` | — | `main.js:407` | `sendActiveCode` (`sidebarProvider.ts:138-140`) |
 | `signIn` | — | `main.js:399` | Executes `edupeer.signIn` (`sidebarProvider.ts:135-137`) |
 | `signOut` | — | `main.js:399` | Executes `edupeer.signOut` (`sidebarProvider.ts:138-140`) |
@@ -2164,11 +2206,15 @@ It emits two kinds of lens, in this order:
    (`extension/src/inlineTutor.ts:472-488`). Languages with no regex return
    only the flag lenses (`extension/src/inlineTutor.ts:473`).
 
-**How many are shown.** There is no cap in the provider. The flag count is
-bounded upstream by the scan engine at 5 `bug` + 2 `style` = **at most 7 flag
-lenses**. The definition lenses are **unbounded**: every line in the file
-matching the regex gets one, so a 40-function file produces 40 lenses. Both
-kinds invoke `edupeer.nudgeLine` with `[doc.uri, line]`.
+**How many are shown.** *(Rewritten 2026-08-19; the two numbered items above
+also describe pre-redesign wording — the lens titles carry no emoji now.)*
+The flag count is bounded upstream by the scan engine at 5 `bug` + 2 `style` =
+**at most 7 flag lenses**, and flags are never displaced. Definition lenses are
+capped at **eight**, ranked by the gap to the next definition, with one
+file-level lens on line 1 opening a quick pick over the rest when there are
+more. They were unbounded until then: a 40-function file produced 40 lenses.
+Flag and definition lenses invoke `edupeer.nudgeLine` with `[doc.uri, line]`;
+the overflow lens invokes `edupeer.pickDefinition` with `[doc.uri]`.
 
 Refresh is driven by an `EventEmitter` fired after each successful scan
 (`extension/src/inlineTutor.ts:382`, wired at

@@ -394,10 +394,19 @@
       parts.push("This is the worked example — the deepest help there is.");
     } else {
       const left = MAX_LEVEL - 1 - level;
-      if (left === 0) parts.push("The next rung is the worked example.");
-      else if (left === 1) parts.push("One rung remains before the worked example.");
-      else parts.push(`${left} rungs remain before the worked example.`);
-      parts.push("The next rung costs an attempt.");
+      if (left === 0) {
+        // Merged rather than two sentences: "The next rung is the worked
+        // example. The next rung costs an attempt." says "the next rung"
+        // twice about the same rung.
+        parts.push("The next rung is the worked example, and it costs an attempt.");
+      } else {
+        parts.push(
+          left === 1
+            ? "One rung remains before the worked example."
+            : `${left} rungs remain before the worked example.`
+        );
+        parts.push("The next rung costs an attempt.");
+      }
     }
     if (held) {
       parts.push(
@@ -792,11 +801,7 @@
     // Announced as a status rather than by moving focus: entering a mode is
     // news, not an interruption. The strip is also the textarea's
     // aria-describedby, so tabbing into the field repeats it in context.
-    if (changed) {
-      modeStatusEl.textContent = producing
-        ? `Your next message will be ${spec.strip.replace(/^read as /, "read as ")}.`
-        : "Your next message will be sent as a question.";
-    }
+    if (changed) modeStatusEl.textContent = `Your next message will be ${spec.strip}.`;
   }
 
   /** Leave whatever mode the composer is in, without submitting. */
@@ -874,12 +879,46 @@
   refreshBtn.addEventListener("click", () => vscode.postMessage({ type: "refreshCode" }));
   modeExitEl.addEventListener("click", exitComposerMode);
 
+  /**
+   * Show or hide a banner, letting the exit animation run first.
+   *
+   * `[hidden]` is an instant `display: none`, so setting it is the one thing
+   * that guarantees no exit is ever seen. The class runs the animation and a
+   * timer does the hiding — a timer rather than `animationend`, because that
+   * event does not fire for a webview that is hidden mid-animation, and a
+   * banner that never hides is worse than one that hides abruptly.
+   */
+  const BANNER_EXIT_MS = 160;
+  const bannerTimers = new WeakMap();
+
+  function setBanner(elm, show) {
+    const pending = bannerTimers.get(elm);
+    if (pending) {
+      clearTimeout(pending);
+      bannerTimers.delete(elm);
+    }
+    elm.classList.remove("is-leaving");
+    if (show) {
+      elm.hidden = false;
+      return;
+    }
+    if (elm.hidden) return;
+    elm.classList.add("is-leaving");
+    bannerTimers.set(
+      elm,
+      setTimeout(() => {
+        bannerTimers.delete(elm);
+        elm.classList.remove("is-leaving");
+        elm.hidden = true;
+      }, BANNER_EXIT_MS)
+    );
+  }
+
   // Each banner carries a destination, because a banner that only states a
-  // problem leaves the student with nowhere to go. Offline retries by
-  // re-reading the file, which is the cheapest round-trip the panel has; a
-  // broken sign-in sends them to the thing that fixes it.
+  // problem leaves the student holding it. Offline re-probes the backend; a
+  // broken sign-in goes to the thing that fixes it.
   offlineRetryEl.addEventListener("click", () =>
-    vscode.postMessage({ type: "refreshCode" })
+    vscode.postMessage({ type: "retryConnection" })
   );
   authFixEl.addEventListener("click", () => vscode.postMessage({ type: "signIn" }));
   // ------------------------------------------------- account + preferences
@@ -1320,11 +1359,11 @@
         break;
 
       case "offline":
-        offlineBannerEl.hidden = !msg.value;
+        setBanner(offlineBannerEl, !!msg.value);
         break;
 
       case "authTrouble":
-        authBannerEl.hidden = !msg.value;
+        setBanner(authBannerEl, !!msg.value);
         // The pip is the part that survives the banner being dismissed: a
         // student who closes the banner has not fixed anything, and the way
         // to fix it is behind the avatar.

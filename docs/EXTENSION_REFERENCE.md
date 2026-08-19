@@ -10,20 +10,31 @@ read out of the source or produced by running a tool. Line citations are
 `file:line` against that snapshot and go stale on the next edit — treat the
 symbol name as authoritative and the number as a hint.
 
+> **Refreshed 2026-08-19 for the panel redesign** (commits `387a701`,
+> `8a60a3f`, `22efb50`, `f46122b`). What moved: a four-skin token layer, the
+> four card families, the rung meter replacing the four-dot ladder, the file
+> card becoming a context strip, one composer table driving every mode, the
+> footer ledger, two banner tiers, the emoji leaving the CodeLens column, and
+> `lensMode: "all"` becoming `"top8"`. Sections 8 (the webview), 10 (the
+> inline surface) and 11 (settings) were rewritten against the new code.
+> Prose elsewhere that describes the *ladder* as a concept is still accurate;
+> prose that describes the *four dots* is not, and is corrected where it
+> appears.
+
 ---
 
 ## 1. Snapshot
 
 | Item | Value |
 | --- | --- |
-| Commit | `f310ace0d5c0f3bb13c593ec1e154fb577e4547e` (`f310ace`, 2026-08-18) |
+| Commit | `f46122b7ee7d5fb2933cca5202d9693a6acb485f` (`f46122b`, 2026-08-19) |
 | Branch | `main` |
-| Extension version | 1.6.0 (`extension/package.json:5`) |
+| Extension version | 1.6.0 (`extension/package.json:5`) — unbumped; the panel redesign sits under `## Unreleased` |
 | Publisher / id | `edupeer` / `edupeer.edupeer` |
 | Licence | GPL-3.0-or-later |
 | Engine floor | VS Code `^1.85.0` (`package.json:21-23`) |
-| Document generated | 2026-08-18 |
-| Working tree | one unrelated modification, `demos/demo.py`; `extension/` is clean |
+| Document generated | 2026-08-18, refreshed 2026-08-19 for the panel redesign |
+| Working tree | clean |
 
 ### Line counts
 
@@ -32,11 +43,11 @@ built `.vsix` archives.
 
 | Area | Files | Lines |
 | --- | --- | --- |
-| Source (`src/*.ts`) | 22 | 6,364 |
-| Tests (`src/__tests__/*.ts`) | 26 | 11,354 |
+| Source (`src/*.ts`) | 22 | 6,855 |
+| Tests (`src/__tests__/*.ts`) | 26 | 12,230 |
 | Test mock (`src/__mocks__/vscode.ts`) | 1 | 439 |
-| Webview assets (`media/main.js`, `markdown.js`, `style.css`, `icon.svg`) | 4 | 2,051 |
-| **Extension total** | **53** | **20,208** |
+| Webview assets (`media/main.js`, `markdown.js`, `style.css`, `icon.svg`) | 4 | 3,668 |
+| **Extension total** | **53** | **23,192** |
 
 Source-to-test ratio: 6,364 source vs 11,354 test lines — **1.78:1**.
 
@@ -256,7 +267,7 @@ Code surfaces it on the Welcome page; the extension never opens it.
 | --- | --- | --- | --- |
 | `edupeer.backendUrl` | string | `https://edupeer-backend.onrender.com` | Backend base URL. Re-read live on change (`extension.ts:410`) |
 | `edupeer.inlineHints` | boolean | `true` | Master switch for the whole inline surface. `isSupported` returns false when off (`inlineTutor.ts:326-331`), disabling lens, hover, Quick Fix, ghost text and line hints |
-| `edupeer.lensMode` | `"all"` \| `"flagged"` | `"all"` | `"flagged"` suppresses the standing "💡 Ask EduPeer" lens on every definition line (`inlineTutor.ts:800`) |
+| `edupeer.lensMode` | `"top8"` \| `"flagged"` | `"top8"` | `"top8"` puts the standing "EduPeer — ask about this line" lens on the eight biggest definitions plus one file-level lens for the rest; `"flagged"` suppresses all of them. A stored `"all"` — the pre-1.7 default — is read as `"top8"` rather than rewritten (`inlineTutor.ts`, `lensMode` getter) |
 | `edupeer.removeFixedBugComments` | boolean | `true` | Allows the one code edit EduPeer ever makes (`inlineTutor.ts:649-652`) |
 | `edupeer.autoScan` | boolean | `true` | Automatic block scans (`inlineTutor.ts:534-537`) |
 | `edupeer.debounceMs` | number | `1800`, min `600` | Idle time before a line hint. Floored again at 600 in code (`inlineTutor.ts:369`) |
@@ -849,11 +860,23 @@ img-src {cspSource} data:;
 `localResourceRoots` is restricted to `media/`. There is no `'unsafe-inline'`.
 All five properties are asserted in `securityInvariants.test.ts`.
 
-Fixed DOM: offline banner, auth banner, topbar (brand, streak chip, account
-avatar and the preferences popover it opens), badges disclosure, filecard (name, language chip,
-Review / Hide / Refresh buttons, scope row with the "Whole file" toggle, code
-preview), the chat log (`role="log" aria-live="polite"`), the thinking
-indicator, and the composer (textarea + Ask / Quiz me / Reset).
+Fixed DOM, top to bottom: a `role="status"` banner stack holding the offline
+banner then the auth banner (two tiers, stacked in severity order, one live
+region so two arrivals are one announcement); the topbar (brand, account
+avatar, and the preferences popover it opens); the context strip (status dot,
+file name, symbol, line range, language chip, "Open a file", Review, and the
+code preview as a *collapsed* disclosure whose footer holds the line-cap
+notice, "Whole file" and Refresh); the chat log (`role="log"
+aria-live="polite"`); the thinking indicator; the composer (mode strip with
+its exit button, textarea, Ask / Quiz me / Reset, and a visually-hidden
+`role="status"` for mode changes); the footer ledger (streak, badge count,
+progress); and the badge sheet, which opens over the chat rather than pushing
+it down.
+
+Two things that used to be here are not: the streak chip and the badges
+`<details>` have moved out of the topbar into the ledger, and the `filecard`
+section — which showed the preview expanded by default and said "No file open"
+a second time — is now the context strip above.
 
 ---
 
@@ -874,17 +897,17 @@ Sent through `post()` (`sidebarProvider.ts:1000`), handled in the switch at
 | `streamStart` | `seq` | `:719` | Empty tutor bubble with a caret, `aria-hidden` so the live log does not re-announce every token |
 | `streamDelta` | `seq, text` | `:722` | Appends only when `seq` matches; auto-scrolls only when already within 40 px of the bottom |
 | `streamAbort` | `seq` | `:726` | Removes the streaming bubble |
-| `hint` | `hint, hint_level, concept_tags, mode`, `seq` on success | `:742` and the failure paths | The tutor card: eyebrow from `MODE_LABEL`, ladder for `hint`/`worked-example`, mode-specific action row |
+| `hint` | `hint, hint_level, concept_tags, mode`, `seq` on success | `:742` and the failure paths | The tutor card: one family class from `FAMILY`/`FLAGGED_MODES`, eyebrow from `MODE_LABEL`, rung meter for `hint`/`worked-example`, mode-specific action row *inside* the card. `attempt-gate` carries its own meter at the current depth, marked held |
 | `traceTable` | `snippet, variables, steps, prompt` | `:473` | Renders the desk-check grid |
 | `predictFirst` | `snippet` | `:451` | Prediction prompt; composer → `predict` |
 | `explainFirst` | `prompt` | `:549` | Explain-first card + "Skip and get my hint"; composer → `explain` |
 | `error` | `message` | `:821` | Error-styled turn |
 | `loading` | `value` | six ask sites, plus `resetSession` | Toggles the thinking indicator and disables Ask, Quiz me, Reset and Review. Reset used to be the one entry point that never sent it, so its own `isLoading` guard never fired and a second click started a second round trip |
-| `offline` | `value` | `:210` | Offline banner |
-| `authTrouble` | `value` | `:219` | Sign-in banner — a separate banner because "server down" and "auth broken" send the student to two different places |
-| `streak` | `days` | `:229` | Streak chip |
+| `offline` | `value` | `:210` | Offline banner (amber, transient, carries Retry) |
+| `authTrouble` | `value` | `:219` | Sign-in banner — a separate banner, and a separate *tier*, because "server down" and "auth broken" send the student to two different places. Drawn as danger with a square dot, carries "Fix it", and sets the avatar pip, which outlives the banner being dismissed |
+| `streak` | `days` | `:229` | The ledger's streak, and its separator |
 | `scanClean` | — | `:234` | 900 ms celebration flash |
-| `badges` | `badges[]` | `:966` | Badge disclosure and count |
+| `badges` | `badges[]` | `:966` | The ledger's badge count, and the sheet behind it. At zero the count stays on screen and the button is disabled — there is nothing to open, but the number is still a fact |
 | `authState` | `signedIn, label, email, initials` | `postAuthState` | Paints the avatar (initials, or a pip when anonymous), the popover's identity block, and swaps the placeholder |
 | `preferences` | `values{inlineHints, autoScan, lensMode, debounceMs, removeFixedBugComments}, backendUrl` | `postPreferences` | Repaints the popover's live controls. Also posted after every write, and on any `edupeer` configuration change, so a toggle never disagrees with the editor it claims to control |
 | `reviewDue` | `concepts` | `:404` | Reveals the Review button |
@@ -916,6 +939,14 @@ Sent through `vscode.postMessage`, handled in the switch at
 | `setPreference` | `key, value` | popover rows | `setPreference` — writes to `ConfigurationTarget.Global`, then re-posts `preferences`. Keys outside `WRITABLE_PREFERENCES` are dropped, `debounceMs` is floored at 600 and `lensMode` is checked against its two values: `update()` will otherwise create a setting no `package.json` declares |
 | `showProgress` / `setGoal` | — | popover rows | Executes the matching command |
 | `openSettings` | — | popover row | Opens the Settings UI at `@ext:edupeer.edupeer`, for `backendUrl` — the one setting the popover shows but will not edit |
+| `startPredict` | — | empty-state chip | `edupeer.predictOutput` |
+| `startTrace` | — | empty-state chip | `edupeer.traceCode` |
+| `openFile` | — | context strip, when no file is open | `workbench.action.quickOpen` |
+| `retryConnection` | — | offline banner's Retry | `api.health()`, then re-posts `offline`. Deliberately not `refreshCode`: re-reading the file does not re-probe the backend, and the background health poll is on a 30 s timer the student cannot see |
+
+Each of the four is its own named case rather than one message carrying a
+command id, so the set of commands the panel can reach stays a property of
+`sidebarProvider.ts` and not of whatever the webview happens to send.
 
 On the very first `ready` there is no thread yet, so posting one would create a
 permanent phantom `""` entry in `threads` and send an empty `restoreChat` that
@@ -924,8 +955,20 @@ permanent phantom `""` entry in `threads` and send an empty `restoreChat` that
 ### 11.3 Webview state machine (`media/main.js`)
 
 `composerMode` decides what the next submission means: `hint` (default),
-`explain`, `predict`, `review`, `reflect`, `translate`, `subgoal-label`
-(`main.js:57`, `405-446`).
+`explain`, `predict`, `review`, `reflect`, `translate`, `subgoal-label`.
+
+All seven live in one `COMPOSER` table that supplies the strip label, the
+placeholder and the button verb together, and `setComposerMode(mode)` takes
+only the mode. It used to take a placeholder as a second argument at each of
+eleven call sites, which is how the placeholder came to say "describe your
+error" while the mode was `translate`.
+
+Every mode except `hint` sets `tone: "show"` — the student is producing
+material rather than asking for it — which puts `is-producing` on the
+composer and turns the strip, the textarea border and the primary button
+mint. The way out is always present: the strip's exit button, or Escape.
+Escape closes the innermost thing that is open, one per press: the popover,
+then the badge sheet, then the composer mode.
 
 Mode labels and classification:
 
@@ -933,8 +976,20 @@ Mode labels and classification:
 - `FLAGGED_MODES` = `attempt-gate`, `rate-limited`, `offline`, `waking`
   (`main.js:49`) — the tutor withholding rather than teaching; styled
   differently.
-- `LADDER_MODES` = `hint`, `worked-example` (`main.js:52`) — only these show
-  the four-dot depth ladder, because only these occupy a rung.
+- `FAMILY` — the stance each mode takes, and so how its card is drawn:
+  `ask` (hint, reflect, predict-output, trace-check, review-exercise),
+  `show` (worked-example, translate, subgoal-label, explain-concept,
+  explain-error), `tell` (answer). `FLAGGED_MODES` is the `withhold` lookup
+  and is not duplicated in the table — having the set twice is how the two
+  would drift apart. An unknown mode falls back to `ask`, the stance that
+  gives the least away, so a mode the backend adds before the panel knows
+  about it is still drawn as something.
+- `LADDER_MODES` = `hint`, `worked-example` — only these show the rung meter,
+  because only these occupy a rung. The meter is four bars of increasing
+  height: spent bars filled from the ramp, the next one outlined because it
+  costs something, the fourth dashed mint until reached because rung 4 is a
+  worked example rather than another question. A screen reader gets one
+  visually-hidden sentence rather than four unlabelled graphics.
 
 Action rows added after a hint (`main.js:510-541`):
 
@@ -1036,32 +1091,58 @@ throwing away what it said, so it does **not** bump the revision.
 Emitted in this order, with a `seenLines` set so no line gets two primary
 lenses:
 
-1. **One lens per scan flag**, titled `{emoji} {question}` — 🎨 for
-   `kind === "style"`, 🤔 otherwise (`inlineTutor.ts:69-71`). A flag is an
-   observation about this code and outranks a standing offer.
+1. **One lens per scan flag**, titled `EduPeer notes — style: {question}` for
+   `kind === "style"` and `EduPeer asks — {question}` otherwise (`flagTitle`).
+   A flag is an observation about this code and outranks a standing offer, and
+   flags are never displaced by definition lenses: the two sets are ranked
+   separately and rendered flags-first.
 2. **One lens per line carrying a non-idle lens state**
    (`store.activeLensLines()`). Ctrl+Alt+H works anywhere, so a nudged line
    must show its state even when it is neither a definition nor flagged. This
    is placed **ahead of the `lensMode` check on purpose**: the mode governs
    unsolicited offers, not the answer to a question the student asked.
 3. **`lensMode === "flagged"` returns here.**
-4. **One "💡 Ask EduPeer" lens per line matching the language's `lensRegex`.**
+4. **Up to eight `IDLE_LENS_TITLE` lenses**, on the definitions matching the
+   language's `lensRegex`, ranked by size — measured as the gap to the next
+   definition, which is a proxy for the block's length but depends only on the
+   document, so the gutter does not reshuffle as the cursor moves. Returned in
+   document order so the column reads top to bottom.
+5. **One file-level lens on line 1** when there are more than eight,
+   titled `EduPeer — ask about any of {n} definitions`, opening a quick pick
+   over all of them (`edupeer.pickDefinition`). Capping the column is only
+   defensible if the ninth definition is still one click away.
 
 Lens titles come from the pure `lensTitle(state, fallback)`
 (`inlineTutor.ts:48`):
 
 | State | Title | Command |
 | --- | --- | --- |
-| `loading` | `⏳ EduPeer is thinking…` | `edupeer.nudgeLine` |
-| `ready` | `💡 {hint}` | `edupeer.nudgeLine` |
-| `empty` | `✓ Nothing to flag on this line` | `edupeer.nudgeLine` |
-| `error`, reason `auth` | `⚠️ Sign in to get hints — click to sign in` | **`edupeer.signIn`** |
-| `error`, other | `⚠️ {message} — click to retry` | `edupeer.nudgeLine` |
-| `idle` | the fallback title | `edupeer.nudgeLine` |
+| `loading` | `EduPeer is thinking…` | `edupeer.nudgeLine` |
+| `ready` | `EduPeer asks — {hint}` | `edupeer.nudgeLine` |
+| `empty` | `EduPeer — nothing to flag here` | `edupeer.nudgeLine` |
+| `error`, reason `auth` | `EduPeer can't help yet — sign in` | **`edupeer.signIn`** |
+| `error`, other | `EduPeer can't help yet — {message}, click to retry` | `edupeer.nudgeLine` |
+| `idle` | the fallback title (`IDLE_LENS_TITLE`, "EduPeer — ask about this line") | `edupeer.nudgeLine` |
+
+**Why there are no emoji.** Every title begins with the word EduPeer, which is
+what the glyphs were really doing — giving the column a constant left-edge
+marker so it scans as one product rather than five moods. State is carried by
+the verb instead: *asks*, *notes*, *is thinking*, *can't*. A screen reader
+saying "light bulb Ask EduPeer" was reading something that carried nothing the
+words did not, the glyphs render as tofu in some Linux workbench font stacks,
+and they date any screenshot they land in.
+
+Ghost text, diagnostics and the hover drop the glyph **without** taking the
+prefix (`flagLabel`): each is already attached to the line, or already says
+**EduPeer** on its first row, so the prefix would be repetition in a space
+that has none to spare.
 
 A `ready` lens gets two **sibling lenses** so each action is separately
-clickable: "Go deeper" → `edupeer.deepenLine`, "✕" → `edupeer.dismissLine`
-(`inlineTutor.ts:770-783`).
+clickable: "Go deeper" → `edupeer.deepenLine`, "Dismiss" →
+`edupeer.dismissLine`. The redesign proposed "Go deeper (rung 3 of 4)" for the
+first; that would be false here, because the inline surface deliberately holds
+no rung — the ladder lives in the conversation — so naming one would invent a
+number.
 
 `errorStateFor(err, apiAvailable)` (`inlineTutor.ts:22`) maps each failure to
 the one sentence that says what to do: rate limit → "Hint budget used up, back
@@ -1070,8 +1151,10 @@ a 5xx in the message → "The tutor couldn't answer that"; otherwise "That didn'
 work".
 
 **How many lenses.** Flags are bounded upstream by the scan engine (5 bug +
-2 style = at most 7). Definition lenses are **unbounded** in `lensMode: "all"`:
-a 40-function file produces 40. `lensMode: "flagged"` is the escape hatch.
+2 style = at most 7). Definition lenses are capped at **eight**
+(`MAX_DEFINITION_LENSES`), with the remainder behind one file-level lens. They
+used to be unbounded under `lensMode: "all"` — a 40-function file produced 40,
+and an unusable gutter with them.
 
 Refresh is driven by an `EventEmitter` fired after each scan, each lens-state
 change, and each document change (`inlineTutor.ts:157`, `199`, `473`, `611`).
@@ -1573,8 +1656,9 @@ Facts about the current tree, not recommendations.
    rendered.** `progressPanel.ts` has no calibration section, though
    `securityInvariants.test.ts` still lists `${data.samples}` and friends among
    the fragments that must not appear — leftovers from when it did.
-3. **Definition CodeLenses are unbounded.** In `lensMode: "all"` a 40-function
-   file gets 40 lenses.
+3. *(Closed 2026-08-19.)* Definition CodeLenses were unbounded: `lensMode:
+   "all"` put 40 lenses on a 40-function file. The mode is `"top8"` now, with
+   the remainder behind one file-level quick pick.
 4. **Oversized blocks can lose a `bug:` marker they never reviewed.** Named at
    `inlineTutor.ts:559-568`; the cursor anchor narrows the symptom without
    closing it.
@@ -1621,8 +1705,8 @@ about being wrong. Concretely, against 1.6.0:
   stepper.
 - **The webview→extension table** is missing `requestFullFile`, and maps
   `signIn`/`signOut` to the wrong handler line numbers.
-- **CodeLens**: no mention of `lensMode`, of the "Go deeper" / "✕" sibling
-  lenses, of `activeLensLines()`, or of the auth-error lens routing to
+- **CodeLens**: no mention of `lensMode`, of the "Go deeper" / "Dismiss"
+  sibling lenses, of `activeLensLines()`, or of the auth-error lens routing to
   `edupeer.signIn` instead of `nudgeLine`.
 - **Status bar**: missing the `thinking` spinner and the `sign-in error` state,
   and the warning background now also covers auth failure.

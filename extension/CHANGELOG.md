@@ -2,10 +2,67 @@
 
 ## Unreleased
 
+### The panel, rebuilt
+
+- **EduPeer follows your theme now.** Light, dark, and both high-contrast
+  themes each get their own version of the panel — same layout, same colours
+  where they still work, readable ones where they did not. If you use a light
+  theme, the sidebar has been dark since 1.3.0 and no longer is.
+- **The empty panel teaches you the rules before you need them.** It used to
+  be one sentence floating in the middle of a lot of nothing. It now sits just
+  above the box you type in, says what EduPeer will and will not do — you get
+  a question back, not working code; four levels of depth; the fourth is a
+  worked example — and offers three ways to start instead of a blank field.
+- **Hint depth is a staircase.** Four dots became four bars that get taller,
+  so how deep you are reads at a glance. The next one is outlined rather than
+  filled, because it costs you something, and the fourth is drawn differently
+  because it is a worked example rather than another question. When EduPeer
+  refuses to go deeper it says so on that reply, and keeps saying it.
+- **Every reply looks like what it is.** Asking, showing you something,
+  telling you outright, and refusing are four different-looking cards now,
+  instead of fifteen slightly different ones. The buttons under a reply sit
+  inside it, attached to the thing they act on.
+- **The file strip stopped repeating your editor.** Your code was on screen
+  twice: once in your editor, once in a panel eight pixels away. The panel now
+  shows one line — which file, which function, which lines — and keeps the
+  copy behind a toggle. Opening a file when none is open is a button on that
+  same line, rather than the words "no file open" in two places.
+- **The box you type in tells you how it will read what you write.** When
+  EduPeer has asked you to translate something, or predict an output, or label
+  the steps, the box says so and the button changes to match — and there is
+  always a way back to just asking a question. Escape works too. It was
+  possible to be left in one of those modes without knowing it, and to have
+  your next real question answered as if it were homework.
+- **Your streak and badges moved to the bottom.** They were the first thing
+  you saw, above a tutor that had not said anything yet, and the badges were
+  folded away where you would never see them. They are a single line under the
+  box now, always visible. The flame is gone; it says "streak".
+- **Two kinds of problem, two kinds of banner.** "Can't reach the server" and
+  "your sign-in is broken" are different things and now look different, and
+  each has a button that does something about it. The sign-in one leaves a mark
+  on your account picture that stays until it is actually fixed — dismissing
+  the message never fixed anything.
+- **The lightbulbs are gone from your editor's margin**, along with every other
+  emoji there. A screen reader used to read them out; on some Linux setups they
+  showed as empty boxes. Every one now starts with the word EduPeer and says
+  what it is doing: asks, notes, is thinking, can't.
+- **A big file no longer floods the margin.** "Show on every line" put a lens
+  on all forty functions of a forty-function file. It shows the eight biggest
+  now, with one entry at the top of the file that lets you pick any of the
+  rest. If you had chosen "flagged", nothing changes.
+- **Your progress page matches the panel.** Same colours, same typefaces, same
+  depth scale, and it follows your theme too.
+- Reduced motion means no movement, not no feedback. Three things used to
+  simply vanish when it was on — the celebration when a file comes back clean,
+  the sign that EduPeer is holding a hint back, and a banner arriving. Each now
+  has something that stays still and can still be seen.
+
+### The rest
+
 - Your account and your settings now live behind one picture in the top-right
   corner. Everything that changes how the tutor behaves is in there — whether
   it marks up your editor, how long it waits before offering a hint, whether
-  the lightbulb sits on every function or only on flagged lines — and changing
+  it offers on your functions or only on flagged lines — and changing
   one takes effect straight away. You no longer have to go looking in VS Code's
   settings for any of it.
 - The ring around that picture is how deep you are into a hint. Four segments,

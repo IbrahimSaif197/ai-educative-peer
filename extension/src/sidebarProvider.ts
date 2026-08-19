@@ -351,6 +351,14 @@ export class EduPeerSidebarProvider implements vscode.WebviewViewProvider {
         case "openFile":
           await vscode.commands.executeCommand("workbench.action.quickOpen");
           return;
+        // The offline banner's Retry. It probes the backend rather than
+        // re-reading the file: a button labelled Retry that retries nothing
+        // is worse than no button, and the background poll is on a 30s timer
+        // the student has no way to see.
+        case "retryConnection":
+          await this.api.health?.();
+          this.postOffline(!this.api.isAvailable);
+          return;
       }
     });
 
@@ -1206,7 +1214,7 @@ export class EduPeerSidebarProvider implements vscode.WebviewViewProvider {
         </button>
         <div class="row row--static">
           <span class="row__label" id="debounceLabel">Wait before hinting</span>
-          <span class="step">
+          <span class="step" role="group" aria-labelledby="debounceLabel">
             <button class="step__btn" id="debounceDown" aria-label="Wait less before hinting">−</button>
             <b id="debounceValue">1800 ms</b>
             <button class="step__btn" id="debounceUp" aria-label="Wait longer before hinting">+</button>
@@ -1252,7 +1260,7 @@ export class EduPeerSidebarProvider implements vscode.WebviewViewProvider {
   <section class="ctx">
     <div class="ctx__bar">
       <button class="ctx__row" id="collapseCode" aria-expanded="false" aria-controls="ctxCode"
-              title="Show or hide the code preview">
+              title="Show or hide the code preview" disabled>
         <span class="ctx__dot" id="ctxDot" aria-hidden="true"></span>
         <span class="ctx__file" id="fileName">no file open</span>
         <span class="ctx__sep" id="ctxSep" aria-hidden="true" hidden>›</span>

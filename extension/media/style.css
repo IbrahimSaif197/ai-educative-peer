@@ -230,10 +230,21 @@ body.vscode-high-contrast-light {
   --e3: none;
 }
 
-/* Both high-contrast skins: every boundary is a real line, never a fill. */
-body[class*="high-contrast"] .card,
-body[class*="high-contrast"] .turn--tutor,
-body[class*="high-contrast"] .btn {
+/* Both high-contrast skins: anything separated from its surroundings only by
+   a fill gets a real line instead. --ground, --card and --card-lit collapse
+   to near-black (or near-white) there, so a badge, the avatar disc, the
+   cursor row and inline code would otherwise have no edge at all.
+
+   Deliberately not a blanket rule over cards: they already carry a border,
+   and `border` at this specificity would overwrite the left rail that says
+   which family the card belongs to. The deck's version of this named a
+   `.card` class the panel has never had, so it matched nothing — which is
+   worse than no rule, because it reads as coverage. */
+body[class*="high-contrast"] .badge,
+body[class*="high-contrast"] .avatar__face,
+body[class*="high-contrast"] .ln.is-cursor,
+body[class*="high-contrast"] .turn__body code,
+body[class*="high-contrast"] .turn__body pre {
   border: 1px solid var(--line);
 }
 
@@ -294,6 +305,20 @@ body {
 
 @keyframes banner-in {
   from {
+    opacity: 0;
+    transform: translateY(-100%);
+  }
+}
+
+/* Banners hide via the `[hidden]` attribute, which is an instant
+   `display: none` — so the exit has to be deferred until it has run.
+   `setBanner()` in main.js adds this class, waits, then hides. */
+.banner.is-leaving {
+  animation: banner-out 160ms var(--ease-exit) both;
+}
+
+@keyframes banner-out {
+  to {
     opacity: 0;
     transform: translateY(-100%);
   }
@@ -824,14 +849,16 @@ body {
   overflow: hidden;
   text-overflow: ellipsis;
   min-width: 0;
-  flex: 0 1 auto;
+  /* Shrink factor 100 against the symbol's 1: the file name absorbs
+     essentially all of the squeeze before the symbol gives up a character. */
+  flex: 0 100 auto;
 }
 
 .ctx__symbol {
   overflow: hidden;
   text-overflow: ellipsis;
   min-width: 0;
-  flex: 0 100 auto;
+  flex: 0 1 auto;
 }
 
 .ctx__row:disabled .ctx__chev {
@@ -925,12 +952,6 @@ body {
 
 .ln.is-cursor::before {
   opacity: 1;
-}
-
-/* The "No file open" and "… N more lines" rows are a single line of text,
-   not a numbered code line, so they opt out of the two-column grid. */
-.ln--empty {
-  display: block;
 }
 
 .ln__no {
@@ -1127,8 +1148,18 @@ body {
   transition: border-color var(--t-quick) linear;
 }
 
-.turn--tutor:hover {
-  border-color: var(--line);
+/* The hover lift touches only the three sides no family owns.
+   `border-color` here would be a shorthand at higher specificity than
+   `.turn--ask` and friends, so pointing at a card would grey out the rail
+   that says what kind of card it is. `tell` and `withhold` are left out
+   entirely: both are drawn as closed shapes whose whole border carries the
+   meaning, so there is no side free to lift. */
+.turn--ask:hover,
+.turn--show:hover,
+.turn--tutor.is-error:hover {
+  border-top-color: var(--line);
+  border-right-color: var(--line);
+  border-bottom-color: var(--line);
 }
 
 /* ---------------------------------------------------------- card families
@@ -1690,6 +1721,12 @@ textarea::placeholder {
   }
 }
 
+@keyframes fade-out {
+  to {
+    opacity: 0;
+  }
+}
+
 /* The celebration band, held rather than travelled. */
 @keyframes sweep-hold {
   to {
@@ -1739,9 +1776,15 @@ textarea::placeholder {
 
   /* Banner arrival: fade, no slide. A banner that slides in from -100% at
      0.01ms has travelled its whole distance before the first frame, so the
-     student sees nothing arrive — only a banner that was suddenly there. */
+     student sees nothing arrive — only a banner that was suddenly there. The
+     exit is the mirror, and keeps its real duration so the deferred hide in
+     main.js still has something to wait for. */
   .banner {
     animation: fade-in 160ms linear both !important;
+  }
+
+  .banner.is-leaving {
+    animation: fade-out 160ms linear both !important;
   }
 
   /* The celebration sweep travels the full width, so a collapsed duration
