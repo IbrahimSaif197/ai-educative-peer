@@ -104,7 +104,7 @@ class TestReviewDue:
 class TestGoalConcepts:
     """The tags `/goal` mapped, read back off a users document.
 
-    Until 1.7.0 these were computed by an LLM call, stored, shown once in a
+    Until 1.7.1 these were computed by an LLM call, stored, shown once in a
     toast, and then read by nothing. These tests exist because the way that
     happens again is for the reading end to have no coverage.
     """

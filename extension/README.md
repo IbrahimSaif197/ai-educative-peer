@@ -96,7 +96,7 @@ That is why the command asks you to select the code first — the bound is put
 in your hand.
 
 **EduPeer never writes to your code.** Not a formatter, not a fix, not a
-comment. Until 1.7.0 there was one exception — a setting that tidied away
+comment. Until 1.7.1 there was one exception — a setting that tidied away
 `bug:` marker comments once a block scanned clean — and it was removed because
 nothing but the bundled demo files ever carries those. There is now no code
 path in the extension that edits a file, and a test scans the source to keep it

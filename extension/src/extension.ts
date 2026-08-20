@@ -355,7 +355,7 @@ export async function activate(context: vscode.ExtensionContext) {
           text.trim()
             ? // The tags are worth naming because they now do something: they
               // lead the spaced review and they tell the tutor which honest
-              // framing of your code to prefer. Before 1.7.0 this line was the
+              // framing of your code to prefer. Before 1.7.1 this line was the
               // only place they were ever used.
               `EduPeer: goal set.${
                 concepts.length

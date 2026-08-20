@@ -8,7 +8,7 @@
  * demo stops being a demonstration of anything. `stripBugMarkers` is the
  * chokepoint that removes them from every request.
  *
- * Nothing here writes to the student's file. It used to: until 1.7.0 a
+ * Nothing here writes to the student's file. It used to: until 1.7.1 a
  * setting deleted these comments once a block scanned clean. That was removed
  * because outside the demos nobody writes them, so on real student code the
  * feature could only ever be a risk of editing a file it had no reason to

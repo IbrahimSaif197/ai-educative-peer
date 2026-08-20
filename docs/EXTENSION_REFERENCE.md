@@ -27,13 +27,13 @@ symbol name as authoritative and the number as a hint.
 
 | Item | Value |
 | --- | --- |
-| Commit | `f46122b7ee7d5fb2933cca5202d9693a6acb485f` (`f46122b`, 2026-08-19) |
+| Commit | `3360f767055e95cecb4c7202f6efbb4af47e4cfb` (`3360f76`, 2026-08-19) |
 | Branch | `main` |
-| Extension version | 1.7.0 (`extension/package.json:5`) — the panel redesign |
+| Extension version | 1.7.1 (`extension/package.json:5`). 1.7.0 was the panel redesign; 1.7.1 is the pass that followed it |
 | Publisher / id | `edupeer` / `edupeer.edupeer` |
 | Licence | GPL-3.0-or-later |
 | Engine floor | VS Code `^1.85.0` (`package.json:21-23`) |
-| Document generated | 2026-08-18, refreshed 2026-08-19 for the panel redesign |
+| Document generated | 2026-08-18; refreshed 2026-08-19 for the panel redesign and again for 1.7.1 |
 | Working tree | clean |
 
 ### Line counts
@@ -43,11 +43,11 @@ built `.vsix` archives.
 
 | Area | Files | Lines |
 | --- | --- | --- |
-| Source (`src/*.ts`) | 22 | 6,855 |
-| Tests (`src/__tests__/*.ts`) | 26 | 12,230 |
+| Source (`src/*.ts`) | 22 | 6,887 |
+| Tests (`src/__tests__/*.ts`) | 26 | 12,807 |
 | Test mock (`src/__mocks__/vscode.ts`) | 1 | 439 |
-| Webview assets (`media/main.js`, `markdown.js`, `style.css`, `icon.svg`) | 4 | 3,668 |
-| **Extension total** | **53** | **23,192** |
+| Webview assets (`media/main.js`, `markdown.js`, `style.css`, `icon.svg`) | 4 | 3,933 |
+| **Extension total** | **53** | **24,066** |
 
 Source-to-test ratio: 6,364 source vs 11,354 test lines — **1.78:1**.
 
@@ -58,21 +58,21 @@ Produced by running `npx jest --coverage` at this snapshot, not estimated.
 | Metric | Value |
 | --- | --- |
 | Test suites | 26 passed, 26 total |
-| Tests | **1,007 passed, 1,007 total** |
-| Statements | **91.00%** |
-| Branches | 81.78% |
-| Functions | 89.86% |
-| Lines | **92.41%** |
+| Tests | **1,032 passed, 1,032 total** |
+| Statements | **91.13%** |
+| Branches | 82.17% |
+| Functions | 90.38% |
+| Lines | **92.61%** |
 
 `media/main.js` and `media/markdown.js` are excluded from the percentage:
 `webviewMain.test.ts` loads them through `new Function`, which istanbul cannot
 instrument (`jest.config.js:8-10`). They are behaviourally covered by
-180 + 37 = 217 tests that contribute no percentage — a third of the suite, and
-the third that grew most in the redesign.
+201 + 37 = 238 tests that contribute no percentage — nearly a quarter of the
+suite, and the part that grew most across 1.7.0 and 1.7.1.
 
-The statement percentage fell 0.9 points across the redesign while the test
-count rose by 82. That is the shape you would expect: the tickets added
-TypeScript in `sidebarProvider.getHtml` and `inlineTutor`, but most of the new
+The statement percentage fell 0.9 points across the redesign and recovered
+0.13 in 1.7.1. That is the shape you would expect: the work added TypeScript
+in `sidebarProvider.getHtml` and `inlineTutor`, but most of the new
 *behaviour* went into `media/main.js`, which contributes tests and no
 percentage.
 
@@ -1279,7 +1279,7 @@ each just routes the line into a tutor mode:
 
 ### 12.9 EduPeer makes no code edits
 
-**Removed in 1.7.0.** There was exactly one write: `removeFixedBugMarkers`,
+**Removed in 1.7.1.** There was exactly one write: `removeFixedBugMarkers`,
 gated on `edupeer.removeFixedBugComments`, which deleted `bug:` comments from a
 block on the flagged → clean transition through a single undoable
 `WorkspaceEdit`.
@@ -1636,7 +1636,7 @@ somewhere, not merely intended.
 11. **EduPeer never writes to the student's code.** Not under a setting, not
     on any transition. Scanned for in `src/` by
     `auditRegressions.test.ts`'s "no source file writes to the student's
-    code". Until 1.7.0 this read "exactly once, under one setting".
+    code". Until 1.7.1 this read "exactly once, under one setting".
 
 ---
 
@@ -1662,11 +1662,11 @@ tests. Coverage collects from `src/**/*.ts` only.
 `.vscodeignore` excludes `src/`, `node_modules/`, source maps, compiled tests
 and mocks, `tsconfig.json`, `jest.config.js` and `coverage/`.
 
-Six built archives sit in `extension/`, `edupeer-1.3.1.vsix` through
-`edupeer-1.7.0.vsix` — present in the working tree but **not tracked**:
+Seven built archives sit in `extension/`, `edupeer-1.3.1.vsix` through
+`edupeer-1.7.1.vsix` — present in the working tree but **not tracked**:
 `.gitignore` carries `*.vsix`, and `git ls-files` returns none of them. (An
 earlier version of this document said they were checked in. They are not, and
-were not.) The last is 148 KB across 21 files — up from 128 KB,
+were not.) The last is 153 KB across 21 files — up from 128 KB at 1.6.0,
 almost all of it the redesigned `style.css` (52 KB) and `main.js` (52 KB),
 which ship unminified because they are webview assets rather than bundle
 input. The two bundled woff2 faces are 50 KB of the total and always were.
@@ -1678,22 +1678,27 @@ input. The two bundled woff2 faces are 50 KB of the total and always were.
 
 ## 19. Test inventory
 
-26 suites, 1,007 tests, all passing at this snapshot. The redesign added 82,
-almost all of them in `webviewMain.test.ts`, which is where the behaviour it
-added lives.
+26 suites, 1,032 tests, all passing at this snapshot. The redesign added 82
+and the 1.7.1 pass another 25, almost all of them in `webviewMain.test.ts`,
+which is where the behaviour lives.
+
+Several of the 1.7.1 additions are *scans* rather than cases — "no control
+reads a decorative mark aloud", "styles no class the panel never produces",
+"the two halves agree about the things they both declare". Each replaced a
+sentence in this document that admitted something was kept in step by hand.
 
 | Suite | Tests | Lines | Covers |
 | --- | --- | --- | --- |
-| `webviewMain.test.ts` | 180 | 2096 | `media/main.js` end to end (28 describes), including one that walks a whole session |
-| `sidebarProvider.test.ts` | 135 | 2487 | Threads, `handleAsk`, focus, exercises, failure tiers |
-| `inlineTutor.test.ts` | 103 | 1753 | Lens, hover, scan, decorations, marker removal, the eight-lens cap |
+| `webviewMain.test.ts` | 201 | 2434 | `media/main.js` end to end, including one that walks a whole session and three that scan the panel for a whole class of defect |
+| `sidebarProvider.test.ts` | 140 | 2578 | Threads, `handleAsk`, focus, exercises, failure tiers, the stale-context signal |
+| `inlineTutor.test.ts` | 96 | 1599 | Lens, hover, scan, decorations, the eight-lens cap |
 | `attemptTracker.test.ts` | 81 | 366 | The gate, diffing, give-up and answer-request lists |
 | `apiClient.test.ts` | 47 | 660 | Endpoints, errors, timeouts, mode downgrade |
 | `extension.test.ts` | 40 | 601 | Activation, command registration, wiring |
 | `markdown.test.ts` | 37 | 282 | `media/markdown.js` |
 | `codeDigest.test.ts` | 36 | 530 | Band selection and budget arithmetic |
 | `pedagogy.test.ts` | 34 | 198 | Modes, framing, **and the `MAX_HINT_LEVEL` cross-check** |
-| `auditRegressions.test.ts` | 30 | 637 | The data-flow and lifecycle invariants of §17 |
+| `auditRegressions.test.ts` | 36 | 748 | The data-flow and lifecycle invariants of §17, plus the cross-half constant checks |
 | `languages.test.ts` | 28 | 124 | Every regex against real fixtures |
 | `annotationStore.test.ts` | 28 | 297 | Staleness, shifting, the revision guard |
 | `bugMarkers.test.ts` | 23 | 159 | Marker detection, string safety, blanking |
@@ -1744,7 +1749,7 @@ Facts about the current tree, not recommendations.
    trade against carrying a parser per language.
 7. **Python triple-quoted strings are not modelled** in
    `indexOutsideStrings`, so a `bug:` marker inside a one-line docstring is
-   treated as a comment. Since 1.7.0 the only consequence is that such a
+   treated as a comment. Since 1.7.1 the only consequence is that such a
    marker is stripped out of a request it could have stayed in — the
    conservative direction, and no longer a deletion from a file.
 8. **`testWatcher.ts` is 40% covered**, the lowest in the tree, because its
@@ -1820,7 +1825,7 @@ can be reconciled; none of these is a code defect.
 ### 21.1 `docs/SYSTEM_REFERENCE.md` §14
 
 That section carries its own staleness banner dated 2026-08-09 and is accurate
-about being wrong. Concretely, against 1.7.0:
+about being wrong. Concretely, against 1.7.1:
 
 - **Commands: says fifteen, there are eighteen.** `edupeer.deepenLine`,
   `edupeer.dismissLine` and `edupeer.pickDefinition` are missing, and all three

@@ -898,7 +898,7 @@ LLM call fails (`backend/main.py:354-355`).
 
 **Errors:** 401; 429 (`session` bucket); 422 when `text` exceeds 500 characters.
 A failure in `map_goal_to_concepts` is caught and printed, and the goal is
-still saved with an empty concept list — which since 1.7.0 costs the student
+still saved with an empty concept list — which since 1.7.1 costs the student
 the concept-level steering while leaving the free-text sentence, rather than
 costing nothing as it used to.
 
@@ -1451,7 +1451,7 @@ the end of this section.
 | `calibration` | `{calibrated, overconfident, underconfident}` (ints) | same | `calibration_summary:116` | Confidence-vs-outcome counters; only `hint` mode contributes a verdict (`firebase_service.py:314-317`). |
 | `hint_level_counts` | `{"1","2","3","4"}` → int | same | `hint_level_counts:165` | Depth distribution for the dashboard, one key per rung (`LEVEL_KEYS`, derived from `MAX_HINT_LEVEL`); only `hint` mode increments it (`firebase_service.py:318-322`). |
 | `activity` | map of ISO date → int | same, trimmed to 30 days | `activity_strip:178` | Per-day question counts. |
-| `goal` | `{text, concepts, set_at}` or `null` | `set_goal_sync:451` | `build_progress`, `_pacing_for`, `get_review` | Free-text learning goal and its mapped tags. Since 1.7.0 `concepts` steers both the pacing paragraph and the spaced-review ordering; before it, nothing read it. |
+| `goal` | `{text, concepts, set_at}` or `null` | `set_goal_sync:451` | `build_progress`, `_pacing_for`, `get_review` | Free-text learning goal and its mapped tags. Since 1.7.1 `concepts` steers both the pacing paragraph and the spaced-review ordering; before it, nothing read it. |
 | `session_summaries` | array of `{text, date}`, last 20 kept | `append_session_summary_sync:485` | `build_progress:213` (last 5) | Three-bullet session notes. |
 | `updated_at` | server timestamp | every write | nothing | Audit only. |
 
@@ -1674,9 +1674,9 @@ The exact sentence templates are:
   touches one of those, prefer that framing and scaffold it one step more
   slowly. Never steer towards a concept the code does not raise."`
 
-**Why the tags and not just the text** *(1.7.0)*. `/goal` has always spent an
+**Why the tags and not just the text** *(1.7.1)*. `/goal` has always spent an
 LLM call mapping the free text onto the language's known concept vocabulary,
-and until 1.7.0 nothing read the result: it was stored, returned to the client
+and until 1.7.1 nothing read the result: it was stored, returned to the client
 for a toast, rendered on the dashboard, and never consulted again. The tags are
 the same vocabulary the tutor labels its own replies with, so naming them joins
 the goal to the concept system instead of leaving the model to reinterpret a
@@ -1716,7 +1716,7 @@ more data instead of a percentage (`extension/src/progressPanel.ts:111-116`).
 
 `review_due_concepts(concept_stats, today, limit=3, goal_concepts=None)`:
 
-- **The goal re-ranks the due set, and only that** *(1.7.0)*. A concept named
+- **The goal re-ranks the due set, and only that** *(1.7.1)*. A concept named
   by the student's goal sorts ahead of riper ones, so it takes one of the three
   slots first. It deliberately does **not** widen the window: 3-7 days is the
   spacing interval the whole feature rests on, and pulling a concept forward
@@ -2182,7 +2182,7 @@ and is only ever invoked programmatically by a Quick Fix
 | Activity bar container | id `edupeer-sidebar`, title "EduPeer", icon `media/icon.svg` | `package.json:19-27` |
 | Webview view | id `edupeer.sidebar`, name "EduPeer Tutor" | `package.json:28-36` |
 | Walkthrough | id `edupeer.gettingStarted`, four steps | `package.json:152-192` |
-| Configuration | five settings: `backendUrl`, `inlineHints`, `lensMode`, `autoScan`, `debounceMs`. All but `backendUrl` are rendered as live controls in the preferences popover; that one it shows read-only and links out for. `removeFixedBugComments` was removed in 1.7.0 along with the only code edit EduPeer made | `package.json` `contributes.configuration` |
+| Configuration | five settings: `backendUrl`, `inlineHints`, `lensMode`, `autoScan`, `debounceMs`. All but `backendUrl` are rendered as live controls in the preferences popover; that one it shows read-only and links out for. `removeFixedBugComments` was removed in 1.7.1 along with the only code edit EduPeer made | `package.json` `contributes.configuration` |
 
 The webview view is registered with `retainContextWhenHidden: true`
 (`extension/src/extension.ts:72`), so the panel keeps its DOM when hidden.

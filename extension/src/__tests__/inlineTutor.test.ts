@@ -1284,7 +1284,7 @@ describe("InlineTutor — the seeded marker never reaches the tutor", () => {
   });
 
   it("never edits the student's file", async () => {
-    // Until 1.7.0 a setting deleted these comments once a block scanned clean,
+    // Until 1.7.1 a setting deleted these comments once a block scanned clean,
     // and that was the only write EduPeer ever made. It was removed because
     // outside the demos nobody writes `bug:` comments, so on real student code
     // it could only be a risk of touching a file it had no reason to touch.

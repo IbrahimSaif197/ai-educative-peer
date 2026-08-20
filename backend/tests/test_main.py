@@ -341,7 +341,7 @@ class TestProgressEndpoints:
     def test_goal_concepts_reach_the_tutor(self, client, monkeypatch):
         """The whole point of mapping a goal to tags.
 
-        Until 1.7.0 `/goal` spent an LLM call turning free text into concept
+        Until 1.7.1 `/goal` spent an LLM call turning free text into concept
         tags, stored them, showed them in a toast, and then read them from
         nowhere. The unit tests cover the shaping; this is the one that fails
         if the wiring is ever dropped again.

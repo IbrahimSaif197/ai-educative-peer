@@ -1,8 +1,45 @@
 # Changelog
 
-## 1.7.0
+## 1.7.1
 
-### Smaller things
+Everything here landed after 1.7.0 was cut. Nothing in it changes the
+redesign that release was about — it is the pass that followed: what the
+redesign broke on the way in, the parts of the design spec that had no
+ticket, and two things that had been quietly doing nothing for a while.
+
+### EduPeer no longer edits your code. At all.
+
+There was one exception, and it is gone: a setting that tidied away `bug:`
+marker comments from a block once it scanned clean. It existed for the bundled
+demo files, which seed a comment naming each planted bug so you can see what
+the exercise is — and nothing else has ever written one. On your own code it
+could only be a risk of touching a file it had nothing to say about, so the
+setting and the edit behind it are both removed. The preferences panel is one
+row shorter.
+
+What has not changed is the half that matters: those comments are still
+stripped out of everything sent to the tutor. A tutor handed
+`# bug: off-by-one, skips the first item` is not finding your bug, it is
+reading the answer off the line above it.
+
+### Your learning goal now actually does something
+
+Setting a goal has always turned your sentence into concept tags — say "get
+comfortable with recursion" and it works out that you mean `recursion` and
+`base-case`. Those tags were then shown to you once and quietly ignored. Only
+the sentence itself reached the tutor.
+
+They now steer two things. The tutor is told which concepts you are working
+towards in its own vocabulary, and leans towards those framings **when your
+code genuinely touches them** — it will not answer a string-formatting
+question with recursion because you asked it to care about recursion. And when
+a spaced review comes due, concepts from your goal get the slots first.
+
+What a goal still will not do is change *when* something comes back for
+review. Things resurface 3–7 days after you struggled with them because that
+is roughly when it helps; wanting it sooner would not make it work better.
+
+### Fixes, and the parts of the redesign that had no ticket
 
 - **A clean scan celebrates again.** The streak moved to the footer in this
   same release and the little flourish that pops it when a file comes back
@@ -41,37 +78,7 @@
   on the left, everything else on the right — rather than stacking three
   horizontal bands into a strip too short for any of them.
 
-### Your learning goal now actually does something
-
-Setting a goal has always turned your sentence into concept tags — say "get
-comfortable with recursion" and it works out that you mean `recursion` and
-`base-case`. Those tags were then shown to you once and quietly ignored. Only
-the sentence itself reached the tutor.
-
-They now steer two things. The tutor is told which concepts you are working
-towards in its own vocabulary, and leans towards those framings **when your
-code genuinely touches them** — it will not answer a string-formatting
-question with recursion because you asked it to care about recursion. And when
-a spaced review comes due, concepts from your goal get the slots first.
-
-What a goal still will not do is change *when* something comes back for
-review. Things resurface 3–7 days after you struggled with them because that
-is roughly when it helps; wanting it sooner would not make it work better.
-
-### EduPeer no longer edits your code. At all.
-
-There was one exception, and it is gone: a setting that tidied away `bug:`
-marker comments from a block once it scanned clean. It existed for the bundled
-demo files, which seed a comment naming each planted bug so you can see what
-the exercise is — and nothing else has ever written one. On your own code it
-could only be a risk of touching a file it had nothing to say about, so the
-setting and the edit behind it are both removed. The preferences panel is one
-row shorter.
-
-What has not changed is the half that matters: those comments are still
-stripped out of everything sent to the tutor. A tutor handed
-`# bug: off-by-one, skips the first item` is not finding your bug, it is
-reading the answer off the line above it.
+## 1.7.0
 
 ### The panel, rebuilt
 

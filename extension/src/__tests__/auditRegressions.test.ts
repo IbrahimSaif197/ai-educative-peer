@@ -586,7 +586,7 @@ describe("no source file writes to the student's code", () => {
   const stripComment = (line: string) => line.replace(/(^|[^:])\/\/.*$/, "$1");
 
   /**
-   * Until 1.7.0 there was exactly one write: a setting that deleted `bug:`
+   * Until 1.7.1 there was exactly one write: a setting that deleted `bug:`
    * comments from a block once it scanned clean. It was removed because
    * nothing outside the demo files carries those comments, so on real student
    * code the feature could only ever be a risk of editing a file it had no
