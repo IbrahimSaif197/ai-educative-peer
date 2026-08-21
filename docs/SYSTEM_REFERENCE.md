@@ -168,12 +168,12 @@ Both figures were produced by running the tools, not estimated.
 
 | Suite | Command | Statements | Branches | Functions | Lines |
 | --- | --- | --- | --- | --- | --- |
-| Backend source | `pytest --cov=auth --cov=cache --cov=firebase_service --cov=hinting_engine --cov=languages --cov=main --cov=models --cov=progress --cov=ratelimit --cov=session_store` | **93%** (1,102 / 1,181) | — | — | — |
-| Extension source | `npm run test:coverage` | **89.45%** | 78.23% | 88.15% | **90.99%** |
+| Backend source | `pytest --cov=auth --cov=cache --cov=firebase_service --cov=hinting_engine --cov=languages --cov=main --cov=models --cov=progress --cov=ratelimit --cov=session_store` | **93%** (1,336 / 1,435) | — | — | — |
+| Extension source | `npm run test:coverage` | **91.13%** | 82.17% | 90.38% | **92.61%** |
 
 `media/main.js` and `media/markdown.js` are excluded from the extension figure:
 both are loaded through `new Function` in their tests, which istanbul cannot
-instrument. They are behaviourally covered by 116 tests but contribute no
+instrument. They are behaviourally covered by 238 tests but contribute no
 percentage.
 
 ---
@@ -2124,7 +2124,7 @@ abort once `REQUEST_TIMEOUT_MS` elapses (rethrown as `TimeoutError`,
 >   four-bar rung meter.
 > - Its counts (16 source modules, 3,843 source lines, 21 test files, 5,307
 >   test lines, 89.45% statements) are all superseded: 22 / 6,855 / 26 /
->   12,230 / 91.00%.
+>   12,230 / 91.13%.
 >
 > It is kept rather than deleted because the backend half of this document has
 > no replacement, and cutting a section out of the middle would renumber every
@@ -2533,62 +2533,72 @@ estimated. `pytest-cov==5.0.0` is pinned in `backend/requirements-dev.txt`
 (test-only dependencies now live there; `backend/requirements.txt` holds runtime
 deps alone); `jest --coverage` is exposed as `npm run test:coverage`.
 
-**Backend — 93% of source statements (1,102 of 1,181).**
+**Backend — 93% of source statements (1,336 of 1,435).**
 
 | Module | Statements | Missed | Cover |
 | --- | --- | --- | --- |
 | `auth.py` | 15 | 0 | 100% |
 | `cache.py` | 29 | 0 | 100% |
 | `languages.py` | 13 | 0 | 100% |
-| `models.py` | 69 | 0 | 100% |
+| `models.py` | 100 | 0 | 100% |
 | `ratelimit.py` | 43 | 0 | 100% |
-| `session_store.py` | 113 | 4 | 96% |
-| `progress.py` | 128 | 8 | 94% |
-| `main.py` | 230 | 14 | 94% |
-| `hinting_engine.py` | 257 | 20 | 92% |
-| `firebase_service.py` | 284 | 33 | 88% |
-| **Total** | **1,181** | **79** | **93%** |
+| `session_store.py` | 114 | 4 | 96% |
+| `main.py` | 243 | 11 | 95% |
+| `hinting_engine.py` | 442 | 31 | 93% |
+| `progress.py` | 150 | 10 | 93% |
+| `firebase_service.py` | 286 | 43 | 85% |
+| **Total** | **1,435** | **99** | **93%** |
 
-The two lowest modules are lowest for the same reason: most of their uncovered
-lines are the `except` branches that swallow Firestore and Groq failures
-(Section 15), which require provoking a live-service error to reach.
+`firebase_service.py` is the floor for the reason it always has been: most of
+its uncovered lines are the `except` branches that swallow Firestore failures
+(Section 15), which require provoking a live-service error to reach, plus a few
+sync helpers (`append_session_summary_sync`, `firebase_service.py:485-498`) that
+no test drives. The same `except`-branch pattern accounts for most of what is
+missed in `hinting_engine.py` (Groq failures) and `progress.py`.
 
-**Extension — 88.04% of statements, 89.57% of lines.**
+**Extension — 91.13% of statements, 92.61% of lines.**
 
 | Module | % Stmts | % Branch | % Funcs | % Lines |
 | --- | --- | --- | --- | --- |
+| `documentDigest.ts` | 100 | 100 | 100 | 100 |
 | `firebaseClient.ts` | 100 | 100 | 100 | 100 |
-| `languages.ts` | 100 | 50 | 100 | 100 |
+| `progressPanel.ts` | 100 | 95.83 | 100 | 100 |
 | `localTutor.ts` | 100 | 84.61 | 100 | 100 |
 | `offlineQueue.ts` | 100 | 80 | 100 | 100 |
-| `progressPanel.ts` | 100 | 96.96 | 100 | 100 |
 | `debugCompanion.ts` | 100 | 78.94 | 100 | 100 |
-| `attemptTracker.ts` | 98.07 | 96 | 100 | 100 |
-| `statusBar.ts` | 97.14 | 100 | 80 | 96.96 |
-| `pedagogy.ts` | 93.33 | 100 | 81.25 | 93.02 |
-| `authManager.ts` | 92.06 | 90 | 100 | 92.06 |
-| `inlineTutor.ts` | 90.65 | 81.08 | 91.89 | 94.48 |
-| `signInFlow.ts` | 88.13 | 87.5 | 91.66 | 89.65 |
-| `sidebarProvider.ts` | 87.71 | 67.54 | 81.25 | 88.69 |
-| `apiClient.ts` | 87.01 | 64.81 | 92.85 | 88.88 |
-| `extension.ts` | 78.03 | 61.11 | 63.33 | 79.51 |
+| `languages.ts` | 100 | 50 | 100 | 100 |
+| `attemptTracker.ts` | 98.61 | 87.5 | 100 | 100 |
+| `pedagogy.ts` | 97.82 | 100 | 93.75 | 97.72 |
+| `statusBar.ts` | 97.72 | 100 | 80 | 97.67 |
+| `codeDigest.ts` | 97.19 | 85.29 | 100 | 100 |
+| `focusScope.ts` | 96.87 | 86.66 | 100 | 98.11 |
+| `annotationStore.ts` | 96.66 | 92.85 | 100 | 96.22 |
+| `blockHeuristics.ts` | 96.51 | 87.8 | 100 | 96.82 |
+| `bugMarkers.ts` | 96.42 | 95.45 | 100 | 95.74 |
+| `sidebarProvider.ts` | 92.01 | 82.63 | 82.35 | 92.96 |
+| `inlineTutor.ts` | 91.5 | 83.6 | 93.22 | 95.11 |
+| `authManager.ts` | 91.4 | 88.52 | 100 | 91.4 |
+| `apiClient.ts` | 90.86 | 77.21 | 94.28 | 92.34 |
+| `signInFlow.ts` | 87.09 | 82.85 | 92.85 | 90.58 |
+| `extension.ts` | 78.12 | 58.62 | 60 | 80.66 |
 | `testWatcher.ts` | 40.47 | 22.22 | 57.14 | 42.1 |
-| **All files** | **88.04** | **76.81** | **86.84** | **89.57** |
+| **All files** | **91.13** | **82.17** | **90.38** | **92.61** |
 
 Three caveats worth stating in the report rather than hiding:
 
 - `testWatcher.ts` at 40% is the honest floor. Its uncovered span
   (lines 37–74) is the terminal shell-integration flow, which needs a VS Code
   1.93+ host to exercise; only its three pure helpers are directly tested.
-- `apiClient.ts` is now at 87%: the SSE reading loop is covered by
+- `apiClient.ts` is now at 90.86%: the SSE reading loop is covered by
   `streamHint.test.ts`, and what remains uncovered is the thin `/progress`,
-  `/review`, `/goal`, `/scan` and `/line-hint` error paths (lines 398, 404–410,
-  417, 429, 440, 449) plus the manual `AbortSignal.timeout` fallback
-  (lines 196–198).
-- `media/main.js` (659 lines) and `media/markdown.js` (169 lines) contribute
-  **no** percentage: both are loaded via `new Function` in their tests, which
-  istanbul cannot instrument. They are behaviourally covered by 116 tests
-  (79 + 37) but appear in no coverage report. Do not claim a whole-project
+  `/review`, `/goal`, `/scan`, `/line-hint` and `/badges` error paths (lines
+  600, 606–612, 619, 639, 660, 669) plus the manual `AbortSignal.timeout`
+  fallback (lines 284–286).
+- `media/main.js` and `media/markdown.js` contribute **no** percentage: both
+  are loaded via `new Function` in their tests, which istanbul cannot
+  instrument. They are behaviourally covered by 238 tests (201 in
+  `webviewMain.test.ts` + 37 in `markdown.test.ts`) but appear in no coverage
+  report — nearly a quarter of the suite. Do not claim a whole-project
   percentage that implies they are measured.
 
 ### Frameworks and configuration
@@ -3571,15 +3581,15 @@ could not be checked. It has since been installed and run:
 
 | Suite | Measured | Against the 80% claim |
 | --- | --- | --- |
-| Backend source statements | **93%** (1,102 / 1,181) | Exceeds |
-| Extension source statements | **89.45%** | Exceeds |
-| Extension source lines | **90.99%** | Exceeds |
-| Extension source branches | 78.23% | Below, if the claim is read as branch coverage |
+| Backend source statements | **93%** (1,336 / 1,435) | Exceeds |
+| Extension source statements | **91.13%** | Exceeds |
+| Extension source lines | **92.61%** | Exceeds |
+| Extension source branches | 82.17% | Exceeds |
 
 Both figures exceed 80% on the statement and line measures that "unit test
-coverage" normally denotes. Branch coverage on the extension is 78.23%, so if
-the report wants a single defensible number, quote statements or lines and say
-which.
+coverage" normally denotes, and the extension now clears 80% on branches too
+(82.17%), which it did not at the previous snapshot. If the report wants a
+single defensible number, quote statements or lines and say which.
 
 Reproduce with:
 

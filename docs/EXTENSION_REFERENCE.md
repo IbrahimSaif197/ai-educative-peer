@@ -1859,7 +1859,7 @@ about being wrong. Concretely, against 1.7.1:
   postdate it.
 - **Counts**: it reports 16 source modules / 3,843 source lines / 21 test files
   / 5,307 test lines, and 89.45% statement coverage. Current: 22 / 6,855 /
-  26 / 12,230, and 91.00%.
+  26 / 12,230, and 91.13%.
 - **Everything it says about the panel's structure** is superseded by the
   2026-08-19 redesign; its own banner now carries a section listing what
   moved.
