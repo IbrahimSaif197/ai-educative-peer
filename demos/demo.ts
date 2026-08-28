@@ -14,7 +14,6 @@ function totalPrice(products: Product[]): number {
 }
 
 function applyDiscount(total: number, percent: number): number {
-  // Meant to subtract the discount, but returns the discount itself.
   return total * (percent / 100);
 }
 

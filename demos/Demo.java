@@ -4,19 +4,19 @@
 public class Demo {
 
     static int add(int a, int b) {
-        return a - b; // bug: subtracts instead of adds
+        return a - b;
     }
 
     static double average(int[] numbers) {
         int total = 0;
-        for (int i = 1; i < numbers.length; i++) { // bug: off-by-one, skips the first item
+        for (int i = 1; i < numbers.length; i++) {
             total = total + numbers[i];
         }
-        return total / numbers.length; // bug: integer division truncates
+        return total / numbers.length;
     }
 
     static boolean sameWord(String a, String b) {
-        return a == b; // bug: compares references, not contents
+        return a == b;
     }
 
     public static void main(String[] args) {

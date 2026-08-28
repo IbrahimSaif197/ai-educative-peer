@@ -3,18 +3,18 @@
 
 
 def add(a, b):
-    return a - b          # bug: subtracts instead of adds
+    return a - b
 
 
 def average(numbers):
     total = 0
-    for i in range(1, len(numbers)):   # bug: off-by-one, skips the first item
+    for i in range(1, len(numbers)):
         total = total + numbers[i]
     return total / len(numbers)
 
 
 def find_max(numbers):
-    biggest = 0           # bug: fails when all numbers are negative
+    biggest = 0
     for n in numbers:
         if n > biggest:
             biggest = n

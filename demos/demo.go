@@ -9,7 +9,6 @@ func average(numbers []int) int {
 	for i := 0; i <= len(numbers); i++ {
 		sum += numbers[i]
 	}
-	// Integer division loses the fractional part.
 	return sum / len(numbers)
 }
 
