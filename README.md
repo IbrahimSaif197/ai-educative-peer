@@ -520,18 +520,29 @@ hours a month, so this leaves no room for a second one.
 
 ## Publishing the extension to the Marketplace
 
-Prerequisites: a Microsoft account, an Azure DevOps organisation, and a
-personal access token scoped to **Marketplace > Manage** across all accessible
-organisations. Create the publisher at
-[marketplace.visualstudio.com/manage](https://marketplace.visualstudio.com/manage);
-its ID must match `"publisher"` in `extension/package.json`.
+EduPeer is published by uploading a built `.vsix` through the Marketplace web
+UI, not from the command line. `vsce publish` is not used here, and no Azure
+DevOps organisation or personal access token is needed.
 
-```bash
-cd extension
-npx vsce login <publisher>
-npm run package     # sanity-check the .vsix first
-npx vsce publish
-```
+Prerequisites: a publisher created at
+[marketplace.visualstudio.com/manage](https://marketplace.visualstudio.com/manage)
+whose ID matches `"publisher"` in `extension/package.json` (currently
+`edupeer`).
 
-Add `--pre-release` to publish into the pre-release channel while the extension
-is still under test.
+1. Bump `"version"` in `extension/package.json`. The Marketplace will not take
+   the same version twice, so this has to happen before the build, not after.
+2. Build the artefact:
+
+   ```bash
+   cd extension && npm run package
+   ```
+
+   This runs `vsce package --no-dependencies` and writes
+   `edupeer-<version>.vsix` into `extension/`.
+3. Go to
+   [marketplace.visualstudio.com/manage](https://marketplace.visualstudio.com/manage),
+   open the **EduPeer** extension, and upload the `.vsix` from step 2.
+
+The same `.vsix` is what "Extensions: Install from VSIX…" consumes, so a build
+that installs cleanly locally is the build that goes up — see
+[Packaging a VSIX](#packaging-a-vsix).
