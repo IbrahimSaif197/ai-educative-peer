@@ -393,6 +393,31 @@ describe("the attempt gate", () => {
     expect(gate.hint_level).toBe(0);
   });
 
+  it("holds the rung when they ask for the answer a minute after the last hint", async () => {
+    // The live bug: "just tell me" is on the give-up list and never reaches
+    // `isAttempt` as an attempt, but the ladder advanced anyway because the
+    // student had spent longer than the 45s cooldown reading hint 1. Elapsed
+    // time was being scored as evidence of an attempt, so asking bought depth
+    // and no gate card appeared — against both card headers ("next costs an
+    // attempt") and the panel's empty state.
+    let clock = 1_000_000;
+    jest.spyOn(Date, "now").mockImplementation(() => clock);
+    try {
+      const h = await build();
+      await askPastTheGate(h);
+      expect(hintRequest(h.api).escalate).toBe(true); // rung 1 delivered
+
+      clock += 60_000; // they read it, got frustrated, then typed
+      h.posted.length = 0;
+      await h.send({ type: "askHint", question: "just tell me", code: CODE, mode: "hint" });
+
+      expect(hintRequest(h.api).escalate).toBe(false);
+      expect(h.posted.find((m: any) => m.mode === "attempt-gate")).toBeDefined();
+    } finally {
+      jest.restoreAllMocks();
+    }
+  });
+
   it("escalates again once the code changes", async () => {
     const h = await build();
     await askPastTheGate(h);

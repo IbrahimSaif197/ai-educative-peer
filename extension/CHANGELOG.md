@@ -1,5 +1,37 @@
 # Changelog
 
+## 1.7.2
+
+One defect, and the near-miss beside it. Both are the same mistake: something
+other than an attempt was allowed to buy a rung of the hint ladder.
+
+### Asking for the answer no longer climbs the ladder
+
+Typing "just tell me" on untouched code advanced the meter from rung 1 to
+rung 2, and no "Same depth" card appeared. The give-up list was working
+correctly and the backend was doing as it was told; the escalation came from
+neither. `AttemptTracker.evaluate` was scoring elapsed time as evidence of an
+attempt, so once 45 seconds had passed since the last hint landed, *any* ask
+on unchanged code advanced — without ever consulting what the student typed.
+Read hint 1 for a minute, ask for the answer, get hint 2.
+
+The gate's fourth argument is now three-valued: the student reasoned in the
+chat (escalates, as before), the student typed a give-up (holds the rung,
+however long they sat on it first), or there is no student message at all —
+an "analyse selection" click, a Quick Fix, the test watcher — which keeps the
+long-stall escalation it has always had.
+
+The "Same depth" card stops offering the wait as a way out when waiting is no
+longer one.
+
+### A downgraded answer request could buy a rung too
+
+Against a backend too old to know `answer` mode, the client retries the
+request as a plain hint. It was carrying `escalate: true` when it did — answer
+mode never runs the attempt gate, so nothing had cleared the flag. Asking for
+the answer therefore climbed a rung on an old backend and not on a current
+one. The downgrade now clears it.
+
 ## 1.7.1
 
 Everything here landed after 1.7.0 was cut. Nothing in it changes the

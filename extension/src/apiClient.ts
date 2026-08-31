@@ -99,7 +99,13 @@ const DOWNGRADABLE_MODES = new Set(["answer"]);
  * convention here — see `ProgressReport.calibration`.
  */
 function withoutNewMode(req: HintRequest): HintRequest | undefined {
-  return req.mode && DOWNGRADABLE_MODES.has(req.mode) ? { ...req, mode: "hint" } : undefined;
+  if (!req.mode || !DOWNGRADABLE_MODES.has(req.mode)) return undefined;
+  // `escalate` is forced false on the way down. Answer mode never runs the
+  // attempt gate, so the request reaches here carrying the default `true` -
+  // and once the mode is rewritten to `hint`, that flag is precisely what the
+  // backend advances the ladder on. Left alone, asking for the answer would
+  // climb a rung against an older backend and not against a current one.
+  return { ...req, mode: "hint", escalate: false };
 }
 
 export interface HintResponse {

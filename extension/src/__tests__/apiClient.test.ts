@@ -190,6 +190,27 @@ describe("version skew — an old backend has never heard of answer mode", () =>
     expect(JSON.parse(fetchMock.mock.calls[1][1].body).mode).toBe("hint");
   });
 
+  it("does not let a downgraded answer request buy a rung", async () => {
+    // Answer mode never runs the attempt gate, so the request arrives here
+    // with escalate: true. Retried as a plain hint, that flag is exactly what
+    // the backend advances the ladder on - so asking for the answer would
+    // climb a rung against an old backend and not against a current one.
+    const fetchMock = sequence([
+      { status: 422, body: { detail: [{ msg: "unexpected value" }] } },
+      { status: 200, body: hint },
+    ]);
+    await new ApiClient(BASE, makeTokens()).getHint({
+      code: "x=1",
+      question: "just tell me the answer",
+      hint_level: 1,
+      mode: "answer",
+      escalate: true,
+    });
+    const retried = JSON.parse(fetchMock.mock.calls[1][1].body);
+    expect(retried.mode).toBe("hint");
+    expect(retried.escalate).toBe(false);
+  });
+
   it("getHint surfaces a 422 that is not about the mode", async () => {
     // A 422 on an ordinary hint is a real contract breach, not version skew.
     sequence([{ status: 422, body: { detail: "code too long" } }]);

@@ -293,6 +293,30 @@ describe("AttemptTracker — answering counts as trying", () => {
     expect(tracker.evaluate("file", CODE, 1100, false).signal).toBe("unchanged");
   });
 
+  it("holds the rung for a give-up, however long they sat on it first", () => {
+    // The panel promises "spent by trying, not by asking twice", and both card
+    // headers say "next costs an attempt". Waiting is not trying: a student who
+    // reads hint 1, sits for a minute and then types "just tell me" has put no
+    // attempt on record, so the cooldown must not hand them the next rung.
+    const tracker = new AttemptTracker();
+    tracker.record("file", CODE, 1000);
+
+    const result = tracker.evaluate("file", CODE, 1000 + HINT_COOLDOWN_MS + 1, false);
+
+    expect(result.signal).toBe("unchanged");
+    expect(result.escalate).toBe(false);
+  });
+
+  it("still lets a silent caller stall its way up, since nothing was refused", () => {
+    // `undefined` is "no student message at all" (an analyse-selection click, a
+    // Quick Fix, the test watcher). That is not a give-up, so the long-stall
+    // escalation it has always had survives.
+    const tracker = new AttemptTracker();
+    tracker.record("file", CODE, 1000);
+
+    expect(tracker.evaluate("file", CODE, 1000 + HINT_COOLDOWN_MS).signal).toBe("stalled");
+  });
+
   it("prefers the real edit over the answer, so the diff survives", () => {
     const tracker = new AttemptTracker();
     tracker.record("file", CODE, 1000);

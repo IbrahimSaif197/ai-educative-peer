@@ -36,7 +36,10 @@ export interface AttemptEvaluation {
   escalate: boolean;
   /** Diff of what changed since the last hint; "" when nothing did. */
   editSummary: string;
-  /** Time left on the cooldown, 0 unless the signal is "unchanged". */
+  /**
+   * Time left on the cooldown; 0 for every signal but "unchanged", and 0 there
+   * too when the hold is a give-up rather than the clock.
+   */
   cooldownRemainingMs: number;
 }
 
@@ -128,15 +131,27 @@ export class AttemptTracker {
    * Decide how to treat the next hint request for `key` (one document).
    * Read-only: call `record` once the hint is actually delivered.
    *
-   * `answered` is the student having reasoned in the chat since the last hint.
-   * It escalates like an edit does, because a student working out a concept
-   * out loud is trying - the old rule pinned them at hint 1 for talking.
+   * `attempted` is what the student typed, judged by `isAttempt`, and is
+   * three-valued on purpose:
+   *
+   * - `true` - they reasoned in the chat since the last hint. It escalates
+   *   like an edit does, because a student working out a concept out loud is
+   *   trying - the old rule pinned them at hint 1 for talking.
+   * - `false` - they typed, and it was a give-up ("just tell me", "idk"). The
+   *   ladder holds, and the cooldown below cannot hand them the rung either:
+   *   waiting is not trying. Scoring elapsed time as an attempt is what let a
+   *   student who read hint 1 for a minute and then asked for the answer walk
+   *   to hint 2, against both card headers ("next costs an attempt") and the
+   *   panel's own empty state.
+   * - `undefined` - no student message at all: an "analyse selection" click, a
+   *   Quick Fix on a diagnostic, the test watcher. Nothing was refused, so the
+   *   long-stall escalation it has always had still applies.
    */
   evaluate(
     key: string,
     code: string,
     now: number = Date.now(),
-    answered = false
+    attempted?: boolean
   ): AttemptEvaluation {
     const previous = this.attempts.get(key);
     if (!previous) {
@@ -152,16 +167,17 @@ export class AttemptTracker {
     }
     // Checked after the edit case on purpose: a real edit carries a diff the
     // tutor answers follow-ups against, and an answer has none to offer.
-    if (answered) {
+    if (attempted === true) {
       return { signal: "answered", escalate: true, editSummary: "", cooldownRemainingMs: 0 };
     }
     const elapsed = now - previous.at;
-    if (elapsed < this.cooldownMs) {
+    // A typed give-up holds the rung however long they sat on it first.
+    if (attempted === false || elapsed < this.cooldownMs) {
       return {
         signal: "unchanged",
         escalate: false,
         editSummary: "",
-        cooldownRemainingMs: this.cooldownMs - elapsed,
+        cooldownRemainingMs: Math.max(0, this.cooldownMs - elapsed),
       };
     }
     return { signal: "stalled", escalate: true, editSummary: "", cooldownRemainingMs: 0 };
@@ -192,12 +208,16 @@ export class AttemptTracker {
  * way out, so that is what it leads with.
  */
 export function nudgeForUnchangedCode(cooldownRemainingMs: number): string {
-  const seconds = Math.max(1, Math.ceil(cooldownRemainingMs / 1000));
-  return (
+  const head =
     "Same depth for now — I don't know what you've already tried.\n\n" +
     "Tell me what you tried, or what you expected and what happened instead: that unlocks a " +
-    `deeper hint straight away. So does editing the code, or waiting ${seconds}s.`
-  );
+    "deeper hint straight away. So does editing the code";
+  // No timer left means the hold is the give-up itself, not the cooldown, and
+  // sitting there another second will not lift it. Offering the wait here would
+  // promise a way out that no longer exists.
+  if (cooldownRemainingMs <= 0) return `${head}.`;
+  const seconds = Math.max(1, Math.ceil(cooldownRemainingMs / 1000));
+  return `${head}, or waiting ${seconds}s.`;
 }
 
 /**

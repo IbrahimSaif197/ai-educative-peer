@@ -770,7 +770,11 @@ export class EduPeerSidebarProvider implements vscode.WebviewViewProvider {
     // Only progressive hints are gated on having actually tried something.
     const attempt =
       mode === "hint"
-        ? this.attempts.evaluate(problemKey, attemptCode, Date.now(), opts.attempted === true)
+        ? // Passed through, not coerced: `undefined` (no student message at all)
+          // has to stay distinguishable from an explicit `false` (they typed,
+          // and it was a give-up). Collapsing the two with `=== true` is what
+          // let the cooldown escalate a give-up once 45s had passed.
+          this.attempts.evaluate(problemKey, attemptCode, Date.now(), opts.attempted)
         : undefined;
     if (attempt?.signal === "unchanged") {
       this.post({
