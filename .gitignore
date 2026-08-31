@@ -59,3 +59,11 @@ backend/tests/eval_tutor_rates_*.json
 # Claude Design handoff bundles — re-downloadable exports, not source
 mockups-m1-m14-with-tokens-and-specs/
 docs/
+
+# The FYP report itself. Kept local for the same reason docs/ is: the
+# declaration page carries a name, a student ID and an IC/passport number,
+# and this repository is public.
+Ibrahim_Saeed_Mohammed_Saif-*.md
+
+# graphify knowledge-graph output. Regenerable, so it is build output.
+graphify-out/
