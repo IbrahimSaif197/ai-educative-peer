@@ -1,5 +1,27 @@
 # Changelog
 
+## 1.7.4
+
+### A style note shows in one place
+
+A scan's style note — "total = 0 could be named for what it holds", that
+kind of thing — was rendered twice at once: as a CodeLens line above the code
+and as ghost text at the end of the line whenever the cursor rested on it.
+With a bug flag on the loop below and the standing offer above the function,
+one seven-line function carried four annotations, two of them the same note.
+
+The lens column now carries bug flags and offers only. A style note is a
+remark about a line rather than a question the student is asked to act on,
+so it belongs beside that line, on the cursor, not permanently in the column
+that pushes code down. The gutter dot and the Problems entry still mark it.
+Bug flags render exactly as before.
+
+### Under the hood
+
+Also in this build, from the branch merged earlier today: the client no
+longer claims an edit when the cursor leaves the block for a blank line
+between two functions — the view moving is not the code changing.
+
 ## 1.7.3
 
 Two defects in the attempt gate, both letting the hint ladder be climbed or

@@ -181,7 +181,9 @@ describe("provideCodeLenses", () => {
     jest.useRealTimers();
   });
 
-  it("names a style flag as a note rather than a question", async () => {
+  it("never puts a style flag in the lens column", async () => {
+    // It used to get a lens titled "EduPeer notes — style: …" as well as the
+    // ghost text on its line; the note now lives beside the line only.
     jest.useFakeTimers();
     const api = makeApi({
       scanCode: jest.fn(async () => ({ flags: [flag({ kind: "style", severity: "info" })] })),
@@ -190,7 +192,68 @@ describe("provideCodeLenses", () => {
     restCursor(editor);
     await runScheduledScan();
     const titles = lensProvider().provideCodeLenses(doc).map((l: any) => l.command.title);
-    expect(titles).toContain("EduPeer notes — style: What is the last index this reaches?");
+    expect(titles.join(" ")).not.toContain("EduPeer notes");
+    expect(titles.join(" ")).not.toContain("What is the last index this reaches?");
+    jest.useRealTimers();
+  });
+});
+
+/**
+ * Defect G: one style note on `total = 0` rendered twice at once - a lens
+ * above the line and ghost text at the end of it - beside a bug flag on the
+ * loop and the standing offer above the function. A flag now has one surface
+ * for its text: bug flags keep the lens (and the ghost text on the cursor
+ * line, as before); style notes keep the ghost text only.
+ */
+describe("a scan flag renders its text in one surface", () => {
+  beforeEach(() => mock.__reset());
+
+  /** Ghost-text calls only: `setDecorations` also paints the gutter. */
+  const ghostCalls = (tutor: any, editor: any) =>
+    editor.setDecorations.mock.calls.filter((c: any) => c[0] === tutor["ghostDecoration"]);
+  const gutterWarnCalls = (tutor: any, editor: any) =>
+    editor.setDecorations.mock.calls.filter((c: any) => c[0] === tutor["flagGutterWarn"]);
+
+  it("renders a style flag beside its line, never also as a lens", async () => {
+    jest.useFakeTimers();
+    const note = "Could total be named for what it holds?";
+    const api = makeApi({
+      scanCode: jest.fn(async () => ({
+        flags: [flag({ kind: "style", severity: "info", question: note })],
+      })),
+    });
+    const { tutor, doc, editor } = activate(api);
+    restCursor(editor); // the cursor rests on the flagged line
+    await runScheduledScan();
+
+    // One surface: the ghost text on the line...
+    const ghost = ghostCalls(tutor, editor).at(-1)[1];
+    expect(ghost[0].renderOptions.after.contentText).toBe(`style: ${note}`);
+    // ...and not the lens column.
+    const titles = lensProvider().provideCodeLenses(doc).map((l: any) => l.command.title);
+    expect(titles.join(" ")).not.toContain(note);
+    // The gutter and the Problems entry are not text surfaces and are untouched.
+    const [, diags] = diagnostics().set.mock.calls.at(-1);
+    expect(diags).toHaveLength(1);
+    jest.useRealTimers();
+  });
+
+  it("renders a bug flag exactly as before: a lens, ghost text on its line, a gutter mark", async () => {
+    jest.useFakeTimers();
+    const api = makeApi({ scanCode: jest.fn(async () => ({ flags: [flag()] })) });
+    const { tutor, doc, editor } = activate(api);
+    restCursor(editor);
+    await runScheduledScan();
+
+    const titles = lensProvider().provideCodeLenses(doc).map((l: any) => l.command.title);
+    expect(titles).toContain("EduPeer asks — What is the last index this reaches?");
+    const ghost = ghostCalls(tutor, editor).at(-1)[1];
+    expect(ghost[0].renderOptions.after.contentText).toBe("What is the last index this reaches?");
+    const warn = gutterWarnCalls(tutor, editor).at(-1)[1];
+    expect(warn).toHaveLength(1);
+    expect(warn[0].start.line).toBe(2);
+    const [, diags] = diagnostics().set.mock.calls.at(-1);
+    expect(diags).toHaveLength(1);
     jest.useRealTimers();
   });
 

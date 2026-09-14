@@ -87,9 +87,8 @@ function fingerprintLine(uri: string, lineNum: number, text: string): string {
  * one that names a variable the student does not have.
  */
 function flagTitle(flag: LineFlag): string {
-  return flag.kind === "style"
-    ? `EduPeer notes — ${flagLabel(flag)}`
-    : `EduPeer asks — ${flagLabel(flag)}`;
+  // Only bug flags reach the lens column - see `provideCodeLenses`.
+  return `EduPeer asks — ${flagLabel(flag)}`;
 }
 
 /**
@@ -813,7 +812,16 @@ export class InlineTutor {
     // A flag is an observation about this code and outranks a standing offer.
     // Flags are capped at 7 by the scan and are never displaced by definition
     // lenses: the two sets are ranked separately and rendered flags-first.
+    //
+    // Bug flags only. A style note used to get a lens here *and* ghost text
+    // from `renderActiveLineDecoration` when the cursor rested on its line,
+    // so one remark about `total = 0` showed twice at once. It is a remark
+    // about a line, not a question the student is asked to act on, so it
+    // belongs beside that line, on the cursor, rather than permanently in
+    // the column that pushes code down; the gutter dot and the Problems
+    // entry still say it is there.
     for (const flag of store.flags()) {
+      if (flag.kind === "style") continue;
       add(this.flagRange(doc, flag).start.line, flagTitle(flag));
     }
 
