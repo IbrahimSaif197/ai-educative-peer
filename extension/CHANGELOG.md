@@ -1,5 +1,50 @@
 # Changelog
 
+## 1.7.3
+
+Two defects in the attempt gate, both letting the hint ladder be climbed or
+skipped without the student touching their code. They share a cause: the
+backend was taking the extension's word for whether an attempt had been made.
+
+### The rung no longer advances without an edit
+
+"what are you doing", "i wanna watch spider man", "fix" — three messages in
+ten seconds on an untouched file — walked the ladder from rung 1 to rung 3,
+under three cards each reading "next costs an attempt". The same happened
+with no file open at all. Two things were wrong. The extension counted any
+message that was not a give-up as an attempt and sent `escalate: true` for
+it; and the backend advanced the level on that flag alone, defaulting it to
+true when it was missing.
+
+The backend now keeps a hash of the code each hint was given against, beside
+the level, and advances only when the client claims an edit *and* the code it
+sends differs from that hash. The same bytes never buy a rung, whatever the
+request says; an ask carrying no code never does; a request that omits the
+flag never does. The extension, for its part, claims an edit only when the
+block actually changed. Reasoning in the chat, and sitting out the 45-second
+cooldown, still get the tutor's reply — at the same depth, no longer a deeper
+one.
+
+### Asking for the answer no longer skips the ladder
+
+From a fresh session at rung 1, "just fix it" came back in answer mode with
+the corrected line. Answer mode never consulted the ladder: the backend ran
+the answer prompt at whatever level the request named. It now reads the
+stored level first and hands over the fix only from rung 4, the worked
+example. Below that, the request gets the same "Same depth" hold the
+extension already shows, naming what is needed — change the code and ask
+again — and nothing about the code. A request sent straight to the API is
+refused the same way.
+
+### The cards say only what is true
+
+The held card's spoken label offered "edit your code or explain your
+reasoning" as ways to go deeper; only the edit is one, and it now says so.
+The "Same depth" card promised that describing what you tried, or waiting out
+the cooldown, would unlock a deeper hint; neither does, so it now names the
+edit and invites the description as help with aiming the next hint. "next
+costs an attempt" was already true everywhere it is shown, and stays.
+
 ## 1.7.2
 
 One defect, and the near-miss beside it. Both are the same mistake: something

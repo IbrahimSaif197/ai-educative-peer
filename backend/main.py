@@ -20,6 +20,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, StreamingResponse
 
 from models import (
+    MAX_HINT_LEVEL,
     HintRequest,
     HintResponse,
     HealthResponse,
@@ -204,26 +205,68 @@ async def _resolve_hint_level(req: HintRequest, uid: str) -> int:
     """The level this request should answer at, WITHOUT spending it.
 
     Only 'hint' mode is progressive, and it only advances when the client says
-    the student actually changed something (`escalate`). Asking the same
+    the student changed something (`escalate`) AND the store agrees: the hash
+    of the code sent is compared with the hash stored beside the last level
+    delivered, so the same bytes never buy a rung whatever the client claims.
+    An ask carrying no code at all has nothing to have edited. Asking the same
     question again on untouched code re-uses the level instead of walking the
     student to a free pseudocode answer.
+
+    'answer' mode reads the ladder too, without ever spending it: the answer
+    is only handed out from the top rung (see `_answer_hold`).
 
     Nothing is persisted here. `_commit_hint_level` runs only once a hint has
     actually been produced, so a failed LLM call never costs the student a
     level.
     """
+    if req.mode == "answer":
+        return await asyncio.to_thread(
+            store.peek_hint_level, uid, _ladder_key(req), False
+        )
     if req.mode != "hint":
         return req.hint_level
     return await asyncio.to_thread(
-        store.peek_hint_level, uid, _ladder_key(req), req.escalate
+        store.peek_hint_level,
+        uid,
+        _ladder_key(req),
+        req.escalate and bool(req.code.strip()),
+        raw_code_hash(req.code),
     )
 
 
 def _commit_hint_level(req: HintRequest, uid: str, level: int) -> None:
-    """Spend the level, now that the student has the hint in hand."""
+    """Spend the level, now that the student has the hint in hand, and record
+    the code it was given against so the next ask can be checked for an edit."""
     if req.mode != "hint":
         return
-    store.commit_hint_level(uid, _ladder_key(req), level)
+    store.commit_hint_level(uid, _ladder_key(req), level, raw_code_hash(req.code))
+
+
+# What an answer request gets below the top rung. Static on purpose: it names
+# what is needed and nothing about the code, so there is no line, operator or
+# fix in it to leak.
+ANSWER_HOLD = (
+    "Not yet — the fix is only handed over once you've reached the worked "
+    "example, and this thread isn't there.\n\n"
+    "Make a change to the code and ask again: each edit unlocks a deeper hint."
+)
+
+
+def _answer_hold(req: HintRequest, level: int) -> Optional[HintResponse]:
+    """The hold an answer request gets below the top rung, or None to proceed.
+
+    Checked from the two handlers rather than inside `_resolve_hint_level`
+    (which returns a level and has no way to say "and run nothing") or
+    `effective_mode` (a pure function of mode and level shared with the
+    engine; it cannot see the store, and swapping the mode there would quietly
+    run a Socratic hint in place of a refusal). Both handlers call this with
+    the level `_resolve_hint_level` read for answer mode, so a direct API call
+    is refused exactly like the extension's. The hold is the same card the
+    extension's own gate shows, so the panel already knows how to render it.
+    """
+    if req.mode != "answer" or level >= MAX_HINT_LEVEL:
+        return None
+    return HintResponse(hint=ANSWER_HOLD, hint_level=level, concept_tags=[], mode="attempt-gate")
 
 
 async def _pacing_for(req: HintRequest, uid: str) -> str:
@@ -258,6 +301,9 @@ async def hint(req: HintRequest, uid: str = Depends(rate_limited("hint"))) -> Hi
         raise HTTPException(status_code=400, detail="question must not be empty")
 
     level = await _resolve_hint_level(req, uid)
+    hold = _answer_hold(req, level)
+    if hold is not None:
+        return hold
     language = normalize_language(req.language)
     history = [turn.model_dump() for turn in req.history]
     pacing = await _pacing_for(req, uid)
@@ -317,6 +363,16 @@ async def hint_stream(req: HintRequest, uid: str = Depends(rate_limited("hint"))
 
     def sse(payload: dict) -> str:
         return f"data: {json.dumps(payload)}\n\n"
+
+    hold = _answer_hold(req, level)
+    if hold is not None:
+        # The same two events a real stream ends with, so the client reads it
+        # like any other reply; nothing is logged and nothing is spent.
+        def held():
+            yield sse({"type": "meta", "hint_level": hold.hint_level, "mode": hold.mode})
+            yield sse({"type": "done", "hint": hold.hint, "concept_tags": []})
+
+        return StreamingResponse(held(), media_type="text/event-stream")
 
     def event_source():
         yield sse({"type": "meta", "hint_level": level, "mode": effective_mode(req.mode, level)})

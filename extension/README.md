@@ -10,16 +10,18 @@ Works with Python, JavaScript, TypeScript, Java, C, C++, C#, Go, Rust and SQL.
 
 Ask about the code you are stuck on and EduPeer answers at rung 1: a question
 aimed at the concept you are missing. Asking the same thing again does not get
-you a bigger hint. Editing the code does, and so does telling it what you tried.
-The depth advances when you have actually attempted something, so the tutor
-stays ahead of you rather than handing over the answer on the second prompt.
+you a bigger hint, and neither does telling it what you tried — that helps it
+aim the next hint, but only editing the code goes deeper. The depth advances
+when you have actually changed something, so the tutor stays ahead of you
+rather than handing over the answer on the second prompt.
 
 There are four rungs, and the fourth is different in kind. Rungs 1–3 are
 questions that get more specific: first the concept, then the line, then the
 shape of the fix with the answer left out of it. Rung 4 is a worked example —
 the deepest help there is, and the panel says so rather than pretending there
-is a fifth. If you would rather just be told, ask outright; that is a supported
-path and it ends the thread honestly instead of pretending to teach.
+is a fifth. If you would rather just be told, ask outright; once you have
+reached the worked example that is a supported path, and it ends the thread
+honestly instead of pretending to teach.
 
 Alongside the chat panel:
 

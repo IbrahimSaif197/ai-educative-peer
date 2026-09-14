@@ -779,7 +779,7 @@ export class EduPeerSidebarProvider implements vscode.WebviewViewProvider {
     if (attempt?.signal === "unchanged") {
       this.post({
         type: "hint",
-        hint: nudgeForUnchangedCode(attempt.cooldownRemainingMs),
+        hint: nudgeForUnchangedCode(),
         hint_level: 0,
         concept_tags: [],
         mode: "attempt-gate",
@@ -807,7 +807,12 @@ export class EduPeerSidebarProvider implements vscode.WebviewViewProvider {
         language: this.lastLanguageId,
         mode,
         history: thread.history.slice(-MAX_HISTORY_TURNS),
-        escalate: attempt ? attempt.escalate : true,
+        // The claim that the block was edited, which the backend checks
+        // against the code it stored with the last hint. Never claimed for a
+        // mode that does not consult the ladder, and never for an ask carrying
+        // no code: with no file open there is nothing to have edited, whatever
+        // the tracker made of an empty string.
+        escalate: !!attempt?.escalate && digest.code.trim() !== "",
         edit_summary: attempt?.editSummary ?? "",
         ...(aboutOpenFile && this.lastFocus
           ? {
@@ -842,8 +847,13 @@ export class EduPeerSidebarProvider implements vscode.WebviewViewProvider {
         this.attempts.record(problemKey, attemptCode);
         this.levelEmitter.fire(res.hint_level);
       }
-      thread.history.push({ role: "student", content: question });
-      thread.history.push({ role: "tutor", content: res.hint });
+      // A hold from the backend's own gate (an answer asked for below the top
+      // rung) is a card, not a tutor turn, and stays out of the history so the
+      // model never reads a canned refusal back as its own words.
+      if (res.mode !== "attempt-gate") {
+        thread.history.push({ role: "student", content: question });
+        thread.history.push({ role: "tutor", content: res.hint });
+      }
       this.post({
         type: "hint",
         seq,

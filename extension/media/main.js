@@ -412,9 +412,9 @@
       }
     }
     if (held) {
-      parts.push(
-        `Held at rung ${level} — edit your code or explain your reasoning to go deeper.`
-      );
+      // Only an edit goes deeper. This used to offer "or explain your
+      // reasoning" as well, and since 1.7.3 that no longer buys a rung.
+      parts.push(`Held at rung ${level} — edit your code to go deeper.`);
     }
     return parts.join(" ");
   }

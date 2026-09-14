@@ -49,10 +49,12 @@ describe("the attempt gate ignores whitespace-only edits", () => {
     expect(result.editSummary).not.toBe("");
   });
 
-  it("still escalates after the cooldown on unchanged code", () => {
+  it("still reports a stall after the cooldown on unchanged code, without escalating", () => {
     const tracker = new AttemptTracker(1000);
     tracker.record("doc", CODE, 0);
-    expect(tracker.evaluate("doc", CODE + "\n", 5000).signal).toBe("stalled");
+    const result = tracker.evaluate("doc", CODE + "\n", 5000);
+    expect(result.signal).toBe("stalled");
+    expect(result.escalate).toBe(false);
   });
 });
 

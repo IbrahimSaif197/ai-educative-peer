@@ -91,12 +91,13 @@ describe("AttemptTracker", () => {
     expect(result.cooldownRemainingMs).toBe(HINT_COOLDOWN_MS - 1000);
   });
 
-  it("escalates once the cooldown has elapsed", () => {
+  it("stalls once the cooldown has elapsed, without escalating", () => {
     const tracker = new AttemptTracker();
     tracker.record("file", CODE, 1000);
     const result = tracker.evaluate("file", CODE, 1000 + HINT_COOLDOWN_MS);
     expect(result.signal).toBe("stalled");
-    expect(result.escalate).toBe(true);
+    // Waiting lifts the hold card, never the rung: only an edit does that.
+    expect(result.escalate).toBe(false);
     expect(result.cooldownRemainingMs).toBe(0);
   });
 
@@ -107,6 +108,17 @@ describe("AttemptTracker", () => {
     expect(result.signal).toBe("changed");
     expect(result.escalate).toBe(true);
     expect(result.editSummary).toBe("1 - x = 1\n1 + x = 2");
+  });
+
+  it("escalates on every edit, one rung per change", () => {
+    const tracker = new AttemptTracker();
+    tracker.record("file", "x = 1", 1000);
+    for (const [i, code] of ["x = 2", "x = 3", "x = 4"].entries()) {
+      const result = tracker.evaluate("file", code, 1100 + i);
+      expect(result.signal).toBe("changed");
+      expect(result.escalate).toBe(true);
+      tracker.record("file", code, 1100 + i);
+    }
   });
 
   it("keeps documents independent", () => {
@@ -140,8 +152,8 @@ describe("AttemptTracker", () => {
   it("honours a custom cooldown", () => {
     const tracker = new AttemptTracker(5_000);
     tracker.record("file", CODE, 0);
-    expect(tracker.evaluate("file", CODE, 4_999).escalate).toBe(false);
-    expect(tracker.evaluate("file", CODE, 5_000).escalate).toBe(true);
+    expect(tracker.evaluate("file", CODE, 4_999).signal).toBe("unchanged");
+    expect(tracker.evaluate("file", CODE, 5_000).signal).toBe("stalled");
   });
 
   it("re-records after each hint so the diff is always since the last one", () => {
@@ -153,31 +165,36 @@ describe("AttemptTracker", () => {
 });
 
 describe("nudgeForUnchangedCode", () => {
-  it("leads with telling the tutor what you tried, the fastest way out", () => {
-    const text = nudgeForUnchangedCode(30_000);
-    expect(text).toContain("Tell me what you tried");
-    expect(text).toContain("30s");
+  it("leads with the one thing that unlocks a deeper hint: an edit", () => {
+    const text = nudgeForUnchangedCode();
+    expect(text).toMatch(/^Same depth/);
+    expect(text).toContain("Make a change to the code");
   });
 
   it("no longer claims nothing was typed", () => {
-    // `unchanged` now requires a give-up phrase, so this card fires *after*
-    // the student typed something. "You haven't changed anything yet" both
-    // misdescribed that and pointed only at the two slowest ways out.
-    const text = nudgeForUnchangedCode(30_000);
-    expect(text).not.toContain("haven't changed anything");
+    // `unchanged` requires a give-up phrase (or no message inside the
+    // cooldown), so this card fires *after* the student typed something. "You
+    // haven't changed anything yet" both misdescribed that and pointed only at
+    // the two slowest ways out.
+    expect(nudgeForUnchangedCode()).not.toContain("haven't changed anything");
   });
 
-  it("still offers editing and waiting", () => {
-    const text = nudgeForUnchangedCode(30_000);
-    expect(text).toContain("editing the code");
+  it("still invites them to say what they tried, as help with aim rather than depth", () => {
+    const text = nudgeForUnchangedCode();
+    expect(text).toContain("what you tried");
+    expect(text).not.toContain("straight away");
   });
 
-  it("never counts down below one second", () => {
-    expect(nudgeForUnchangedCode(1)).toContain("1s");
+  it("never offers waiting as a way out", () => {
+    // The cooldown only decides whether this card shows; sitting it out never
+    // unlocks a rung, so the countdown the card used to carry was a promise
+    // nothing kept.
+    expect(nudgeForUnchangedCode()).not.toMatch(/wait/i);
   });
 
-  it("rounds part-seconds up", () => {
-    expect(nudgeForUnchangedCode(4200)).toContain("5s");
+  it("puts the edit before the talk, since only the edit moves the rung", () => {
+    const text = nudgeForUnchangedCode();
+    expect(text.indexOf("Make a change to the code")).toBeLessThan(text.indexOf("Telling me"));
   });
 });
 
@@ -271,17 +288,20 @@ describe("isAttempt", () => {
   });
 });
 
-describe("AttemptTracker — answering counts as trying", () => {
+describe("AttemptTracker — answering counts as engagement, not as an attempt", () => {
   const CODE = "x = 1";
 
-  it("escalates on an answer even though the code is untouched", () => {
+  it("answers a typed guess at the same depth, with no hold card", () => {
+    // 1.7.2 escalated here, which is how "what are you doing" on an untouched
+    // file climbed the ladder: reasoning in the chat is engagement the tutor
+    // should answer, but the rung is only ever bought by an edit.
     const tracker = new AttemptTracker();
     tracker.record("file", CODE, 1000);
 
     const result = tracker.evaluate("file", CODE, 1100, true);
 
     expect(result.signal).toBe("answered");
-    expect(result.escalate).toBe(true);
+    expect(result.escalate).toBe(false);
     expect(result.editSummary).toBe("");
     expect(result.cooldownRemainingMs).toBe(0);
   });
@@ -307,14 +327,17 @@ describe("AttemptTracker — answering counts as trying", () => {
     expect(result.escalate).toBe(false);
   });
 
-  it("still lets a silent caller stall its way up, since nothing was refused", () => {
+  it("still tells a silent caller apart from a give-up after the cooldown", () => {
     // `undefined` is "no student message at all" (an analyse-selection click, a
-    // Quick Fix, the test watcher). That is not a give-up, so the long-stall
-    // escalation it has always had survives.
+    // Quick Fix, the test watcher). That is not a give-up, so past the cooldown
+    // the ask goes to the tutor without the hold card - at the same depth. It
+    // used to stall its way up a rung.
     const tracker = new AttemptTracker();
     tracker.record("file", CODE, 1000);
 
-    expect(tracker.evaluate("file", CODE, 1000 + HINT_COOLDOWN_MS).signal).toBe("stalled");
+    const result = tracker.evaluate("file", CODE, 1000 + HINT_COOLDOWN_MS);
+    expect(result.signal).toBe("stalled");
+    expect(result.escalate).toBe(false);
   });
 
   it("prefers the real edit over the answer, so the diff survives", () => {
@@ -327,14 +350,15 @@ describe("AttemptTracker — answering counts as trying", () => {
     expect(result.editSummary).toBe("1 - x = 1\n1 + x = 2");
   });
 
-  it("lets three answers reach the top of the ladder", () => {
+  it("holds three answers at the same rung and lets the next edit move it", () => {
     const tracker = new AttemptTracker();
     tracker.record("file", CODE, 1000);
 
     for (const at of [1100, 1200, 1300]) {
-      expect(tracker.evaluate("file", CODE, at, true).escalate).toBe(true);
+      expect(tracker.evaluate("file", CODE, at, true).escalate).toBe(false);
       tracker.record("file", CODE, at);
     }
+    expect(tracker.evaluate("file", "x = 2", 1400, true).escalate).toBe(true);
   });
 });
 

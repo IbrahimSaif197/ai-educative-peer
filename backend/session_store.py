@@ -1,7 +1,7 @@
 import hashlib
 import time
 from collections import OrderedDict
-from typing import Dict, Tuple
+from typing import Dict, Optional, Tuple
 
 from firebase_admin import firestore
 
@@ -47,29 +47,61 @@ def resolve_level(current: int, escalate: bool) -> int:
     return max(1, min(MAX_HINT_LEVEL, current))
 
 
+def earned(escalate: bool, code_hash: Optional[str], stored_hash: Optional[str]) -> bool:
+    """Whether an ask has earned the next rung.
+
+    `escalate` is the client's claim that the student edited since the last
+    hint; the hashes are the server's own check of it. Trusting the claim on
+    its own is what let a chat message on untouched code climb the ladder, so
+    the claim now has to be backed by code that differs from the code the
+    last hint was given against - and there has to be such a baseline. A level
+    with no recorded hash (written before hashes were kept) proves nothing
+    either way, so it holds; the commit that follows records one.
+
+    `code_hash=None` means the caller is not asking for the check at all
+    (`next_hint_level`, `current_hint_level`), and the claim stands as before.
+    """
+    if not escalate:
+        return False
+    if code_hash is None:
+        return True
+    return stored_hash is not None and code_hash != stored_hash
+
+
 class InMemorySessionStore:
     """In-memory session store. Used when Firestore is not configured and in
     tests. Bounded so a long-running process cannot leak unboundedly."""
 
     def __init__(self, max_entries: int = 10000, idle_seconds: float = SESSION_IDLE_SECONDS):
-        self._levels: "OrderedDict[Tuple[str, str], int]" = OrderedDict()
+        # (user, problem) -> (level delivered, hash of the code it was given against)
+        self._levels: "OrderedDict[Tuple[str, str], Tuple[int, Optional[str]]]" = OrderedDict()
         # uid -> monotonic time of the last activity in the open session.
         self._active: Dict[str, float] = {}
         self._max_entries = max_entries
         self._idle_seconds = idle_seconds
 
-    def peek_hint_level(self, user_id: str, fingerprint: str, escalate: bool = True) -> int:
+    def peek_hint_level(
+        self,
+        user_id: str,
+        fingerprint: str,
+        escalate: bool = True,
+        code_hash: Optional[str] = None,
+    ) -> int:
         """What the next ask should answer at, WITHOUT spending the level.
 
         Callers commit only once the hint has actually been produced, so a
-        failed LLM call cannot walk a student down the hint ladder.
+        failed LLM call cannot walk a student down the hint ladder. `code_hash`
+        is what `earned` checks the `escalate` claim against.
         """
-        return resolve_level(self._levels.get((user_id, fingerprint), 0), escalate)
+        current, stored_hash = self._levels.get((user_id, fingerprint), (0, None))
+        return resolve_level(current, earned(escalate, code_hash, stored_hash))
 
-    def commit_hint_level(self, user_id: str, fingerprint: str, level: int) -> None:
-        """Record that `level` was actually delivered for this code."""
+    def commit_hint_level(
+        self, user_id: str, fingerprint: str, level: int, code_hash: Optional[str] = None
+    ) -> None:
+        """Record that `level` was actually delivered, and against which code."""
         key = (user_id, fingerprint)
-        self._levels[key] = max(1, min(MAX_HINT_LEVEL, int(level)))
+        self._levels[key] = (max(1, min(MAX_HINT_LEVEL, int(level))), code_hash)
         self._levels.move_to_end(key)
         while len(self._levels) > self._max_entries:
             self._levels.popitem(last=False)
@@ -149,25 +181,35 @@ class FirestoreSessionStore:
         """
         return hashlib.sha1(f"{user_id}\x00{fingerprint}".encode("utf-8")).hexdigest()
 
-    def peek_hint_level(self, user_id: str, fingerprint: str, escalate: bool = True) -> int:
+    def peek_hint_level(
+        self,
+        user_id: str,
+        fingerprint: str,
+        escalate: bool = True,
+        code_hash: Optional[str] = None,
+    ) -> int:
         """What the next ask should answer at, WITHOUT spending the level.
 
         Read-only: nothing is written, so a failed LLM call leaves the ladder
-        exactly where it was.
+        exactly where it was. `code_hash` is what `earned` checks the
+        `escalate` claim against.
         """
         try:
             ref = self._client.collection(self.SESSIONS).document(
                 self._doc_id(user_id, fingerprint)
             )
             snap = ref.get(timeout=self.TIMEOUT)
-            current = int(snap.to_dict().get("hint_level", 0)) if snap.exists else 0
-            return resolve_level(current, escalate)
+            data = snap.to_dict() if snap.exists else {}
+            current = int(data.get("hint_level", 0))
+            return resolve_level(current, earned(escalate, code_hash, data.get("code_hash")))
         except Exception as e:
             print(f"[session] peek_hint_level failed: {e}")
             return 1
 
-    def commit_hint_level(self, user_id: str, fingerprint: str, level: int) -> None:
-        """Record that `level` was actually delivered for this code."""
+    def commit_hint_level(
+        self, user_id: str, fingerprint: str, level: int, code_hash: Optional[str] = None
+    ) -> None:
+        """Record that `level` was actually delivered, and against which code."""
         try:
             ref = self._client.collection(self.SESSIONS).document(
                 self._doc_id(user_id, fingerprint)
@@ -177,6 +219,7 @@ class FirestoreSessionStore:
                     "user_id": user_id,
                     "fingerprint": fingerprint,
                     "hint_level": max(1, min(MAX_HINT_LEVEL, int(level))),
+                    "code_hash": code_hash,
                     "updated_at": firestore.SERVER_TIMESTAMP,
                 },
                 timeout=self.TIMEOUT,

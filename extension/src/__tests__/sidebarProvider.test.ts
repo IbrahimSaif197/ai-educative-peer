@@ -387,8 +387,8 @@ describe("the attempt gate", () => {
     await h.send({ type: "askHint", question: "idk", code: CODE, mode: "hint" });
     const gate = h.posted.find((m) => m.type === "hint" && m.mode === "attempt-gate");
     // They typed something, so the card no longer opens by telling them they
-    // typed nothing — it asks for the one thing that unlocks the next hint.
-    expect(gate.hint).toContain("Tell me what you tried");
+    // typed nothing — it names the one thing that unlocks the next hint.
+    expect(gate.hint).toContain("Make a change to the code");
     expect(gate.hint).not.toContain("haven't changed anything");
     expect(gate.hint_level).toBe(0);
   });
@@ -421,6 +421,18 @@ describe("the attempt gate", () => {
   it("escalates again once the code changes", async () => {
     const h = await build();
     await askPastTheGate(h);
+    // A real edit, made the way "sends a diff of what changed" below makes
+    // one: the tracker diffs the block `sendFocus` resolved, not the webview's
+    // `code` field, so different code in the message alone is not an edit.
+    // This test used to pass anyway, through the "answered" branch - the
+    // typed "now?" escalated on its own, which is the 1.7.2 defect.
+    const edited = mock.__makeDocument(
+      CODE.replace("sum(n)", "total(n)"),
+      "python",
+      "/tmp/demo.py"
+    );
+    mock.window.activeTextEditor = mock.__makeEditor(edited, 1);
+    await h.send({ type: "refreshCode" });
     await h.send({
       type: "askHint",
       question: "now?",
@@ -486,8 +498,13 @@ describe("the attempt gate", () => {
   it("never gates a non-hint mode", async () => {
     const h = await build();
     await askPastTheGate(h);
+    h.posted.length = 0;
     await h.send({ type: "askHint", question: "", code: CODE, mode: "reflect" });
-    expect(hintRequest(h.api).escalate).toBe(true);
+    expect(hintRequest(h.api).mode).toBe("reflect");
+    expect(h.posted.find((m: any) => m.mode === "attempt-gate")).toBeUndefined();
+    // ...and claims no edit either: nothing outside hint mode consults the
+    // ladder, and `escalate: true` used to ride along regardless.
+    expect(hintRequest(h.api).escalate).toBe(false);
   });
 
   it("forgets the attempt record on reset", async () => {
@@ -1475,10 +1492,10 @@ describe("the seeded bug marker never reaches the tutor", () => {
   });
 });
 
-describe("answering in chat deepens the hint", () => {
+describe("answering in chat is engagement, not an attempt", () => {
   beforeEach(() => mock.__reset());
 
-  it("does not show the same-depth block after a real answer", async () => {
+  it("does not show the same-depth block after a real answer, and claims no edit", async () => {
     const h = await build();
     await askPastTheGate(h);
     h.posted.length = 0;
@@ -1487,7 +1504,9 @@ describe("answering in chat deepens the hint", () => {
 
     const gate = h.posted.find((m: any) => m.mode === "attempt-gate");
     expect(gate).toBeUndefined();
-    expect(hintRequest(h.api).escalate).toBe(true);
+    // 1.7.2 sent `escalate: true` here - the exact path by which "what are
+    // you doing" climbed the ladder on an untouched file.
+    expect(hintRequest(h.api).escalate).toBe(false);
   });
 
   it("still shows it when they gave up instead", async () => {
@@ -1500,6 +1519,59 @@ describe("answering in chat deepens the hint", () => {
     const gate = h.posted.find((m: any) => m.mode === "attempt-gate");
     expect(gate).toBeDefined();
     expect(hintRequest(h.api).escalate).toBe(false);
+  });
+});
+
+describe("an ask with no code claims no edit", () => {
+  beforeEach(() => mock.__reset());
+
+  it("sends escalate: false when no file is open", async () => {
+    const h = await build();
+    // Close the editor and let the provider notice, the way a real close does.
+    mock.window.activeTextEditor = undefined;
+    await h.send({ type: "refreshCode" });
+
+    await h.send({ type: "askHint", question: "what are you doing", code: "", mode: "hint" });
+    await h.send({ type: "explainSkip" });
+
+    // Nothing to diff, so nothing to claim - even though the tracker has never
+    // seen this key and would otherwise score the ask as a first one.
+    expect(hintRequest(h.api).code).toBe("");
+    expect(hintRequest(h.api).escalate).toBe(false);
+  });
+});
+
+describe("a hold from the backend's answer gate", () => {
+  beforeEach(() => mock.__reset());
+
+  it("renders as the same-depth card and stays out of the history", async () => {
+    const h = await build({
+      streamHint: jest.fn(async (req: any) =>
+        req.mode === "answer"
+          ? {
+              hint: "Not yet — make a change to the code and ask again.",
+              hint_level: 1,
+              concept_tags: [],
+              mode: "attempt-gate",
+            }
+          : { hint: "What does len(n) return when n is empty?", hint_level: 1, concept_tags: [] }
+      ),
+    });
+    await askPastTheGate(h);
+    const thread = h.provider["threads"].get(h.provider["threadKey"])!;
+    const before = thread.history.length;
+    h.posted.length = 0;
+
+    await h.send({ type: "askHint", question: "just fix it", code: CODE, mode: "hint" });
+
+    // Routed to answer mode, claiming no edit; the backend decides.
+    expect(hintRequest(h.api).mode).toBe("answer");
+    expect(hintRequest(h.api).escalate).toBe(false);
+    const card = h.posted.find((m: any) => m.type === "hint" && m.mode === "attempt-gate");
+    expect(card).toBeDefined();
+    expect(card.hint).not.toContain("+");
+    // A canned refusal is not a tutor turn.
+    expect(thread.history).toHaveLength(before);
   });
 });
 
@@ -1942,10 +2014,13 @@ describe("machine-generated questions are not student attempts", () => {
     expect(hintRequest(h.api).escalate).toBe(false);
   });
 
-  it("still escalates on a question the student actually typed", async () => {
+  it("still answers a question the student actually typed, without the gate card", async () => {
     // The control: the gate closes on machine text without closing on people.
+    // Neither climbs - only an edit does - but a typed question is answered
+    // rather than held.
     const h = await build();
     await askPastTheGate(h);
+    h.posted.length = 0;
 
     await h.send({
       type: "askHint",
@@ -1954,7 +2029,8 @@ describe("machine-generated questions are not student attempts", () => {
       mode: "hint",
     });
 
-    expect(hintRequest(h.api).escalate).toBe(true);
+    expect(h.posted.find((m: any) => m.mode === "attempt-gate")).toBeUndefined();
+    expect(hintRequest(h.api).escalate).toBe(false);
   });
 });
 
@@ -1974,6 +2050,14 @@ describe("the explain-first gate judges what the student typed", () => {
     h.posted.length = 0;
   }
 
+  /** The hold card, if the gate showed one for the ask under test. */
+  const gateCard = (h: Harness) => h.posted.find((m: any) => m.mode === "attempt-gate");
+
+  // The verdict on what was typed decides whether the hold card shows. It no
+  // longer decides whether the rung moves - nothing but an edit does, so
+  // `escalate` is false on every path below - which is why these assert on
+  // the card rather than on the flag they used to read.
+
   it("does not let a shrugged explanation condemn a real question", async () => {
     const h = await build();
     await armTheGateAgain(h);
@@ -1982,7 +2066,8 @@ describe("the explain-first gate judges what the student typed", () => {
     expect(latest(h.posted, "explainFirst")).toBeDefined();
     await h.send({ type: "explainAnswer", explanation: "idk" });
 
-    expect(hintRequest(h.api).escalate).toBe(true);
+    expect(gateCard(h)).toBeUndefined();
+    expect(hintRequest(h.api).escalate).toBe(false);
   });
 
   it("counts the explanation when the question itself was a shrug", async () => {
@@ -1992,7 +2077,8 @@ describe("the explain-first gate judges what the student typed", () => {
     await h.send({ type: "askHint", question: "idk", code: CODE, mode: "hint" });
     await h.send({ type: "explainAnswer", explanation: "i think it divides by the length" });
 
-    expect(hintRequest(h.api).escalate).toBe(true);
+    expect(gateCard(h)).toBeUndefined();
+    expect(hintRequest(h.api).escalate).toBe(false);
   });
 
   it("holds the depth when both halves are a shrug", async () => {
@@ -2004,6 +2090,7 @@ describe("the explain-first gate judges what the student typed", () => {
     await h.send({ type: "askHint", question: "idk", code: CODE, mode: "hint" });
     await h.send({ type: "explainAnswer", explanation: "idk" });
 
+    expect(gateCard(h)).toBeDefined();
     expect(hintRequest(h.api).escalate).toBe(false);
   });
 
@@ -2014,7 +2101,8 @@ describe("the explain-first gate judges what the student typed", () => {
     await h.send({ type: "askHint", question: "maybe len(n) is zero", code: CODE, mode: "hint" });
     await h.send({ type: "explainSkip" });
 
-    expect(hintRequest(h.api).escalate).toBe(true);
+    expect(gateCard(h)).toBeUndefined();
+    expect(hintRequest(h.api).escalate).toBe(false);
   });
 
   it("does not turn a skipped shrug into an attempt", async () => {
@@ -2024,6 +2112,7 @@ describe("the explain-first gate judges what the student typed", () => {
     await h.send({ type: "askHint", question: "idk", code: CODE, mode: "hint" });
     await h.send({ type: "explainSkip" });
 
+    expect(gateCard(h)).toBeDefined();
     expect(hintRequest(h.api).escalate).toBe(false);
   });
 });

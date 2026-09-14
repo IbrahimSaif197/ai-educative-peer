@@ -32,7 +32,7 @@ export type AttemptSignal =
 
 export interface AttemptEvaluation {
   signal: AttemptSignal;
-  /** Whether the hint level should advance. */
+  /** Whether the hint level should advance. Only an edit earns it. */
   escalate: boolean;
   /** Diff of what changed since the last hint; "" when nothing did. */
   editSummary: string;
@@ -131,21 +131,26 @@ export class AttemptTracker {
    * Decide how to treat the next hint request for `key` (one document).
    * Read-only: call `record` once the hint is actually delivered.
    *
-   * `attempted` is what the student typed, judged by `isAttempt`, and is
-   * three-valued on purpose:
+   * Only an edit escalates. The backend checks that claim against the code it
+   * stored with the last hint, so nothing else could buy a rung even if it
+   * were claimed - and until 1.7.3 it was: "what are you doing" on an
+   * untouched file walked the ladder, because reasoning in the chat and
+   * sitting out the cooldown both sent `escalate: true`, against every card
+   * header ("next costs an attempt") and the panel's own empty state.
    *
-   * - `true` - they reasoned in the chat since the last hint. It escalates
-   *   like an edit does, because a student working out a concept out loud is
-   *   trying - the old rule pinned them at hint 1 for talking.
+   * `attempted` is what the student typed, judged by `isAttempt`, and is
+   * three-valued on purpose. It decides whether the hold card is shown, never
+   * whether the rung moves:
+   *
+   * - `true` - they reasoned in the chat since the last hint. The tutor
+   *   answers that reasoning at the depth already reached, with no hold card:
+   *   talking is engagement, not an attempt.
    * - `false` - they typed, and it was a give-up ("just tell me", "idk"). The
-   *   ladder holds, and the cooldown below cannot hand them the rung either:
-   *   waiting is not trying. Scoring elapsed time as an attempt is what let a
-   *   student who read hint 1 for a minute and then asked for the answer walk
-   *   to hint 2, against both card headers ("next costs an attempt") and the
-   *   panel's own empty state.
+   *   hold card, however long they sat on it first.
    * - `undefined` - no student message at all: an "analyse selection" click, a
    *   Quick Fix on a diagnostic, the test watcher. Nothing was refused, so the
-   *   long-stall escalation it has always had still applies.
+   *   hold card shows only inside the cooldown; past it the ask goes to the
+   *   tutor at the same depth.
    */
   evaluate(
     key: string,
@@ -168,10 +173,10 @@ export class AttemptTracker {
     // Checked after the edit case on purpose: a real edit carries a diff the
     // tutor answers follow-ups against, and an answer has none to offer.
     if (attempted === true) {
-      return { signal: "answered", escalate: true, editSummary: "", cooldownRemainingMs: 0 };
+      return { signal: "answered", escalate: false, editSummary: "", cooldownRemainingMs: 0 };
     }
     const elapsed = now - previous.at;
-    // A typed give-up holds the rung however long they sat on it first.
+    // A typed give-up gets the hold card however long they sat on it first.
     if (attempted === false || elapsed < this.cooldownMs) {
       return {
         signal: "unchanged",
@@ -180,7 +185,7 @@ export class AttemptTracker {
         cooldownRemainingMs: Math.max(0, this.cooldownMs - elapsed),
       };
     }
-    return { signal: "stalled", escalate: true, editSummary: "", cooldownRemainingMs: 0 };
+    return { signal: "stalled", escalate: false, editSummary: "", cooldownRemainingMs: 0 };
   }
 
   /** Remember the code a hint was given against. */
@@ -202,22 +207,19 @@ export class AttemptTracker {
  * What to say when a student asks again with nothing new to go on.
  *
  * This card only fires when the code is untouched AND the message was a
- * give-up, so by the time the student reads it they have usually typed
- * something. It used to open with "you haven't changed anything yet", which
- * was both wrong and unhelpful: describing what they typed is now the fastest
- * way out, so that is what it leads with.
+ * give-up (or there was no message and the cooldown is running), so by the
+ * time the student reads it they have usually typed something. It names the
+ * one thing that unlocks a deeper hint - an edit - and nothing else. It used
+ * to promise that describing what they tried, or waiting out the cooldown,
+ * would unlock one too; since 1.7.3 neither does, so neither is offered.
  */
-export function nudgeForUnchangedCode(cooldownRemainingMs: number): string {
-  const head =
-    "Same depth for now — I don't know what you've already tried.\n\n" +
-    "Tell me what you tried, or what you expected and what happened instead: that unlocks a " +
-    "deeper hint straight away. So does editing the code";
-  // No timer left means the hold is the give-up itself, not the cooldown, and
-  // sitting there another second will not lift it. Offering the wait here would
-  // promise a way out that no longer exists.
-  if (cooldownRemainingMs <= 0) return `${head}.`;
-  const seconds = Math.max(1, Math.ceil(cooldownRemainingMs / 1000));
-  return `${head}, or waiting ${seconds}s.`;
+export function nudgeForUnchangedCode(): string {
+  return (
+    "Same depth for now — the code hasn't changed since my last hint.\n\n" +
+    "Make a change to the code and ask again: that's what unlocks a deeper hint. " +
+    "Telling me what you tried, or what you expected and what happened instead, " +
+    "helps me aim the next one."
+  );
 }
 
 /**

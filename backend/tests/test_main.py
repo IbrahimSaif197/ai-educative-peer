@@ -1,5 +1,6 @@
 import sys
 import os
+import json
 import types
 import pytest
 from unittest.mock import MagicMock, patch
@@ -119,6 +120,24 @@ VALID_HINT_PAYLOAD = {
 }
 
 
+def _climbing(step: int, **over):
+    """An ask that can actually climb the ladder.
+
+    Keyed on a problem rather than on the code's own fingerprint, so an edit
+    deepens the ladder instead of starting a new one - and carrying the edit
+    the server now requires before it will advance: `escalate` on its own is
+    a claim, and the same bytes never buy a rung. Two asks with the same
+    `step` are the same code; different steps are different code.
+    """
+    return {
+        **VALID_HINT_PAYLOAD,
+        "problem_key": "k",
+        "code": f"{VALID_HINT_PAYLOAD['code']}  # try {step}",
+        "escalate": True,
+        **over,
+    }
+
+
 class TestHintEndpoint:
     def test_valid_request_returns_200(self, client):
         res = client.post("/hint", json=VALID_HINT_PAYLOAD)
@@ -135,14 +154,14 @@ class TestHintEndpoint:
         res = client.post("/hint", json=VALID_HINT_PAYLOAD)
         assert res.json()["hint_level"] == 1
 
-    def test_hint_level_increments_on_repeat(self, client):
-        client.post("/hint", json=VALID_HINT_PAYLOAD)
-        res2 = client.post("/hint", json=VALID_HINT_PAYLOAD)
+    def test_hint_level_increments_on_an_edit(self, client):
+        client.post("/hint", json=_climbing(1))
+        res2 = client.post("/hint", json=_climbing(2))
         assert res2.json()["hint_level"] == 2
 
     def test_hint_level_caps_at_4(self, client):
-        for _ in range(5):
-            res = client.post("/hint", json=VALID_HINT_PAYLOAD)
+        for step in range(5):
+            res = client.post("/hint", json=_climbing(step))
         assert res.json()["hint_level"] == 4
 
     def test_empty_question_returns_400(self, client):
@@ -196,8 +215,8 @@ class TestHintEndpoint:
 
 class TestTutorModesEndpoint:
     def test_mode_defaults_to_hint_and_advances_level(self, client):
-        client.post("/hint", json=VALID_HINT_PAYLOAD)
-        res = client.post("/hint", json=VALID_HINT_PAYLOAD)
+        client.post("/hint", json=_climbing(1))
+        res = client.post("/hint", json=_climbing(2))
         assert res.json()["hint_level"] == 2
 
     def test_non_hint_mode_does_not_advance_level(self, client):
@@ -260,8 +279,8 @@ class TestHintStream:
             yield {"type": "done", "hint": "h", "concept_tags": []}
 
         monkeypatch.setattr(app_main.engine, "stream_hint", fake_stream)
-        client.post("/hint/stream", json=VALID_HINT_PAYLOAD)
-        res = client.post("/hint/stream", json=VALID_HINT_PAYLOAD)
+        client.post("/hint/stream", json=_climbing(1))
+        res = client.post("/hint/stream", json=_climbing(2))
         assert self._events(res.text)[0]["hint_level"] == 2
 
     def test_stream_llm_failure_yields_error_event(self, client, monkeypatch):
@@ -548,13 +567,13 @@ class TestEventLoopNotBlocked:
         seen = {}
 
         class _RecordingStore(InMemorySessionStore):
-            def peek_hint_level(self, user_id, fingerprint, escalate=True):
+            def peek_hint_level(self, user_id, fingerprint, escalate=True, code_hash=None):
                 seen["peek_hint_level"] = threading.get_ident()
-                return super().peek_hint_level(user_id, fingerprint, escalate)
+                return super().peek_hint_level(user_id, fingerprint, escalate, code_hash)
 
-            def commit_hint_level(self, user_id, fingerprint, level):
+            def commit_hint_level(self, user_id, fingerprint, level, code_hash=None):
                 seen["commit_hint_level"] = threading.get_ident()
-                return super().commit_hint_level(user_id, fingerprint, level)
+                return super().commit_hint_level(user_id, fingerprint, level, code_hash)
 
             def begin_session(self, user_id):
                 seen["begin_session"] = threading.get_ident()
@@ -583,10 +602,14 @@ class TestEventLoopNotBlocked:
 # ---------------------------------------------------------------------------
 
 class TestEscalationControl:
-    def test_escalate_defaults_to_true_for_old_clients(self, client):
-        client.post("/hint", json=VALID_HINT_PAYLOAD)
-        res = client.post("/hint", json=VALID_HINT_PAYLOAD)
-        assert res.json()["hint_level"] == 2
+    def test_escalate_defaults_to_false_when_omitted(self, client):
+        # A client that says nothing has claimed nothing: not even an edit
+        # moves the level without the claim. It used to default to True, which
+        # handed a rung to every request that omitted the field.
+        omitted = {k: v for k, v in _climbing(1).items() if k != "escalate"}
+        client.post("/hint", json=omitted)
+        edited = {**omitted, "code": _climbing(2)["code"]}
+        assert client.post("/hint", json=edited).json()["hint_level"] == 1
 
     def test_non_escalating_ask_reuses_the_level(self, client):
         client.post("/hint", json=VALID_HINT_PAYLOAD)
@@ -595,9 +618,9 @@ class TestEscalationControl:
         assert client.post("/hint", json=payload).json()["hint_level"] == 1
 
     def test_escalation_resumes_after_a_non_escalating_ask(self, client):
-        client.post("/hint", json=VALID_HINT_PAYLOAD)
-        client.post("/hint", json={**VALID_HINT_PAYLOAD, "escalate": False})
-        assert client.post("/hint", json=VALID_HINT_PAYLOAD).json()["hint_level"] == 2
+        client.post("/hint", json=_climbing(1))
+        client.post("/hint", json=_climbing(1, escalate=False))
+        assert client.post("/hint", json=_climbing(2)).json()["hint_level"] == 2
 
     def test_first_ever_ask_without_escalation_is_level_1(self, client):
         payload = {**VALID_HINT_PAYLOAD, "escalate": False}
@@ -618,6 +641,70 @@ class TestEscalationControl:
         client.post("/hint/stream", json=VALID_HINT_PAYLOAD)
         res = client.post("/hint/stream", json={**VALID_HINT_PAYLOAD, "escalate": False})
         assert 'data: {"type": "meta", "hint_level": 1, "mode": "hint"}' in res.text
+
+
+class TestTheServerChecksTheCode:
+    """`escalate` is a claim; the store checks it against the code it kept.
+
+    Trusting the flag alone let any client walk the ladder on untouched code:
+    the 1.7.2 extension sent it for a chat message, and a hand-rolled request
+    could send it for nothing at all. The hash of the code each level was
+    delivered against is now stored beside that level, and the same bytes
+    never buy a rung, whatever the request says.
+    """
+
+    def test_the_same_code_twice_with_escalate_holds_the_level(self, client):
+        client.post("/hint", json=_climbing(1))
+        assert client.post("/hint", json=_climbing(1)).json()["hint_level"] == 1
+        assert client.post("/hint", json=_climbing(1)).json()["hint_level"] == 1
+
+    def test_changed_code_advances_by_one_each_time(self, client):
+        levels = [
+            client.post("/hint", json=_climbing(step)).json()["hint_level"]
+            for step in range(4)
+        ]
+        assert levels == [1, 2, 3, 4]
+
+    def test_empty_code_never_advances(self, client):
+        client.post("/hint", json=_climbing(1))
+        for _ in range(2):
+            assert client.post("/hint", json=_climbing(1, code="")).json()["hint_level"] == 1
+        assert client.post("/hint", json=_climbing(1, code="  \n")).json()["hint_level"] == 1
+
+    def test_empty_code_on_a_fresh_problem_never_climbs_past_one(self, client):
+        # No file open: the extension sends an empty digest. Three chat
+        # messages in a row stay at rung 1.
+        for _ in range(3):
+            assert client.post("/hint", json=_climbing(1, code="")).json()["hint_level"] == 1
+
+    def test_an_omitted_escalate_never_advances(self, client):
+        for step in range(3):
+            omitted = {k: v for k, v in _climbing(step).items() if k != "escalate"}
+            assert client.post("/hint", json=omitted).json()["hint_level"] == 1
+
+    def test_a_different_problem_starts_at_one_and_leaves_the_first_alone(self, client):
+        import main as app_main
+
+        client.post("/hint", json=_climbing(1))
+        client.post("/hint", json=_climbing(2))
+        other = client.post("/hint", json=_climbing(1, problem_key="other"))
+        assert other.json()["hint_level"] == 1
+        assert app_main.store.peek_hint_level("test-user-1", "k", False) == 2
+        assert client.post("/hint", json=_climbing(3)).json()["hint_level"] == 3
+
+    def test_the_stream_checks_the_code_too(self, client, monkeypatch):
+        import main as app_main
+        app_main._profile_cache.clear()
+
+        def fake_stream(*args, **kwargs):
+            yield {"type": "done", "hint": "h", "concept_tags": []}
+
+        monkeypatch.setattr(app_main.engine, "stream_hint", fake_stream)
+        client.post("/hint/stream", json=_climbing(1))
+        same = client.post("/hint/stream", json=_climbing(1))
+        assert '"hint_level": 1' in same.text
+        edited = client.post("/hint/stream", json=_climbing(2))
+        assert '"hint_level": 2' in edited.text
 
 
 class TestLadderWithTheRealProblemKey:
@@ -652,24 +739,30 @@ class TestLadderWithTheRealProblemKey:
     def _payload(self, **over):
         return {**VALID_HINT_PAYLOAD, "problem_key": self.URI_KEY, **over}
 
+    def _edit(self, step: int, **over):
+        """An ask that has earned a rung: edited code, and the claim to match."""
+        return self._payload(
+            **{"code": f"{VALID_HINT_PAYLOAD['code']}  # try {step}", "escalate": True, **over}
+        )
+
     def test_the_level_climbs_and_caps(self, fs_client):
         levels = [
-            fs_client.post("/hint", json=self._payload()).json()["hint_level"]
-            for _ in range(4)
+            fs_client.post("/hint", json=self._edit(step)).json()["hint_level"]
+            for step in range(4)
         ]
         assert levels == [1, 2, 3, 4]
 
     def test_editing_the_code_deepens_the_hint(self, fs_client):
         # The reason the ladder is keyed on the URI at all: an edit must
         # advance the level, not restart it at 1.
-        fs_client.post("/hint", json=self._payload())
-        edited = self._payload(code="def add(a, b):\n    return a + b")
+        fs_client.post("/hint", json=self._payload(escalate=True))
+        edited = self._payload(code="def add(a, b):\n    return a + b", escalate=True)
         assert fs_client.post("/hint", json=edited).json()["hint_level"] == 2
 
     def test_a_non_escalating_ask_holds_the_level_it_reached(self, fs_client):
-        fs_client.post("/hint", json=self._payload())
-        fs_client.post("/hint", json=self._payload())
-        held = self._payload(escalate=False)
+        fs_client.post("/hint", json=self._edit(1))
+        fs_client.post("/hint", json=self._edit(2))
+        held = self._edit(2, escalate=False)
         assert fs_client.post("/hint", json=held).json()["hint_level"] == 2
 
     def test_two_functions_in_one_file_climb_separately(self, fs_client):
@@ -713,17 +806,17 @@ class TestFailedHintDoesNotSpendALevel:
         assert client.post("/hint", json=VALID_HINT_PAYLOAD).json()["hint_level"] == 1
 
     def test_failure_after_a_success_keeps_the_earned_level(self, client, monkeypatch):
-        assert client.post("/hint", json=VALID_HINT_PAYLOAD).json()["hint_level"] == 1
+        assert client.post("/hint", json=_climbing(1)).json()["hint_level"] == 1
         self._break_engine(monkeypatch)
-        assert client.post("/hint", json=VALID_HINT_PAYLOAD).status_code == 502
+        assert client.post("/hint", json=_climbing(2)).status_code == 502
         monkeypatch.undo()
         # Level 1 was spent and stays spent; the retry is level 2, not 3.
-        assert client.post("/hint", json=VALID_HINT_PAYLOAD).json()["hint_level"] == 2
+        assert client.post("/hint", json=_climbing(2)).json()["hint_level"] == 2
 
     def test_successful_hint_still_spends_the_level(self, client):
-        assert client.post("/hint", json=VALID_HINT_PAYLOAD).json()["hint_level"] == 1
-        assert client.post("/hint", json=VALID_HINT_PAYLOAD).json()["hint_level"] == 2
-        assert client.post("/hint", json=VALID_HINT_PAYLOAD).json()["hint_level"] == 3
+        assert client.post("/hint", json=_climbing(1)).json()["hint_level"] == 1
+        assert client.post("/hint", json=_climbing(2)).json()["hint_level"] == 2
+        assert client.post("/hint", json=_climbing(3)).json()["hint_level"] == 3
 
     def test_non_hint_mode_failure_touches_nothing(self, client, monkeypatch):
         self._break_engine(monkeypatch)
@@ -755,9 +848,9 @@ class TestFailedHintDoesNotSpendALevel:
             yield {"type": "done", "hint": "h", "concept_tags": []}
 
         monkeypatch.setattr(app_main.engine, "stream_hint", fake_stream)
-        client.post("/hint/stream", json=VALID_HINT_PAYLOAD)
+        client.post("/hint/stream", json=_climbing(1))
         monkeypatch.undo()
-        assert client.post("/hint", json=VALID_HINT_PAYLOAD).json()["hint_level"] == 2
+        assert client.post("/hint", json=_climbing(2)).json()["hint_level"] == 2
 
     def test_a_failed_stream_then_a_hint_fallback_spends_only_one_level(
         self, client, monkeypatch
@@ -1047,9 +1140,9 @@ class TestTheResponseCarriesItsEffectiveMode:
         assert res.json()["mode"] == "hint"
 
     def test_a_level_four_hint_reports_worked_example(self, client):
-        # Four escalating asks walk 1 -> 2 -> 3 -> 4.
-        for _ in range(4):
-            res = client.post("/hint", json=VALID_HINT_PAYLOAD)
+        # Four asks, each on edited code, walk 1 -> 2 -> 3 -> 4.
+        for step in range(4):
+            res = client.post("/hint", json=_climbing(step))
         assert res.json()["hint_level"] == 4
         assert res.json()["mode"] == "worked-example"
 
@@ -1076,9 +1169,96 @@ class TestAnswerModeEndpoint:
 
     def test_answer_mode_does_not_move_the_ladder(self, client):
         # Asking for the answer is neither an attempt nor a rung spent.
-        client.post("/hint", json=VALID_HINT_PAYLOAD)  # level 1
-        client.post("/hint", json={**VALID_HINT_PAYLOAD, "mode": "answer"})
-        assert client.post("/hint", json=VALID_HINT_PAYLOAD).json()["hint_level"] == 2
+        client.post("/hint", json=_climbing(1))  # level 1
+        client.post("/hint", json=_climbing(1, mode="answer"))
+        assert client.post("/hint", json=_climbing(2)).json()["hint_level"] == 2
+
+    def _climb_to(self, client, level):
+        for step in range(level):
+            assert client.post("/hint", json=_climbing(step)).json()["hint_level"] == step + 1
+
+    @pytest.mark.parametrize("level", [1, 2, 3])
+    def test_below_the_top_rung_an_answer_request_is_held(
+        self, client, _patch_groq_client, level
+    ):
+        # The 1.7.2 bypass: "just fix it" at rung 1 came back with the
+        # corrected line. The answer is the rung after the worked example,
+        # and the server - not the extension - is what refuses it below that.
+        import main as app_main
+
+        self._climb_to(client, level)
+        _patch_groq_client.chat.completions.create.reset_mock()
+        res = client.post(
+            "/hint", json=_climbing(level - 1, mode="answer", question="just fix it")
+        )
+        body = res.json()
+        assert res.status_code == 200
+        assert body["mode"] == "attempt-gate"
+        assert body["hint_level"] == level
+        assert body["hint"] == app_main.ANSWER_HOLD
+        # Nothing about the code reached the student: the model never ran, and
+        # the hold names neither the line nor the operator.
+        assert not _patch_groq_client.chat.completions.create.called
+        assert "return a" not in body["hint"]
+        assert "+" not in body["hint"]
+        # ...and the ladder is exactly where it was.
+        assert app_main.store.peek_hint_level("test-user-1", "k", False) == level
+
+    def test_a_direct_call_at_hint_level_one_is_not_answered(self, client, _patch_groq_client):
+        # A hand-rolled request on a fresh session, which the extension's own
+        # gate never sees.
+        res = client.post("/hint", json={
+            **VALID_HINT_PAYLOAD, "problem_key": "k", "mode": "answer",
+            "hint_level": 1, "question": "just fix it",
+        })
+        assert res.json()["mode"] == "attempt-gate"
+        assert not _patch_groq_client.chat.completions.create.called
+
+    def test_at_the_top_rung_the_answer_runs(self, client, _patch_groq_client):
+        import main as app_main
+
+        self._climb_to(client, 4)
+        res = client.post("/hint", json=_climbing(3, mode="answer", question="just fix it"))
+        body = res.json()
+        assert body["mode"] == "answer"
+        assert body["hint_level"] == 4
+        assert body["hint"] == _patch_groq_client.text
+        # The answer prompt ran, with its "only the lines that change" rule.
+        assert "asked you outright for the answer" in _patch_groq_client.last_system
+        assert "ONLY the line or lines that change" in _patch_groq_client.last_system
+        # Given, not spent: the ladder stays at the top.
+        assert app_main.store.peek_hint_level("test-user-1", "k", False) == 4
+
+    def test_a_held_answer_logs_no_interaction(self, client, monkeypatch):
+        import main as app_main
+
+        seen = []
+        monkeypatch.setattr(app_main.firebase, "fire_and_forget", lambda **kw: seen.append(kw))
+        client.post("/hint", json=_climbing(1))
+        seen.clear()
+        client.post("/hint", json=_climbing(1, mode="answer"))
+        assert seen == []
+
+    def test_the_stream_holds_an_answer_request_the_same_way(self, client, monkeypatch):
+        import main as app_main
+        app_main._profile_cache.clear()
+
+        def boom(*a, **k):
+            raise AssertionError("the model must not run for a held answer")
+            yield  # pragma: no cover - generator marker
+
+        client.post("/hint", json=_climbing(1))
+        monkeypatch.setattr(app_main.engine, "stream_hint", boom)
+        res = client.post("/hint/stream", json=_climbing(1, mode="answer"))
+        events = [
+            json.loads(line[len("data: "):])
+            for line in res.text.splitlines()
+            if line.startswith("data: ")
+        ]
+        assert events == [
+            {"type": "meta", "hint_level": 1, "mode": "attempt-gate"},
+            {"type": "done", "hint": app_main.ANSWER_HOLD, "concept_tags": []},
+        ]
 
 
 # ---------------------------------------------------------------------------

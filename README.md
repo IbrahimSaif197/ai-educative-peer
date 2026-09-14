@@ -139,8 +139,8 @@ offer Quick Fix actions ("nudge me on this line", "explain this line"), and a
 
 ## How hinting works
 
-Each call to `POST /hint` advances the rung (1 → 2 → 3 → 4) for the same user
-and problem within a session. The ladder is keyed on the **block** you are
+Each call to `POST /hint` that arrives with edited code advances the rung
+(1 → 2 → 3 → 4) for the same user and problem within a session. The ladder is keyed on the **block** you are
 working in — the enclosing function or class, sticky so that drifting between
 two functions does not shuffle you between two conversations — and not on a
 hash of the code, so editing deepens the hint instead of restarting it. Reset
@@ -180,14 +180,18 @@ this memory.
 
 ### Depth is earned, not spent
 
-Asking again without changing anything does **not** buy a deeper hint. The
-extension tracks the code each hint was given against:
+Asking again without changing anything does **not** buy a deeper hint, and
+the backend enforces that rather than taking the extension's word for it:
+beside each level it stores a hash of the code that hint was given against,
+and the level advances only when the client claims an edit *and* the code
+differs from that hash. The extension tracks the same thing on its side:
 
 - **You edited something** — the level advances, and a compact diff of what
   you changed rides along so the tutor answers against your actual attempt.
-- **You changed nothing** — you get the same depth back plus a prompt to say
-  what you tried. Editing the code (or waiting 45 seconds) unlocks the next
-  level.
+- **You changed nothing** — you get the same depth back. A typed question is
+  answered at that depth; a give-up gets a "Same depth" card naming the one
+  thing that unlocks the next level: an edit. Waiting does not, and neither
+  does a message sent with no file open.
 
 This targets hint abuse, the well-documented habit of bottoming out a tutor's
 hints to reach the answer without engaging.
@@ -347,11 +351,13 @@ it:
   so in the response's `mode`. A fully worked example of the same concept on a
   *different* problem, as unlabelled numbered steps.
 - **answer** — ask outright ("just tell me the answer", "show me the
-  solution") and you get it: the bug named in one sentence, only the lines
-  that change, and why the original was wrong. Recognised from what you typed,
-  so there is no button. It sits outside the ladder — asking for the answer
-  neither advances nor spends a rung, and it skips the "explain it first" step
-  rather than holding the answer behind a question.
+  solution", "just fix it") and you get it: the bug named in one sentence,
+  only the lines that change, and why the original was wrong. Recognised from
+  what you typed, so there is no button. It is gated on the ladder: the fix is
+  handed over only once the thread has reached rung 4, the worked example;
+  below that the backend returns the "Same depth" hold instead, naming what
+  is needed. It never advances or spends a rung, and it skips the "explain it
+  first" step rather than holding the answer behind a question.
 - **explain-error** — paste a stack trace (auto-detected) or run
   `EduPeer: Explain This Error`; teaches you to *read* the error, not the fix.
 - **subgoal-label** — a worked example arrives as unlabelled numbered steps;

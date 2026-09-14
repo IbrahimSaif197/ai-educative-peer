@@ -509,7 +509,7 @@ describe("modes that withhold", () => {
     expect(meter.querySelectorAll(".rung__bar.is-spent")).toHaveLength(1);
     expect(meter.querySelector(".rung__read")!.textContent).toBe("rung 1 of 4 · held");
     expect(meter.querySelector(".visually-hidden")!.textContent).toContain(
-      "Held at rung 1 — edit your code or explain your reasoning to go deeper."
+      "Held at rung 1 — edit your code to go deeper."
     );
     // Both meters are on screen: the hint's, and the gate's held copy.
     expect($$(".rung")).toHaveLength(2);

@@ -143,10 +143,12 @@ class HintRequest(BaseModel):
         description="Prior conversation turns, oldest first",
     )
     escalate: bool = Field(
-        default=True,
+        default=False,
         description=(
-            "When false the hint level is re-used instead of advanced. The "
-            "client sends this after an ask with no intervening code edit."
+            "The client's claim that the student edited since the last hint. "
+            "The server checks it against the code it stored with that hint, "
+            "so unchanged code never advances the level whatever is claimed; "
+            "omitted means no claim, and the level is re-used."
         ),
     )
     edit_summary: str = Field(

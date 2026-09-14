@@ -1,5 +1,7 @@
 import re
 
+import pytest
+
 from session_store import code_fingerprint, InMemorySessionStore, FirestoreSessionStore, build_session_store
 
 
@@ -640,3 +642,64 @@ class TestBothStoresPersistLevelFour:
     def test_the_firestore_ladder_climbs_all_four_rungs(self):
         store = FirestoreSessionStore(FakeFirestore())
         assert [store.next_hint_level("u1", "fp1") for _ in range(5)] == [1, 2, 3, 4, 4]
+
+
+_STORES = [
+    pytest.param(lambda: InMemorySessionStore(), id="in-memory"),
+    pytest.param(lambda: FirestoreSessionStore(FakeFirestore()), id="firestore"),
+]
+
+
+class TestTheStoreChecksTheCode:
+    """`escalate` is the client's claim; the stored hash is the proof.
+
+    Both stores keep the hash of the code each level was delivered against,
+    and `earned` only honours the claim when the new hash differs from it.
+    """
+
+    def test_earned_needs_the_claim_and_a_differing_hash(self):
+        from session_store import earned
+        assert earned(True, "b", "a") is True
+        assert earned(True, "a", "a") is False
+        assert earned(False, "b", "a") is False
+
+    def test_earned_holds_when_there_is_no_baseline(self):
+        # A level written before hashes were kept proves nothing either way.
+        from session_store import earned
+        assert earned(True, "a", None) is False
+
+    def test_earned_keeps_the_claim_for_callers_that_pass_no_hash(self):
+        from session_store import earned
+        assert earned(True, None, "a") is True
+        assert earned(True, None, None) is True
+
+    @pytest.mark.parametrize("make", _STORES)
+    def test_the_same_code_never_buys_a_rung(self, make):
+        store = make()
+        store.commit_hint_level("u1", "fp1", 1, code_hash="a")
+        assert store.peek_hint_level("u1", "fp1", True, code_hash="a") == 1
+        assert store.peek_hint_level("u1", "fp1", True, code_hash="a") == 1
+
+    @pytest.mark.parametrize("make", _STORES)
+    def test_different_code_advances_by_one(self, make):
+        store = make()
+        store.commit_hint_level("u1", "fp1", 1, code_hash="a")
+        assert store.peek_hint_level("u1", "fp1", True, code_hash="b") == 2
+        store.commit_hint_level("u1", "fp1", 2, code_hash="b")
+        assert store.peek_hint_level("u1", "fp1", True, code_hash="b") == 2
+        assert store.peek_hint_level("u1", "fp1", True, code_hash="c") == 3
+
+    @pytest.mark.parametrize("make", _STORES)
+    def test_a_level_with_no_recorded_hash_holds_until_one_is_recorded(self, make):
+        store = make()
+        store.commit_hint_level("u1", "fp1", 2)  # a pre-1.7.3 record: no hash
+        assert store.peek_hint_level("u1", "fp1", True, code_hash="a") == 2
+        store.commit_hint_level("u1", "fp1", 2, code_hash="a")
+        assert store.peek_hint_level("u1", "fp1", True, code_hash="b") == 3
+
+    def test_firestore_writes_the_hash_beside_the_level(self):
+        store = FirestoreSessionStore(FakeFirestore())
+        store.commit_hint_level("u1", "fp1", 2, code_hash="abc")
+        stored = list(store._client.collection("sessions")._docs.values())[0]
+        assert stored["hint_level"] == 2
+        assert stored["code_hash"] == "abc"
