@@ -567,13 +567,21 @@ class TestEventLoopNotBlocked:
         seen = {}
 
         class _RecordingStore(InMemorySessionStore):
-            def peek_hint_level(self, user_id, fingerprint, escalate=True, code_hash=None):
+            def peek_hint_level(
+                self, user_id, fingerprint, escalate=True, code_hash=None, code_size=None
+            ):
                 seen["peek_hint_level"] = threading.get_ident()
-                return super().peek_hint_level(user_id, fingerprint, escalate, code_hash)
+                return super().peek_hint_level(
+                    user_id, fingerprint, escalate, code_hash, code_size
+                )
 
-            def commit_hint_level(self, user_id, fingerprint, level, code_hash=None):
+            def commit_hint_level(
+                self, user_id, fingerprint, level, code_hash=None, code_size=None
+            ):
                 seen["commit_hint_level"] = threading.get_ident()
-                return super().commit_hint_level(user_id, fingerprint, level, code_hash)
+                return super().commit_hint_level(
+                    user_id, fingerprint, level, code_hash, code_size
+                )
 
             def begin_session(self, user_id):
                 seen["begin_session"] = threading.get_ident()
@@ -705,6 +713,99 @@ class TestTheServerChecksTheCode:
         assert '"hint_level": 1' in same.text
         edited = client.post("/hint/stream", json=_climbing(2))
         assert '"hint_level": 2' in edited.text
+
+
+class TestACollapsedDigestIsNotAnEdit:
+    """Defect A (found after 1.7.3): the rung advanced on an ask whose code
+    had collapsed.
+
+    With the cursor on a blank line between two functions, or a line selected
+    inside one, the extension rebuilds its digest around that view. The bytes
+    differ from the last hint's, so the hash check read it as an edit. What
+    collapses is the focus span (seven lines to one) while the digest itself
+    hardly moves - imports and signature lines pad it - so the span is what
+    is measured, and a span under half the stored one holds the rung. The
+    numbers here are the ones the extension actually sent for demo.cpp.
+    """
+
+    KEY = "file:///demo.cpp#average"
+    HEADER = "#include <iostream>\n#include <vector>\n"
+    BLOCK = (
+        "double average(const std::vector<int>& numbers) {\n"
+        "    int total = 0;\n"
+        "    for (size_t i = 1; i < numbers.size(); i++) {\n"
+        "        total = total + numbers[i];\n"
+        "    }\n"
+        "    return total / numbers.size();\n"
+        "}\n"
+    )
+    FOCUS = {"start_line": 11, "end_line": 17, "label": "average"}
+    # A one-line selection inside the block: the digest keeps the header and
+    # signatures, so it is 86% of its old size - the span is 1/7.
+    SELECTION_FOCUS = {"start_line": 13, "end_line": 13, "label": "selection"}
+
+    def _ask(self, client, question, code, focus, escalate=True):
+        payload = {
+            "code": code, "question": question, "hint_level": 1, "problem_key": self.KEY,
+            "language": "cpp", "escalate": escalate,
+        }
+        if focus is not None:
+            payload["focus"] = focus
+        return client.post("/hint", json=payload).json()["hint_level"]
+
+    def test_the_defect_a_sequence_holds_at_rung_two(self, client):
+        # The reproduction, step for step, as a 1.7.2 client sends it (it
+        # claims an edit on every typed question).
+        assert self._ask(client, "what's wrong?", self.HEADER + self.BLOCK, self.FOCUS) == 1
+        edited = self.HEADER + self.BLOCK.replace("int total = 0;", "int total = 0; // sum")
+        assert self._ask(client, "still wrong", edited, self.FOCUS) == 2
+        assert self._ask(client, "just fix the code", edited, self.FOCUS) == 2
+        collapsed = self.HEADER + "    for (size_t i = 1; i < numbers.size(); i++) {\n"
+        assert self._ask(client, "is it like this?", collapsed, self.SELECTION_FOCUS) == 2
+
+    def test_a_focus_collapsed_to_a_fragment_does_not_advance(self, client):
+        self._ask(client, "q", self.HEADER + self.BLOCK, self.FOCUS)
+        fragment = self.HEADER + "    int total = 0;\n"
+        assert self._ask(client, "q", fragment, self.SELECTION_FOCUS) == 1
+        assert self._ask(client, "q", fragment, self.SELECTION_FOCUS) == 1
+
+    def test_a_digest_without_a_focus_that_lost_more_than_half_its_lines_does_not_advance(
+        self, client
+    ):
+        # An older client sends no focus: the digest's non-blank lines stand in.
+        self._ask(client, "q", self.HEADER + self.BLOCK, None)  # 9 non-blank lines
+        assert self._ask(client, "q", self.HEADER + "    int total = 0;\n", None) == 1  # 3
+
+    def test_whitespace_only_code_does_not_advance(self, client):
+        self._ask(client, "q", self.HEADER + self.BLOCK, self.FOCUS)
+        assert self._ask(client, "q", "  \n\t\n", self.FOCUS) == 1
+        assert self._ask(client, "q", "", None) == 1
+
+    def test_an_edit_of_the_same_size_or_larger_advances_by_one(self, client):
+        assert self._ask(client, "q", self.HEADER + self.BLOCK, self.FOCUS) == 1
+        same_size = self.HEADER + self.BLOCK.replace("i = 1", "i = 0")
+        assert self._ask(client, "q", same_size, self.FOCUS) == 2
+        grown = self.HEADER + self.BLOCK.replace("    }\n", "    }\n    total += 0;\n")
+        assert self._ask(client, "q", grown, {**self.FOCUS, "end_line": 18}) == 3
+
+    def test_a_block_that_lost_lines_but_kept_half_still_advances(self, client):
+        # Deleting lines is an edit too; only a collapse past half is not.
+        self._ask(client, "q", self.HEADER + self.BLOCK, self.FOCUS)
+        shorter = self.HEADER + "double average(const std::vector<int>& numbers) {\n    return 0;\n}\n"
+        assert self._ask(client, "q", shorter, {**self.FOCUS, "end_line": 14}) == 2  # 4 of 7
+
+    def test_chat_messages_with_no_edit_hold_the_rung_defect_c(self, client):
+        # Defect C, the intended behaviour: whatever is typed, unchanged code
+        # holds - whether the client claims an edit (1.7.2) or not (1.7.3).
+        code = self.HEADER + self.BLOCK
+        assert self._ask(client, "what's wrong?", code, self.FOCUS) == 1
+        for question, claimed in [
+            ("what are you doing", False),
+            ("is it like this?", False),
+            ("i think the loop starts too late", True),
+            ("fix", True),
+        ]:
+            assert self._ask(client, question, code, self.FOCUS, escalate=claimed) == 1
 
 
 class TestLadderWithTheRealProblemKey:

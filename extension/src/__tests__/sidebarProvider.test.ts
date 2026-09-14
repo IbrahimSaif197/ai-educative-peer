@@ -1575,6 +1575,87 @@ describe("a hold from the backend's answer gate", () => {
   });
 });
 
+/**
+ * Defect A (found after 1.7.3): "is it like this?" climbed a rung on a file
+ * nobody had touched. The cursor had left the function for the blank line
+ * under it, so `sendFocus` fell back to a line window and rewrote
+ * `threadBlockCode` from it; the tracker then diffed the function against a
+ * window of the file and claimed an edit - with an edit summary describing a
+ * rewrite that never happened.
+ */
+describe("a cursor that leaves the block is not an edit", () => {
+  beforeEach(() => mock.__reset());
+
+  const DEMO_CPP = [
+    "// demo.cpp",
+    "",
+    "#include <iostream>",
+    "#include <vector>",
+    "",
+    "int add(int a, int b) {",
+    "    return a - b;",
+    "}",
+    "",
+    "double average(const std::vector<int>& numbers) {",
+    "    int total = 0;",
+    "    for (size_t i = 1; i < numbers.size(); i++) {",
+    "        total = total + numbers[i];",
+    "    }",
+    "    return total / numbers.size();",
+    "}",
+    "",
+    "int main() {",
+    "    std::vector<int> scores = {10, 20, 30};",
+    "    return 0;",
+    "}",
+  ].join("\n");
+
+  it("claims no edit when the cursor sits on the blank line between two functions", async () => {
+    const { provider, api, doc } = await setupProvider(DEMO_CPP, 11, "/tmp/collapse/demo.cpp", "cpp");
+    await provider["sendFocus"]();
+    await provider["handleAsk"]("what's wrong with average?", "code", "hint", { attempted: true });
+    const key = hintRequest(api).problem_key;
+    expect(hintRequest(api).escalate).toBe(true); // the first ask on this block
+    await provider["handleAsk"]("just fix the code", "code", "hint", { attempted: true });
+    expect(hintRequest(api).escalate).toBe(false);
+
+    // Line 17, 1-based: the blank line after average's closing brace.
+    mock.window.activeTextEditor = mock.__makeEditor(doc, 16);
+    await provider["sendFocus"]();
+    await provider["handleAsk"]("is it like this?", "code", "hint", { attempted: true });
+
+    const request = hintRequest(api);
+    expect(request.problem_key).toBe(key); // the thread stayed put...
+    expect(request.focus.label).toMatch(/^lines /); // ...while the view fell back to a window...
+    expect(request.escalate).toBe(false); // ...and that is not an edit.
+    expect(request.edit_summary).toBe("");
+  });
+
+  it("still sees a real edit made back inside the block", async () => {
+    const { provider, api, doc } = await setupProvider(DEMO_CPP, 11, "/tmp/collapse/edit.cpp", "cpp");
+    await provider["sendFocus"]();
+    await provider["handleAsk"]("what's wrong with average?", "code", "hint", { attempted: true });
+    mock.window.activeTextEditor = mock.__makeEditor(doc, 16);
+    await provider["sendFocus"]();
+    await provider["handleAsk"]("is it like this?", "code", "hint", { attempted: true });
+    expect(hintRequest(api).escalate).toBe(false);
+
+    // The edit, with the cursor back in the function. A different cursor line
+    // from the first resolve, because the mock stamps every document version
+    // 1 and resolveFocus memoises on uri+version+cursor.
+    const edited = mock.__makeDocument(
+      DEMO_CPP.replace("i = 1", "i = 0"),
+      "cpp",
+      "/tmp/collapse/edit.cpp"
+    );
+    mock.window.activeTextEditor = mock.__makeEditor(edited, 12);
+    await provider["sendFocus"]();
+    await provider["handleAsk"]("now?", "code", "hint", { attempted: true });
+    expect(hintRequest(api).escalate).toBe(true);
+    expect(hintRequest(api).edit_summary).toContain("i = 0");
+  });
+});
+
 describe("explain-first fires once per file", () => {
   beforeEach(() => mock.__reset());
 

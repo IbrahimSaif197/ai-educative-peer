@@ -231,7 +231,22 @@ async def _resolve_hint_level(req: HintRequest, uid: str) -> int:
         _ladder_key(req),
         req.escalate and bool(req.code.strip()),
         raw_code_hash(req.code),
+        _code_size(req),
     )
+
+
+def _code_size(req: HintRequest) -> int:
+    """The size a collapse shrinks, for `earned`'s "shrinking is not an edit".
+
+    The focus span when the client sent one, not the digest: the digest is
+    padded with imports and signature lines that never move, so a block that
+    collapsed to a one-line selection still read as 86% of its old size and
+    passed. The span is the block itself. A client that sends no focus is
+    measured on the digest's non-blank lines instead.
+    """
+    if req.focus is not None:
+        return max(0, req.focus.end_line - req.focus.start_line + 1)
+    return sum(1 for line in req.code.splitlines() if line.strip())
 
 
 def _commit_hint_level(req: HintRequest, uid: str, level: int) -> None:
@@ -239,7 +254,9 @@ def _commit_hint_level(req: HintRequest, uid: str, level: int) -> None:
     the code it was given against so the next ask can be checked for an edit."""
     if req.mode != "hint":
         return
-    store.commit_hint_level(uid, _ladder_key(req), level, raw_code_hash(req.code))
+    store.commit_hint_level(
+        uid, _ladder_key(req), level, raw_code_hash(req.code), _code_size(req)
+    )
 
 
 # What an answer request gets below the top rung. Static on purpose: it names

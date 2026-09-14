@@ -703,3 +703,22 @@ class TestTheStoreChecksTheCode:
         stored = list(store._client.collection("sessions")._docs.values())[0]
         assert stored["hint_level"] == 2
         assert stored["code_hash"] == "abc"
+
+    def test_earned_treats_a_collapse_as_no_edit(self):
+        # Defect A: a different hash, but less than half the size the last
+        # hint was given against - the view moved, nothing was edited.
+        from session_store import earned
+        assert earned(True, "b", "a", code_size=1, stored_size=7) is False
+        assert earned(True, "b", "a", code_size=3, stored_size=7) is False
+        # Half or more may be an edit that deleted lines, and counts.
+        assert earned(True, "b", "a", code_size=4, stored_size=7) is True
+        assert earned(True, "b", "a", code_size=23, stored_size=7) is True
+        # No recorded size (a record from before sizes were kept): the hash decides.
+        assert earned(True, "b", "a", code_size=1, stored_size=None) is True
+
+    @pytest.mark.parametrize("make", _STORES)
+    def test_the_stores_keep_the_size_beside_the_hash(self, make):
+        store = make()
+        store.commit_hint_level("u1", "fp1", 2, code_hash="a", code_size=7)
+        assert store.peek_hint_level("u1", "fp1", True, code_hash="b", code_size=1) == 2
+        assert store.peek_hint_level("u1", "fp1", True, code_hash="b", code_size=7) == 3

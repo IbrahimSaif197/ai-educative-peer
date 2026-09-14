@@ -1047,7 +1047,16 @@ export class EduPeerSidebarProvider implements vscode.WebviewViewProvider {
       // exactly what the tutor needs to answer "I tried that" against.
       const at = editor.selection.active;
       const blockFocus = await resolveFocus(doc, new vscode.Selection(at, at));
-      this.threadBlockCode = focusText(doc, blockFocus);
+      // Only a named block is this thread's block. With the naked cursor
+      // outside every block - a blank line between two functions - the
+      // resolve falls back to a line window, and reading that here made the
+      // tracker see the function replaced by a window of the file: an edit
+      // claim, a bogus edit summary, and a rung, on a file nobody had
+      // touched. A view moving is not the code changing, so the block's text
+      // stays as last seen until the cursor is back inside a block.
+      if (blockFocus.kind === "symbol" || blockFocus.kind === "heuristic") {
+        this.threadBlockCode = focusText(doc, blockFocus);
+      }
     }
     // A different function is a different conversation. Swap the transcript
     // so the student is never reading one function's thread beside another
